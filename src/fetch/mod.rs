@@ -47,7 +47,7 @@ pub(crate) fn start_worker(
     thread::spawn(move || {
         let client = Client::builder()
             .timeout(Duration::from_secs(20))
-            .user_agent("ParetoWatch/0.7.0")
+            .user_agent(concat!("ParetoWatch/", env!("CARGO_PKG_VERSION")))
             .build()
             .expect("HTTP client");
         let mut settings = initial_settings;
