@@ -1,25 +1,18 @@
 //! Turns live snapshots into change events and rebuilds queryable series.
 //!
-//! Recording runs after every successful poll. It diffs the new snapshot
-//! against the last recorded state (quantized values, so sub-epsilon wobble
-//! is invisible) and only then appends events. Composite scores are only
-//! recomputed when the app's `data_version` moved, i.e. when prices or
-//! benchmark feeds actually delivered new data.
+//! Recording runs after every successful price poll. It diffs the new
+//! snapshot against the last recorded state (quantized values, so sub-epsilon
+//! wobble is invisible) and only then appends price and telemetry events.
 //!
-//! History uses a fixed canonical scoring context (`BestAvailableAgent` +
-//! default scaffold) regardless of the UI's current mode, so the stored
-//! series is comparable across sessions and mode flips in the UI never fork
-//! the timeline.
+//! Composite scores are live-derived by the benchmark layer and are
+//! intentionally not part of historical storage.
 
 use chrono::{DateTime, Utc};
 use std::collections::HashMap;
 use std::path::Path;
 
-use super::store::{
-    EventKind, EventStore, Frame, PriceField, dequantize_price, dequantize_score, quantize_price,
-    quantize_score,
-};
-use crate::types::{Benchmark, BenchmarkSource, PriceSnapshot, Quote};
+use super::store::{EventKind, EventStore, Frame, PriceField, dequantize_price, quantize_price};
+use crate::types::{PriceSnapshot, Quote};
 
 #[derive(Debug, Clone, Default)]
 pub(crate) struct ModelSeries {
@@ -30,8 +23,6 @@ pub(crate) struct ModelSeries {
     pub input: Vec<(f64, f64)>,
     pub output: Vec<(f64, f64)>,
     pub cache_read: Vec<(f64, f64)>,
-    pub capability: Vec<(f64, f64)>,
-    pub deployment: Vec<(f64, f64)>,
     /// (ts, requests_24h, volume_24h in dollars), once per UTC day.
     pub telemetry: Vec<(f64, u64, f64)>,
 }
@@ -41,8 +32,6 @@ struct CurrentState {
     input_q: i32,
     output_q: i32,
     cache_q: Option<i32>,
-    capability_q: Option<i32>,
-    deployment_q: Option<i32>,
     telemetry_day: u32,
 }
 
@@ -52,7 +41,6 @@ pub(crate) struct HistoryTracker {
     series: HashMap<u16, ModelSeries>,
     current: HashMap<u16, CurrentState>,
     next_id: u16,
-    last_composite_version: u64,
 }
 
 const MAX_TRACKED_MODELS: u16 = 60_000;
@@ -66,7 +54,6 @@ impl HistoryTracker {
             series: HashMap::new(),
             current: HashMap::new(),
             next_id: 0,
-            last_composite_version: 0,
         };
         for (ts, frame) in replay.frames {
             tracker.apply_event(ts, frame);
@@ -83,43 +70,9 @@ impl HistoryTracker {
 
     /// Records a poll. Cheap when nothing changed: quantized diff finds no
     /// deltas and the store write is skipped entirely.
-    pub(crate) fn record(
-        &mut self,
-        snapshot: &PriceSnapshot,
-        sets: &HashMap<BenchmarkSource, Vec<Benchmark>>,
-        data_version: u64,
-        now: DateTime<Utc>,
-    ) {
+    pub(crate) fn record(&mut self, snapshot: &PriceSnapshot, now: DateTime<Utc>) {
         let ts = now.timestamp();
         let mut events: Vec<(i64, Frame)> = Vec::new();
-
-        let recompute_composites = self.last_composite_version != data_version;
-        // The AA snapshot is pre-seeded locally; only count actually fetched
-        // boards, so the first launch does not record a prior-only composite
-        // that the boards then immediately overwrite.
-        let benchmarks_loaded = BenchmarkSource::remote_sources()
-            .iter()
-            .any(|s| sets.get(s).is_some_and(|rows| !rows.is_empty()));
-        let (cap_rows, dep_rows) = if recompute_composites && benchmarks_loaded {
-            let scaffold = crate::types::default_common_scaffold();
-            let mode = crate::types::ComparisonMode::BestAvailableAgent;
-            (
-                crate::bench::build_agentic_composite(
-                    sets,
-                    mode,
-                    &scaffold,
-                    crate::types::CompositeFlavor::Capability,
-                ),
-                crate::bench::build_agentic_composite(
-                    sets,
-                    mode,
-                    &scaffold,
-                    crate::types::CompositeFlavor::Deployment,
-                ),
-            )
-        } else {
-            (Vec::new(), Vec::new())
-        };
 
         for q in &snapshot.quotes {
             let Some(id) = self.ensure_added(&mut events, q, ts) else {
@@ -131,18 +84,6 @@ impl HistoryTracker {
                 self.diff_price(&mut events, id, ts, PriceField::CacheRead, cache_read);
             }
             self.diff_telemetry(&mut events, id, ts, q);
-            if recompute_composites && benchmarks_loaded {
-                let cap = crate::bench::best_benchmark_match(q, &cap_rows)
-                    .and_then(|b| b.agentic_coding)
-                    .filter(|s| s.is_finite());
-                let dep = crate::bench::best_benchmark_match(q, &dep_rows)
-                    .and_then(|b| b.agentic_coding)
-                    .filter(|s| s.is_finite());
-                self.diff_composite(&mut events, id, ts, cap, dep);
-            }
-        }
-        if recompute_composites && benchmarks_loaded {
-            self.last_composite_version = data_version;
         }
         if !events.is_empty() {
             self.store.append(&events);
@@ -230,40 +171,6 @@ impl HistoryTracker {
         events.push((ts, frame));
     }
 
-    fn diff_composite(
-        &mut self,
-        events: &mut Vec<(i64, Frame)>,
-        id: u16,
-        ts: i64,
-        capability: Option<f64>,
-        deployment: Option<f64>,
-    ) {
-        let cap_q = capability.map(quantize_score);
-        let dep_q = deployment.map(quantize_score);
-        let Some(st) = self.current.get(&id) else {
-            return;
-        };
-        let cap_delta = cap_q
-            .map(|q| q - st.capability_q.unwrap_or(0))
-            .filter(|d| *d != 0);
-        let dep_delta = dep_q
-            .map(|q| q - st.deployment_q.unwrap_or(0))
-            .filter(|d| *d != 0);
-        if cap_delta.is_none() && dep_delta.is_none() {
-            return;
-        }
-        let frame = Frame {
-            id,
-            dt: 0,
-            kind: EventKind::Composite {
-                capability: cap_delta,
-                deployment: dep_delta,
-            },
-        };
-        self.apply_event(ts, frame.clone());
-        events.push((ts, frame));
-    }
-
     /// Single source of truth for state mutation: used both while recording
     /// (so later diffs in the same poll see earlier events) and while
     /// replaying the log at startup.
@@ -316,29 +223,9 @@ impl HistoryTracker {
                     }
                 }
             }
-            EventKind::Composite {
-                capability,
-                deployment,
-            } => {
-                if let Some(delta) = capability {
-                    if let Some(st) = self.current.get_mut(&id) {
-                        let new_q = st.capability_q.unwrap_or(0) + delta;
-                        st.capability_q = Some(new_q);
-                        if let Some(series) = self.series.get_mut(&id) {
-                            series.capability.push((ts as f64, dequantize_score(new_q)));
-                        }
-                    }
-                }
-                if let Some(delta) = deployment {
-                    if let Some(st) = self.current.get_mut(&id) {
-                        let new_q = st.deployment_q.unwrap_or(0) + delta;
-                        st.deployment_q = Some(new_q);
-                        if let Some(series) = self.series.get_mut(&id) {
-                            series.deployment.push((ts as f64, dequantize_score(new_q)));
-                        }
-                    }
-                }
-            }
+            // Composite events are retained in the wire format for compatibility
+            // with existing logs, but composites are no longer historical data.
+            EventKind::Composite { .. } => {}
             EventKind::Telemetry {
                 requests,
                 volume_cents,
@@ -528,16 +415,9 @@ mod tests {
         let base = Utc::now();
         {
             let mut t = HistoryTracker::open(&path);
-            t.record(
-                &snapshot(vec![quote("openai/gpt-x", 2.5, 10.0)]),
-                &HashMap::new(),
-                1,
-                base,
-            );
+            t.record(&snapshot(vec![quote("openai/gpt-x", 2.5, 10.0)]), base);
             t.record(
                 &snapshot(vec![quote("openai/gpt-x", 2.0, 10.0)]),
-                &HashMap::new(),
-                1,
                 base + chrono::Duration::seconds(3600),
             );
         }
@@ -557,9 +437,9 @@ mod tests {
         let _ = fs::remove_file(&path);
         let mut t = HistoryTracker::open(&path);
         let snap = snapshot(vec![quote("openai/gpt-x", 2.5, 10.0)]);
-        t.record(&snap, &HashMap::new(), 1, now_plus(0));
+        t.record(&snap, now_plus(0));
         let (bytes, frames) = t.store_stats();
-        t.record(&snap, &HashMap::new(), 1, now_plus(60));
+        t.record(&snap, now_plus(60));
         let (bytes2, frames2) = t.store_stats();
         assert_eq!((bytes, frames), (bytes2, frames2));
         let _ = fs::remove_file(&path);
@@ -570,20 +450,10 @@ mod tests {
         let path = temp_path("epsilon");
         let _ = fs::remove_file(&path);
         let mut t = HistoryTracker::open(&path);
-        t.record(
-            &snapshot(vec![quote("a/b", 1.0, 4.0)]),
-            &HashMap::new(),
-            1,
-            now_plus(0),
-        );
+        t.record(&snapshot(vec![quote("a/b", 1.0, 4.0)]), now_plus(0));
         let (_, frames) = t.store_stats();
         // 0.0004 < PRICE_QUANT/2 wiggle quantizes identically.
-        t.record(
-            &snapshot(vec![quote("a/b", 1.0004, 4.0)]),
-            &HashMap::new(),
-            1,
-            now_plus(60),
-        );
+        t.record(&snapshot(vec![quote("a/b", 1.0004, 4.0)]), now_plus(60));
         let (_, frames2) = t.store_stats();
         assert_eq!(frames, frames2);
         let _ = fs::remove_file(&path);
@@ -595,53 +465,11 @@ mod tests {
         let _ = fs::remove_file(&path);
         let mut t = HistoryTracker::open(&path);
         let snap = snapshot(vec![quote("a/b", 1.0, 4.0)]);
-        t.record(&snap, &HashMap::new(), 1, now_plus(0));
-        t.record(&snap, &HashMap::new(), 1, now_plus(3600));
+        t.record(&snap, now_plus(0));
+        t.record(&snap, now_plus(3600));
         assert_eq!(t.series("a/b").unwrap().telemetry.len(), 1);
-        t.record(&snap, &HashMap::new(), 1, now_plus(90_000));
+        t.record(&snap, now_plus(90_000));
         assert_eq!(t.series("a/b").unwrap().telemetry.len(), 2);
-        let _ = fs::remove_file(&path);
-    }
-
-    #[test]
-    fn composite_changes_only_on_version_bump_and_board_data() {
-        let path = temp_path("composite");
-        let _ = fs::remove_file(&path);
-        let mut t = HistoryTracker::open(&path);
-        let snap = snapshot(vec![quote("openai/gpt-x", 2.5, 10.0)]);
-        // No boards loaded: no composite events at all.
-        t.record(&snap, &HashMap::new(), 1, now_plus(0));
-        assert!(t.series("openai/gpt-x").unwrap().capability.is_empty());
-
-        let mut sets: HashMap<BenchmarkSource, Vec<Benchmark>> = HashMap::new();
-        sets.insert(
-            BenchmarkSource::SWERebench,
-            vec![Benchmark {
-                slug: "gpt-x".into(),
-                name: "GPT-X".into(),
-                creator: "openai".into(),
-                overall: None,
-                coding: None,
-                agentic_coding: Some(60.0),
-                agent: None,
-                reasoning_effort: None,
-                kind: crate::types::BenchmarkKind::Model,
-                tokens_per_task: None,
-                token_profile: None,
-            }],
-        );
-        t.record(&snap, &sets, 2, now_plus(60));
-        let s = t.series("openai/gpt-x").unwrap();
-        assert!(
-            !s.capability.is_empty(),
-            "composite recorded once boards load"
-        );
-
-        // Same version again: no duplicate events.
-        let (_, frames) = t.store_stats();
-        t.record(&snap, &sets, 2, now_plus(120));
-        let (_, frames2) = t.store_stats();
-        assert_eq!(frames, frames2);
         let _ = fs::remove_file(&path);
     }
 
@@ -688,18 +516,8 @@ mod tests {
         let path = temp_path("deltas");
         let _ = fs::remove_file(&path);
         let mut t = HistoryTracker::open(&path);
-        t.record(
-            &snapshot(vec![quote("a/b", 3.0, 12.0)]),
-            &HashMap::new(),
-            1,
-            now_plus(0),
-        );
-        t.record(
-            &snapshot(vec![quote("a/b", 1.5, 12.0)]),
-            &HashMap::new(),
-            1,
-            now_plus(60),
-        );
+        t.record(&snapshot(vec![quote("a/b", 3.0, 12.0)]), now_plus(0));
+        t.record(&snapshot(vec![quote("a/b", 1.5, 12.0)]), now_plus(60));
         let s = t.series("a/b").unwrap();
         assert_eq!(s.input.len(), 2);
         assert_eq!(s.input[1].1, 1.5);
@@ -729,22 +547,13 @@ mod tests {
             frames,
             bytes
         );
-        let shown = t
-            .series_list()
-            .filter(|s| !s.capability.is_empty())
-            .take(3)
-            .cloned()
-            .collect::<Vec<_>>();
+        let shown = t.series_list().take(3).cloned().collect::<Vec<_>>();
         for s in &shown {
             println!(
-                "{}: input {} events (last {:?}) · capability {} events (last {:?}) · deployment {} (last {:?})",
+                "{}: input {} events (last {:?})",
                 s.display,
                 s.input.len(),
                 s.input.last().map(|(_, v)| *v),
-                s.capability.len(),
-                s.capability.last().map(|(_, v)| *v),
-                s.deployment.len(),
-                s.deployment.last().map(|(_, v)| *v),
             );
         }
         assert!(t.model_count() > 50, "expected the live catalog in the log");

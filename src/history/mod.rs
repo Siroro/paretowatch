@@ -1,11 +1,10 @@
 //! Persistent, event-sourced long-term history.
 //!
 //! The log (`store.rs`) records only actual changes — a poll that changes
-//! nothing costs zero bytes. `track.rs` diffs live snapshots into events and
-//! rebuilds queryable per-model series, including composite capability /
-//! deployment scores and a once-per-day market telemetry summary. `ui.rs`
-//! renders the History tab over those series. See each module's docs for the
-//! encoding and recording contracts.
+//! nothing costs zero bytes. `track.rs` diffs live snapshots into price and
+//! once-per-day market telemetry events and rebuilds queryable per-model
+//! series. `ui.rs` renders the History tab over those series. See each module's
+//! docs for the encoding and recording contracts.
 
 pub(crate) mod store;
 pub(crate) mod track;

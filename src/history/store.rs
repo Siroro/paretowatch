@@ -8,7 +8,6 @@
 //! - prices are quantized to 0.001 $/M tokens and stored as zigzag deltas of
 //!   the quantized value, so sub-quantum wobble never writes (this is the
 //!   change-detection epsilon);
-//! - composite scores are quantized to 0.1 and zigzag-deltaed the same way;
 //! - daily market telemetry (requests/volume) is summarized once per model per
 //!   UTC day instead of per poll.
 //!
@@ -65,8 +64,8 @@ pub(crate) enum EventKind {
     },
     /// Zigzag delta (postcard varint) of the quantized price.
     Price { field: PriceField, delta: i32 },
-    /// Composite scores. `None` fields are unchanged; boards usually move
-    /// both flavors at once, so one frame covers it.
+    /// Legacy composite scores. New recordings never emit this variant;
+    /// readers retain it so existing history logs remain decodable.
     Composite {
         capability: Option<i32>,
         deployment: Option<i32>,

@@ -246,12 +246,7 @@ impl ParetoWatchApp {
             // Long-term history: diff each delivered poll against the last
             // recorded state. Writes only when something actually changed.
             if let Some(snapshot) = &self.price_snapshot {
-                self.history.record(
-                    snapshot,
-                    &self.benchmark_sets,
-                    self.data_version,
-                    Utc::now(),
-                );
+                self.history.record(snapshot, Utc::now());
             }
         }
     }

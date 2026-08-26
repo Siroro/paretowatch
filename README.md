@@ -11,7 +11,7 @@ A lightweight native Rust tray app that tracks [Surplus Intelligence](https://su
 - **Pareto chart** — blended price per 1M tokens against your choice of benchmark score, with the efficient frontier labelled. Right-click a model to pin its live prices to a floating always-on-top widget.
 - **Composite scores** — locally-computed capability and deployment scores that fuse all the benchmark boards instead of trusting any single leaderboard.
 - **Alerts** — desktop notifications on price thresholds, any price move, frontier entries/exits, and cheapest-model-above-score changes.
-- **History** — an append-only event log that records only actual changes and rebuilds per-model price/score series.
+- **History** — an append-only event log that records only actual price and market-telemetry changes; composite scores remain live-derived.
 
 ## Running
 

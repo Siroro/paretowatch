@@ -1,14 +1,13 @@
-# ParetoWatch v0.9.0
+# ParetoWatch v0.10.0
 
 ## Highlights
 
-- Propagated the active liquidity filter into pinned-price windows so displayed prices follow the same provider-quality policy as the Pareto view.
-- Re-select the cheapest qualifying provider for pinned rows and clearly show an unpriced state when no provider satisfies the selected filter.
-- Corrected cache-inclusive market discounts to use the market-wide best cache-read ask when the selected provider does not publish a cache price.
-- Kept discount labels visible by moving price-change details into hover text and clarified blended fresh-input presentation.
-- Added regression coverage for filtered pinned rows, cache-inclusive discounts, provider fallback behavior, and market pricing edge cases.
-- Refined Pareto and pricing presentation for consistent provider, discount, and workload-mix semantics.
+- Simplified persisted history to record price changes and once-per-day market telemetry only.
+- Removed historical capability and deployment composite series from the History view; composite scores remain available as live-derived benchmark results.
+- Decoupled history tracking from benchmark refreshes and composite data-version changes, reducing unnecessary history writes.
+- Preserved decoding of legacy composite events for storage compatibility while intentionally ignoring them during replay; existing historical composite series will no longer be displayed.
+- Updated the History UI and documentation to reflect the available blended, input, output, cache-read, and daily-volume metrics.
 
 ## Validation
 
-The v0.9.0 pricing and pinned-widget changes are validated with the repository's formatting, locked check, locked test, Clippy, and locked build commands. GitHub release packages are produced for Windows and Linux by the `v0.9.0` tag workflow.
+The v0.10.0 history changes are validated with the repository's formatting, locked check, locked test, Clippy, and locked build commands. GitHub release packages are produced for Windows and Linux by the `v0.10.0` tag workflow.

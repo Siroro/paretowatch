@@ -16,8 +16,6 @@ pub(crate) enum HistoryMetric {
     Input,
     Output,
     CacheRead,
-    Capability,
-    Deployment,
     VolumeDaily,
 }
 
@@ -28,8 +26,6 @@ impl HistoryMetric {
             Self::Input => "Input price",
             Self::Output => "Output price",
             Self::CacheRead => "Cache read",
-            Self::Capability => "Capability composite",
-            Self::Deployment => "Deployment composite",
             Self::VolumeDaily => "Daily volume",
         }
     }
@@ -45,7 +41,6 @@ impl HistoryMetric {
         match self {
             Self::Blended | Self::Input | Self::Output => "$ / 1M tokens".into(),
             Self::CacheRead => "cache $ / 1M tokens".into(),
-            Self::Capability | Self::Deployment => "composite score (0-100)".into(),
             Self::VolumeDaily => "24h volume ($)".into(),
         }
     }
@@ -55,7 +50,6 @@ impl HistoryMetric {
             Self::Blended | Self::Input | Self::Output | Self::CacheRead => {
                 crate::format::format_price_tick(v)
             }
-            Self::Capability | Self::Deployment => format!("{v:.1}"),
             Self::VolumeDaily => crate::format::format_compact_number(v),
         }
     }
@@ -315,8 +309,6 @@ fn controls(ui: &mut egui::Ui, models: &[(&str, &str)], state: &mut HistoryUiSta
             HistoryMetric::Input,
             HistoryMetric::Output,
             HistoryMetric::CacheRead,
-            HistoryMetric::Capability,
-            HistoryMetric::Deployment,
             HistoryMetric::VolumeDaily,
         ] {
             if ui
@@ -376,8 +368,6 @@ fn windowed_metric_series(
         HistoryMetric::Input => &series.input,
         HistoryMetric::Output => &series.output,
         HistoryMetric::CacheRead => &series.cache_read,
-        HistoryMetric::Capability => &series.capability,
-        HistoryMetric::Deployment => &series.deployment,
         HistoryMetric::Blended => {
             derived = blended_series(
                 series,
@@ -716,7 +706,6 @@ fn padded_y_bounds(metric: HistoryMetric, y_min: f64, y_max: f64) -> Option<(f64
     }
     let magnitude = y_max.abs().max(y_min.abs());
     let (factor, floor) = match metric {
-        HistoryMetric::Capability | HistoryMetric::Deployment => (0.25, 2.5),
         HistoryMetric::VolumeDaily => (0.25, 1.0),
         _ => (0.5, 0.05),
     };
@@ -874,12 +863,6 @@ mod tests {
         );
         // A meaningful span is left alone.
         assert_eq!(padded_y_bounds(HistoryMetric::Blended, 1.0, 20.0), None);
-        // Scores use a fixed floor so a flat 77.x line does not span 0-100.
-        let (lo, hi) = padded_y_bounds(HistoryMetric::Capability, 77.7, 77.7).unwrap();
-        assert!(
-            lo > 65.0 && hi < 90.0,
-            "score window around 77.7, got {lo}..{hi}"
-        );
         // Zero stays representable (free model).
         let (lo, hi) = padded_y_bounds(HistoryMetric::Blended, 0.0, 0.0).unwrap();
         assert!(
