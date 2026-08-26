@@ -5,8 +5,6 @@
 
 A lightweight native Rust tray dashboard for [Surplus Intelligence](https://surplusintelligence.ai) AI-model pricing and price/quality Pareto frontiers.
 
-No Python. No Electron. No browser server. No benchmark API keys — every feed it consumes is public.
-
 ## What you get
 
 - A tray app that polls Surplus market pricing every 30 seconds and re-fetches public benchmark boards every six hours, independently per source.
@@ -48,8 +46,6 @@ Swap the Y-axis from the **Benchmark** dropdown without touching pricing.
 | DeepSWE v1.1 | official `leaderboard-live.json` | restricted to `mini-swe-agent`, strongest effort tier |
 | LiveBench | official repo, newest release | Overall / Coding / Agentic coding selectors |
 | Revelo Code Index | public research page | scraped table |
-| SWE-bench Live | official reports JSONL | latest rows aggregated across languages |
-| SWE-bench Verified [legacy] | official `leaderboards.json` | model+agent evidence, kept for history |
 | Frontend Design Elo | [Design Arena](https://designarena.ai/leaderboard) public API | crowdsourced blinded-vote Elo across design categories; model-level, not part of the agentic composite |
 
 All feeds are public/no-key, refresh independently every six hours, and fail independently — one broken source shows its error in Settings without removing the others.
@@ -67,10 +63,10 @@ score = (prior_w · prior_AA + Σ wᵢ · pctᵢ) / (prior_w + Σ wᵢ)
 - Two symmetric **Huber passes** downweight sources sitting far from the consensus, replacing an older always-drop-the-lowest trim that biased well-covered models upward.
 - **Missing-board skepticism**: a loaded board that skipped a model adds a partial pseudo-observation at her prior, so a hot model on two boards doesn't outrank broad, strong coverage.
 - The **AA prior** is AA's percentile ranked within the union of models the agentic boards actually evaluate, with models AA hasn't measured falling back to a neutral prior; zero-evidence newcomers additionally take a confidence discount.
-- **Capability vs deployment**: harness-specific boards (Terminal-Bench, DeepSWE, SWE-bench Live/Verified, Revelo) are demoted to one-third weight for capability questions; model-level boards (AA, LiveBench) take the demotion for deployment questions. SWE-rebench's uniform harness keeps full weight in both.
+- **Capability vs deployment**: harness-specific boards (Terminal-Bench, DeepSWE, Revelo) are demoted to one-third weight for capability questions; model-level boards (AA, LiveBench) take the demotion for deployment questions. SWE-rebench's uniform harness keeps full weight in both.
 - The scoring method is **disclosed in each row's name** (measured / adjusted / prior / sparse evidence), and execution-mode SKUs (e.g. `-high`) inherit their base variant's rows.
 
-Base weights: AA 0.25, SWE-rebench 0.20, Terminal-Bench 0.15, DeepSWE 0.15, LiveBench 0.10, SWE-bench Live 0.075, Revelo 0.05, SWE-bench Verified 0.025.
+Base weights: AA 0.25, SWE-rebench 0.20, Terminal-Bench 0.15, DeepSWE 0.15, LiveBench 0.10, Revelo 0.05.
 
 This is deliberately a consensus view, not a claim that one scalar is ground truth.
 
