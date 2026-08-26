@@ -1,5 +1,6 @@
 # ParetoWatch
 
+[![CI](https://github.com/Siroro/paretowatch/actions/workflows/ci.yml/badge.svg)](https://github.com/Siroro/paretowatch/actions/workflows/ci.yml)
 [![release](https://github.com/Siroro/paretowatch/actions/workflows/release.yml/badge.svg)](https://github.com/Siroro/paretowatch/actions/workflows/release.yml)
 [![latest release](https://img.shields.io/github/v/release/Siroro/paretowatch)](https://github.com/Siroro/paretowatch/releases)
 

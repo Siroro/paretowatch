@@ -137,18 +137,30 @@ pub(crate) fn fetch_prices(client: &Client, settings: &Settings) -> Result<Price
                         continue;
                     };
                     let q = &mut quotes[index];
+                    // Catalogue list prices for the cache-inclusive
+                    // discount; the overlay below replaces them with live
+                    // market asks.
+                    let catalog_input = q.input;
+                    let catalog_output = q.output;
+                    let catalog_cache_read = q.cache_read;
                     q.input = market.input;
                     q.output = market.output;
                     q.cache_read = market.cache_read;
-                    if let Some(provider) = market.provider {
-                        q.provider = provider;
+                    if let Some(provider) = &market.provider {
+                        q.provider = provider.clone();
                     }
                     q.seller_count = market.seller_count;
                     q.healthy_seller_count = market.healthy_seller_count;
                     q.provider_trusted = market.provider_trusted;
                     q.requests_24h = market.requests_24h;
                     q.volume_24h = market.volume_24h;
-                    q.discount_pct = market.discount_pct;
+                    q.discount_pct = market_discount_pct(
+                        &market,
+                        catalog_input,
+                        catalog_cache_read,
+                        catalog_output,
+                        settings,
+                    );
                     q.discount_direction = market.discount_direction.clone();
                     q.free_offer_listed = market.free_offer_listed;
                     q.market_options = market.provider_options.clone();
@@ -169,6 +181,39 @@ pub(crate) fn fetch_prices(client: &Client, settings: &Settings) -> Result<Price
         market_error,
         base_source,
     })
+}
+
+/// Discount shown for an overlaid quote. With the option off this is the
+/// feed's published trend number; with it on, a workload-weighted
+/// market-vs-list discount that includes the cache-read leg. List
+/// input/output prefer the market's own direct prices (fresher than the
+/// catalogue); the list cache price is catalogue-only because the market
+/// feed publishes no direct cache price. Falls back to the feed number
+/// when the list side degenerates.
+fn market_discount_pct(
+    market: &MarketOverlay,
+    catalog_input: f64,
+    catalog_cache_read: Option<f64>,
+    catalog_output: f64,
+    settings: &Settings,
+) -> Option<f64> {
+    if !settings.include_cache_read_in_discount {
+        return market.discount_pct;
+    }
+    let list_input = market.direct_input.unwrap_or(catalog_input);
+    let list_output = market.direct_output.unwrap_or(catalog_output);
+    workload_discount_pct(
+        market.input,
+        market.cache_read,
+        market.output,
+        list_input,
+        catalog_cache_read,
+        list_output,
+        settings.input_weight,
+        settings.cache_read_weight,
+        settings.output_weight,
+    )
+    .or(market.discount_pct)
 }
 
 pub(crate) fn parse_price_matrix(value: &Value, settings: &Settings) -> Result<Vec<Quote>> {
@@ -490,6 +535,11 @@ pub(crate) struct MarketOverlay {
     pub(crate) input: f64,
     pub(crate) output: f64,
     pub(crate) cache_read: Option<f64>,
+    /// Official (direct) list prices published by the market feed itself.
+    /// The feed has no direct cache-read price; that leg comes from the
+    /// catalogue quote being overlaid.
+    pub(crate) direct_input: Option<f64>,
+    pub(crate) direct_output: Option<f64>,
     pub(crate) provider: Option<String>,
     pub(crate) seller_count: Option<u64>,
     pub(crate) healthy_seller_count: Option<u64>,
@@ -570,6 +620,14 @@ pub(crate) fn parse_market_overlay(root: &Value, settings: &Settings) -> Vec<Mar
         )
         .filter(|v| v.is_finite() && *v >= 0.0)
         .map(|v| v / SURPLUS_MARKET_MICRO_USD_PER_USD);
+        let direct_input =
+            first_number_path(entry, &[&["direct_input_per_1m"], &["directInputPer1m"]])
+                .filter(|v| v.is_finite() && *v >= 0.0)
+                .map(|v| v / SURPLUS_MARKET_MICRO_USD_PER_USD);
+        let direct_output =
+            first_number_path(entry, &[&["direct_output_per_1m"], &["directOutputPer1m"]])
+                .filter(|v| v.is_finite() && *v >= 0.0)
+                .map(|v| v / SURPLUS_MARKET_MICRO_USD_PER_USD);
 
         // Retain every real provider quote, then pick the cheapest for the
         // configured workload as the default display price. Liquidity filters can
@@ -708,6 +766,8 @@ pub(crate) fn parse_market_overlay(root: &Value, settings: &Settings) -> Vec<Mar
             input,
             output,
             cache_read,
+            direct_input,
+            direct_output,
             provider,
             seller_count,
             healthy_seller_count,
@@ -755,6 +815,8 @@ mod tests {
                 "best_input_per_1m": 3493,
                 "best_output_per_1m": 14969,
                 "best_cache_read_per_1m": 524,
+                "direct_input_per_1m": 7000,
+                "direct_output_per_1m": 30000,
                 "media_unit": null,
                 "seller_count": 187,
                 "healthy_seller_count": 59,
@@ -772,12 +834,92 @@ mod tests {
         let rows = parse_market_overlay(&v, &Settings::default());
         assert_eq!(rows.len(), 1);
         assert!((rows[0].input - 0.003493).abs() < 1e-12);
+        assert!((rows[0].direct_input.unwrap() - 0.007).abs() < 1e-12);
+        assert!((rows[0].direct_output.unwrap() - 0.03).abs() < 1e-12);
         assert_eq!(rows[0].provider.as_deref(), Some("unknown"));
         assert_eq!(rows[0].provider_trusted, Some(false));
         assert_eq!(rows[0].healthy_seller_count, Some(5));
         assert_eq!(rows[0].requests_24h, Some(641));
         assert_eq!(rows[0].discount_direction.as_deref(), Some("tightening"));
         assert!(!rows[0].free_offer_listed);
+    }
+
+    #[test]
+    fn cache_inclusive_discount_replaces_feed_number_when_enabled() {
+        // Live claude-opus-4-8 shape (2026-08): direct list pair sits far
+        // above the best asks, and only the catalogue knows the list cache
+        // price. Agentic weights put 80% of the workload on cache read.
+        let v = serde_json::json!({
+            "markets": [{
+                "model": "claude-opus-4-8",
+                "best_input_per_1m": 1200000,
+                "best_output_per_1m": 6000000,
+                "best_cache_read_per_1m": 120000,
+                "direct_input_per_1m": 12000000,
+                "direct_output_per_1m": 60000000,
+                "discount_trend": {"current_discount_pct": 75.53, "direction": "stable"}
+            }]
+        });
+        let rows = parse_market_overlay(&v, &Settings::default());
+        let market = &rows[0];
+        // Catalogue list prices: cache read only known by the catalogue
+        // (list cache at ten times the best cache ask, like the token legs).
+        let (catalog_input, catalog_cache, catalog_output) = (15.0, Some(1.2), 75.0);
+
+        let mut settings = Settings::default();
+        assert_eq!(
+            market_discount_pct(
+                market,
+                catalog_input,
+                catalog_cache,
+                catalog_output,
+                &settings
+            ),
+            Some(75.53),
+            "option off keeps the feed number"
+        );
+
+        settings.include_cache_read_in_discount = true;
+        let pct = market_discount_pct(
+            market,
+            catalog_input,
+            catalog_cache,
+            catalog_output,
+            &settings,
+        )
+        .unwrap();
+        // Every leg is exactly 10% of list, so any workload mix is 90% off.
+        assert!((pct - 90.0).abs() < 1e-9);
+    }
+
+    #[test]
+    fn cache_inclusive_discount_falls_back_gracefully() {
+        let v = serde_json::json!({
+            "markets": [{
+                "model": "model-x",
+                "best_input_per_1m": 100000,
+                "best_output_per_1m": 100000,
+                "direct_input_per_1m": 1000000,
+                "discount_trend": {"current_discount_pct": 42.0, "direction": "stable"}
+            }]
+        });
+        let mut rows = parse_market_overlay(&v, &Settings::default());
+        let market = &mut rows[0];
+        let settings = Settings {
+            include_cache_read_in_discount: true,
+            ..Settings::default()
+        };
+
+        // No direct output price and no catalogue input/cache: the list side
+        // still prices every leg ($1 list vs $0.1 market) via the direct
+        // input leg and the input fallbacks.
+        let pct = market_discount_pct(market, 0.0, None, 1.0, &settings).unwrap();
+        assert!((pct - 90.0).abs() < 1e-9);
+
+        // A wholly free list side cannot ground a ratio: keep the feed value.
+        market.direct_input = None;
+        let pct = market_discount_pct(market, 0.0, Some(0.0), 0.0, &settings).unwrap();
+        assert!((pct - 42.0).abs() < 1e-9);
     }
 
     #[test]

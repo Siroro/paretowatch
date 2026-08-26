@@ -771,10 +771,12 @@ impl ParetoWatchApp {
                             if let Some(discount) = quote.discount_pct {
                                 ui.separator();
                                 let direction = quote.discount_direction.as_deref().unwrap_or("stable");
-                                ui.colored_label(
-                                    discount_color(discount),
-                                    format!("{discount:.1}% discount \u{00b7} {direction}"),
-                                );
+                                let label = if self.settings.include_cache_read_in_discount {
+                                    format!("{discount:.1}% workload discount vs list \u{00b7} {direction}")
+                                } else {
+                                    format!("{discount:.1}% discount \u{00b7} {direction}")
+                                };
+                                ui.colored_label(discount_color(discount), label);
                             }
                         });
                         if quote.free_offer_listed {

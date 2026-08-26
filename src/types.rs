@@ -426,6 +426,11 @@ pub(crate) struct Settings {
     pub(crate) input_weight: f64,
     pub(crate) cache_read_weight: f64,
     pub(crate) output_weight: f64,
+    /// Replace the feed's published discount with a workload-weighted
+    /// market-vs-list discount that includes the cache-read leg. List
+    /// cache-read pricing comes from the catalogue; the market feed
+    /// publishes no direct cache price.
+    pub(crate) include_cache_read_in_discount: bool,
     pub(crate) alerts: Vec<AlertRule>,
     /// Base text size for the floating Pinned Prices window; every size in
     /// that window scales from it (10 is the original hard-coded look).
@@ -439,6 +444,7 @@ impl Default for Settings {
             input_weight: 15.0,
             cache_read_weight: 80.0,
             output_weight: 5.0,
+            include_cache_read_in_discount: false,
             alerts: vec![],
             pinned_price_font_size: 10.0,
         }
@@ -550,6 +556,43 @@ pub(crate) fn blended_price(
     (input * input_weight + cache_price * cache_read_weight + output * output_weight) / total_weight
 }
 
+/// Workload-weighted discount of market prices versus list prices, including
+/// the cache-read leg. Returns `None` when the list blended price is zero or
+/// the ratio is not finite, so callers can keep the feed's published number.
+pub(crate) fn workload_discount_pct(
+    market_input: f64,
+    market_cache_read: Option<f64>,
+    market_output: f64,
+    list_input: f64,
+    list_cache_read: Option<f64>,
+    list_output: f64,
+    input_weight: f64,
+    cache_read_weight: f64,
+    output_weight: f64,
+) -> Option<f64> {
+    let list_blended = blended_price(
+        list_input,
+        list_cache_read,
+        list_output,
+        input_weight,
+        cache_read_weight,
+        output_weight,
+    );
+    if !(list_blended > f64::EPSILON) {
+        return None;
+    }
+    let market_blended = blended_price(
+        market_input,
+        market_cache_read,
+        market_output,
+        input_weight,
+        cache_read_weight,
+        output_weight,
+    );
+    let discount = (1.0 - market_blended / list_blended) * 100.0;
+    discount.is_finite().then_some(discount)
+}
+
 #[derive(Debug, Clone)]
 pub(crate) struct PriceSnapshot {
     pub(crate) quotes: Vec<Quote>,
@@ -590,6 +633,99 @@ mod tests {
         assert!((price - 0.96).abs() < 1e-12);
         let fallback = blended_price(2.0, None, 10.0, 15.0, 80.0, 5.0);
         assert!((fallback - 2.4).abs() < 1e-12);
+    }
+
+    #[test]
+    fn workload_discount_includes_cache_read_leg() {
+        // Same 50% cut on every leg must give 50% regardless of weights.
+        let pct = workload_discount_pct(
+            1.0,
+            Some(0.1),
+            5.0, //
+            2.0,
+            Some(0.2),
+            10.0, //
+            15.0,
+            80.0,
+            5.0,
+        )
+        .unwrap();
+        assert!((pct - 50.0).abs() < 1e-9);
+        // A cache-heavy workload must weigh the cache leg: only the cache
+        // leg is discounted here (input/output cost the same on both
+        // sides), so a no-cache workload sees none of the cut.
+        let cache_heavy = workload_discount_pct(
+            2.0,
+            Some(0.02),
+            10.0, //
+            2.0,
+            Some(0.2),
+            10.0, //
+            15.0,
+            80.0,
+            5.0,
+        )
+        .unwrap();
+        let no_cache = workload_discount_pct(
+            2.0,
+            Some(0.02),
+            10.0, //
+            2.0,
+            Some(0.2),
+            10.0, //
+            50.0,
+            0.0,
+            50.0,
+        )
+        .unwrap();
+        assert!(cache_heavy > 10.0);
+        assert!(no_cache.abs() < 1e-9);
+    }
+
+    #[test]
+    fn workload_discount_missing_cache_falls_back_to_input() {
+        // No cache price on either side: both fall back to their input
+        // prices, and an all-legs-50% market still yields exactly 50%.
+        let pct = workload_discount_pct(
+            1.0, None, 5.0, //
+            2.0, None, 10.0, //
+            15.0, 80.0, 5.0,
+        )
+        .unwrap();
+        assert!((pct - 50.0).abs() < 1e-9);
+        // Market side lacking a cache price while the catalogue has one
+        // borrows the market input price for that leg.
+        let pct = workload_discount_pct(
+            1.0,
+            None,
+            10.0, //
+            2.0,
+            Some(0.2),
+            10.0, //
+            0.0,
+            100.0,
+            0.0,
+        )
+        .unwrap();
+        assert!((pct - (1.0 - 1.0 / 0.2) * 100.0).abs() < 1e-9);
+    }
+
+    #[test]
+    fn workload_discount_rejects_degenerate_list_prices() {
+        assert!(
+            workload_discount_pct(
+                1.0,
+                Some(0.1),
+                5.0, //
+                0.0,
+                Some(0.0),
+                0.0, //
+                15.0,
+                80.0,
+                5.0
+            )
+            .is_none()
+        );
     }
 
     #[test]

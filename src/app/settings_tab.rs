@@ -113,6 +113,15 @@ impl ParetoWatchApp {
                 self.settings.output_weight.max(0.0) / total * 100.0,
             ));
         }
+        if ui
+            .checkbox(
+                &mut self.settings.include_cache_read_in_discount,
+                "Include cache read in discount (workload-weighted vs list prices)",
+            )
+            .changed()
+        {
+            self.settings_dirty = true;
+        }
 
         ui.add_space(10.0);
         ui.heading("Feed status");
