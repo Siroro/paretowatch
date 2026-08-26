@@ -2,7 +2,7 @@
 //! canonicalization, and the fuzzy join between Surplus quotes and
 //! benchmark rows.
 
-use crate::infer_creator;
+use crate::theme::infer_creator;
 use crate::types::{Benchmark, Quote};
 
 pub(crate) fn best_benchmark_match<'a>(
@@ -280,7 +280,7 @@ pub(crate) fn normalize(s: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::score_benchmark;
+    use crate::fetch::score_benchmark;
     use crate::testfix::test_quote;
     use crate::types::BenchmarkKind;
 

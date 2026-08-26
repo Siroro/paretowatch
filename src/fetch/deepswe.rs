@@ -6,10 +6,11 @@ use anyhow::{Result, anyhow};
 use reqwest::blocking::Client;
 use serde_json::Value;
 
+use super::json_shape;
 use super::{fetch_json, number_value, score_benchmark};
 use crate::bench::matching::{model_core, normalize};
+use crate::format::format_compact_number;
 use crate::types::{Benchmark, BenchmarkKind};
-use crate::{format_compact_number, json_shape};
 
 pub(crate) const DEEPSWE_LEADERBOARD_URL: &str =
     "https://deepswe.datacurve.ai/artifacts/v1.1/leaderboard-live.json";

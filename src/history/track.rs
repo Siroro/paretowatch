@@ -19,7 +19,7 @@ use super::store::{
     EventKind, EventStore, Frame, PriceField, dequantize_price, dequantize_score, quantize_price,
     quantize_score,
 };
-use crate::{Benchmark, BenchmarkSource, PriceSnapshot, Quote};
+use crate::types::{Benchmark, BenchmarkSource, PriceSnapshot, Quote};
 
 #[derive(Debug, Clone, Default)]
 pub(crate) struct ModelSeries {
@@ -101,20 +101,20 @@ impl HistoryTracker {
             .iter()
             .any(|s| sets.get(s).is_some_and(|rows| !rows.is_empty()));
         let (cap_rows, dep_rows) = if recompute_composites && benchmarks_loaded {
-            let scaffold = crate::default_common_scaffold();
-            let mode = crate::ComparisonMode::BestAvailableAgent;
+            let scaffold = crate::types::default_common_scaffold();
+            let mode = crate::types::ComparisonMode::BestAvailableAgent;
             (
-                crate::build_agentic_composite(
+                crate::bench::build_agentic_composite(
                     sets,
                     mode,
                     &scaffold,
-                    crate::CompositeFlavor::Capability,
+                    crate::types::CompositeFlavor::Capability,
                 ),
-                crate::build_agentic_composite(
+                crate::bench::build_agentic_composite(
                     sets,
                     mode,
                     &scaffold,
-                    crate::CompositeFlavor::Deployment,
+                    crate::types::CompositeFlavor::Deployment,
                 ),
             )
         } else {
@@ -132,10 +132,10 @@ impl HistoryTracker {
             }
             self.diff_telemetry(&mut events, id, ts, q);
             if recompute_composites && benchmarks_loaded {
-                let cap = crate::best_benchmark_match(q, &cap_rows)
+                let cap = crate::bench::best_benchmark_match(q, &cap_rows)
                     .and_then(|b| b.agentic_coding)
                     .filter(|s| s.is_finite());
-                let dep = crate::best_benchmark_match(q, &dep_rows)
+                let dep = crate::bench::best_benchmark_match(q, &dep_rows)
                     .and_then(|b| b.agentic_coding)
                     .filter(|s| s.is_finite());
                 self.diff_composite(&mut events, id, ts, cap, dep);
@@ -423,7 +423,7 @@ pub(crate) fn blended_series(
         let cache = carry_forward(&series.cache_read, ts);
         out.push((
             ts,
-            crate::blended_price(
+            crate::types::blended_price(
                 input,
                 cache,
                 output,
@@ -623,7 +623,7 @@ mod tests {
                 agentic_coding: Some(60.0),
                 agent: None,
                 reasoning_effort: None,
-                kind: crate::BenchmarkKind::Model,
+                kind: crate::types::BenchmarkKind::Model,
                 tokens_per_task: None,
                 token_profile: None,
             }],

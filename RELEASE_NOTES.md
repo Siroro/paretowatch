@@ -1,17 +1,16 @@
-# ParetoWatch v0.6.0
+# ParetoWatch v0.7.0
 
 ## Highlights
 
-- Added Design Arena as a selectable benchmark with Design Elo scoring.
-- Expanded benchmark matching and composite scoring across model, agent, scaffold, coding, and agentic-coding views.
-- Refreshed benchmark ingestion for Artificial Analysis, DeepSWE, LiveBench, Revelo Code Index, SWE-rebench, and Terminal-Bench data.
-- Removed stale SWE-bench Live and SWE-bench Verified boards and safely migrates persisted settings and alerts that reference them.
-- Improved market pricing and liquidity handling, including blended/input/output cost metrics, provider qualification, and zero-priced offer treatment.
-- Added market quality filters and clearer discount/free-offer indicators.
-- Improved Pareto chart interactions, pinned price details, floating price widgets, and transparent tray/background rendering.
-- Expanded history tracking and UI for benchmark and price changes, including richer model comparisons.
-- Added threshold and frontier alert refinements with clearer alert summaries and continued tray operation while the main window is hidden.
+- Refactored the application into focused modules for app state, tabs, alerts, Pareto analysis, settings, themes, tray integration, workers, and formatting.
+- Fixed pinned pricing-window sizing by measuring rendered content, accounting for window chrome and separators, capping visible rows, and retaining scrolling for larger result sets.
+- Improved provider-aware pricing with workload-blended rates, prompt-cache reads, catalog modality filtering, market overlays, healthy-seller qualification, and safe fallback behavior.
+- Enforced the Surplus market cache interval when scheduling price refreshes.
+- Expanded benchmark scoring, matching, diagnostics, and feed handling across current benchmark sources.
+- Improved history tracking and comparison views for benchmark and price changes.
+- Refined alert handling, persistence, summaries, and tray behavior while the main window is hidden.
+- Continued the v0.6.0 cleanup of stale benchmark data and improved Pareto chart and market-detail interactions.
 
 ## Validation
 
-This release is built from the current benchmark, pricing, history, and UI updates. GitHub release packages are produced for Windows and Linux by the `v0.6.0` tag workflow.
+The v0.7.0 source refactor and pricing-window fixes are validated with the repository's formatting, check, test, and release-build commands. GitHub release packages are produced for Windows and Linux by the `v0.7.0` tag workflow.

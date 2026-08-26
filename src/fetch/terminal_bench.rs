@@ -5,9 +5,9 @@ use anyhow::{Context, Result, anyhow};
 use reqwest::blocking::Client;
 use serde_json::Value;
 
+use super::json_shape;
 use super::{fetch_text, number_value, score_benchmark};
 use crate::bench::matching::normalize;
-use crate::json_shape;
 use crate::types::{Benchmark, BenchmarkKind};
 
 pub(crate) const TERMINAL_BENCH_HARBOR_URL: &str =

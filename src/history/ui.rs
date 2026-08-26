@@ -8,7 +8,7 @@ use egui_plot::{Legend, Line, Plot, PlotPoints, Points, VLine};
 
 use super::HistoryTracker;
 use super::track::{ModelSeries, blended_series};
-use crate::Settings;
+use crate::types::Settings;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum HistoryMetric {
@@ -53,10 +53,10 @@ impl HistoryMetric {
     fn format_value(self, v: f64) -> String {
         match self {
             Self::Blended | Self::Input | Self::Output | Self::CacheRead => {
-                crate::format_price_tick(v)
+                crate::format::format_price_tick(v)
             }
             Self::Capability | Self::Deployment => format!("{v:.1}"),
-            Self::VolumeDaily => crate::format_compact_number(v),
+            Self::VolumeDaily => crate::format::format_compact_number(v),
         }
     }
 }
@@ -140,7 +140,7 @@ struct PreparedSeries {
 pub(crate) fn show(
     ui: &mut egui::Ui,
     settings: &Settings,
-    snapshot: Option<&crate::PriceSnapshot>,
+    snapshot: Option<&crate::types::PriceSnapshot>,
     tracker: &HistoryTracker,
     state: &mut HistoryUiState,
 ) {
@@ -221,7 +221,7 @@ pub(crate) fn show(
         }
         let steps = super::track::step_points(&shown, now.timestamp() as f64);
         let color = if i == 0 {
-            crate::creator_color(&series.creator)
+            crate::theme::creator_color(&series.creator)
         } else {
             COMPARE_COLORS[(i - 1) % COMPARE_COLORS.len()]
         };

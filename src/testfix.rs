@@ -1,6 +1,6 @@
 //! Shared fixtures for the crate's #[cfg(test)] modules.
 
-use crate::infer_creator;
+use crate::theme::infer_creator;
 use crate::types::{ProviderMarketQuote, Quote};
 
 pub(crate) fn test_quote(model: &str, input: f64, live_market: bool) -> Quote {

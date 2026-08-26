@@ -7,7 +7,7 @@ use reqwest::blocking::Client;
 use serde_json::Value;
 
 use super::fetch_text;
-use crate::infer_creator;
+use crate::theme::infer_creator;
 use crate::types::{Benchmark, BenchmarkKind};
 
 pub(crate) const LIVEBENCH_CONSTANTS_URL: &str =

@@ -7,14 +7,23 @@ use chrono::{DateTime, Utc};
 use eframe::egui;
 use egui::{ViewportClass, ViewportCommand, ViewportId, WindowLevel};
 
+use crate::alerts::prices_differ;
+use crate::theme::{creator_color, discount_color};
 use crate::types::{PriceSnapshot, Settings, blended_price};
-use crate::{creator_color, discount_color, prices_differ};
 
 const WINDOW_WIDTH: f32 = 240.0;
-const WINDOW_CHROME_HEIGHT: f32 = 48.0;
-const ROW_CONTENT_HEIGHT: f32 = 25.0;
-const ROW_SEPARATOR_HEIGHT: f32 = 6.0;
+/// Everything around the row list (title, separators, footer, frame
+/// margins), measured from a real `window_frame` layout with the default
+/// fonts (see `window_size_estimate_tracks_measured_layout`).
+const WINDOW_CHROME_HEIGHT: f32 = 45.0;
+/// One pinned row plus the separator below it, measured the same way. This
+/// only sizes the window until its first laid-out frame; the renderer then
+/// fits the native window to the measured content.
+const ROW_PITCH_HEIGHT: f32 = 46.5;
 const DPI_ROUNDING_GUARD: f32 = 2.0;
+/// Inner-size mismatches up to this are treated as matches: the OS
+/// quantizes window sizes to whole physical pixels.
+const SIZE_MATCH_EPSILON: f32 = 1.0;
 const MAX_VISIBLE_ROWS: usize = 6;
 const FLASH_SECS: f64 = 1.6;
 const RAISE_INTERVAL: Duration = Duration::from_secs(1);
@@ -74,6 +83,9 @@ struct SharedWindow {
     remove: Vec<String>,
     close: bool,
     last_raise: Option<Instant>,
+    /// Height budget for the row list: the measured list height scaled to
+    /// `MAX_VISIBLE_ROWS`, refreshed by the renderer every frame.
+    scroll_cap: f32,
 }
 
 type SharedHandle = Arc<Mutex<SharedWindow>>;
@@ -178,6 +190,7 @@ impl PriceWidgetManager {
         if self.window.is_none() {
             let shared = Arc::new(Mutex::new(SharedWindow {
                 fetched_at: snapshot.map(|s| s.fetched_at),
+                scroll_cap: ROW_PITCH_HEIGHT * MAX_VISIBLE_ROWS as f32,
                 ..Default::default()
             }));
             let mut builder = egui::ViewportBuilder::default()
@@ -359,15 +372,14 @@ fn raise_to_top(ctx: &egui::Context, viewport_id: ViewportId) {
     );
 }
 
-fn visible_rows_height(row_count: usize) -> f32 {
-    let visible = row_count.clamp(1, MAX_VISIBLE_ROWS);
-    ROW_CONTENT_HEIGHT * visible as f32 + ROW_SEPARATOR_HEIGHT * visible.saturating_sub(1) as f32
-}
-
+/// Estimated inner size for the given number of pinned rows, used when the
+/// window is created or a row is added — before the next frame measures the
+/// real layout. `render` corrects the native size from measured content.
 fn window_size(row_count: usize) -> egui::Vec2 {
+    let visible = row_count.clamp(1, MAX_VISIBLE_ROWS) as f32;
     egui::vec2(
         WINDOW_WIDTH,
-        WINDOW_CHROME_HEIGHT + visible_rows_height(row_count) + DPI_ROUNDING_GUARD,
+        WINDOW_CHROME_HEIGHT + ROW_PITCH_HEIGHT * visible + DPI_ROUNDING_GUARD,
     )
 }
 
@@ -386,9 +398,15 @@ fn spawn_position(ctx: &egui::Context, near: egui::Pos2, size: egui::Vec2) -> Op
 }
 
 fn render(ui: &mut egui::Ui, class: ViewportClass, shared: &SharedHandle) {
-    let (rows, fetched_at) = {
+    let (rows, fetched_at, scroll_cap) = {
         let state = shared.lock().expect("quote window state");
-        (state.rows.clone(), state.fetched_at)
+        (state.rows.clone(), state.fetched_at, state.scroll_cap)
+    };
+    // Before the first measured frame the cap is zero; keep the list visible.
+    let scroll_cap = if scroll_cap > 0.0 {
+        scroll_cap
+    } else {
+        ROW_PITCH_HEIGHT * MAX_VISIBLE_ROWS as f32
     };
     let os_close = ui.ctx().input(|i| i.viewport().close_requested());
 
@@ -413,69 +431,34 @@ fn render(ui: &mut egui::Ui, class: ViewportClass, shared: &SharedHandle) {
 
     let mut remove = None;
     let mut close_all = false;
-    egui::Frame::default()
-        .inner_margin(egui::Margin::symmetric(6, 3))
-        .show(ui, |ui| {
-            ui.style_mut().spacing.item_spacing = egui::vec2(3.0, 0.5);
-            ui.horizontal(|ui| {
-                ui.label(
-                    egui::RichText::new("PINNED PRICES")
-                        .strong()
-                        .size(9.5)
-                        .color(MUTED_TEXT),
-                );
-                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    if ui
-                        .add_sized(
-                            [13.0, 13.0],
-                            egui::Button::new(
-                                egui::RichText::new("×").size(10.0).color(MUTED_TEXT),
-                            )
-                            .frame(false),
-                        )
-                        .on_hover_text("Close all pinned prices")
-                        .clicked()
-                    {
-                        close_all = true;
-                    }
-                });
-            });
-            ui.separator();
+    let (frame_height, rows_height) = window_frame(
+        ui,
+        &rows,
+        fetched_at,
+        scroll_cap,
+        &mut remove,
+        &mut close_all,
+    );
 
-            egui::ScrollArea::vertical()
-                .max_height(visible_rows_height(MAX_VISIBLE_ROWS))
-                .scroll_bar_visibility(egui::scroll_area::ScrollBarVisibility::AlwaysHidden)
-                .auto_shrink([false, true])
-                .show(ui, |ui| {
-                    for (index, row) in rows.iter().enumerate() {
-                        if index > 0 {
-                            ui.separator();
-                        }
-                        render_row(ui, row, &mut remove);
-                    }
-                });
-
-            ui.horizontal(|ui| {
-                let live = rows
-                    .iter()
-                    .filter(|row| row.live_market && row.priced)
-                    .count();
-                ui.label(
-                    egui::RichText::new(format!("{} models · {live} live", rows.len()))
-                        .size(8.5)
-                        .color(if live > 0 { LIVE_ACCENT } else { MUTED_TEXT }),
-                );
-                if let Some(at) = fetched_at {
-                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        ui.label(
-                            egui::RichText::new(format!("upd {}", format_clock(at)))
-                                .size(8.5)
-                                .color(MUTED_TEXT),
-                        );
-                    });
-                }
-            });
+    // Fit the native window to the laid-out content. The constants behind
+    // `window_size` only estimate the size until the first frame; eframe
+    // never re-applies later `ViewportBuilder` inner-size changes, so a
+    // resize command is the only reliable channel.
+    if !rows.is_empty() {
+        let per_row = rows_height / rows.len() as f32;
+        shared.lock().expect("quote window state").scroll_cap = per_row * MAX_VISIBLE_ROWS as f32;
+    }
+    if class == ViewportClass::Deferred {
+        let needed = egui::vec2(WINDOW_WIDTH, frame_height + DPI_ROUNDING_GUARD);
+        let matches = ui.input(|i| i.viewport().inner_rect).is_some_and(|rect| {
+            (rect.width() - needed.x).abs() <= SIZE_MATCH_EPSILON
+                && (rect.height() - needed.y).abs() <= SIZE_MATCH_EPSILON
         });
+        if !matches {
+            ui.ctx()
+                .send_viewport_cmd(ViewportCommand::InnerSize(needed));
+        }
+    }
 
     if drag.drag_started() && class == ViewportClass::Deferred {
         ui.ctx().send_viewport_cmd(ViewportCommand::StartDrag);
@@ -529,6 +512,86 @@ fn render(ui: &mut egui::Ui, class: ViewportClass, shared: &SharedHandle) {
     } else {
         ui.ctx().request_repaint_after(Duration::from_secs(1));
     }
+}
+
+/// Lay out the whole pinned-prices card content (title, row list, footer)
+/// and return `(frame outer height, full height of the row list)`. The row
+/// list height is the unclamped content height, even when `scroll_cap`
+/// clips what is visible.
+fn window_frame(
+    ui: &mut egui::Ui,
+    rows: &[RowFeed],
+    fetched_at: Option<DateTime<Utc>>,
+    scroll_cap: f32,
+    remove: &mut Option<String>,
+    close_all: &mut bool,
+) -> (f32, f32) {
+    let mut rows_height = 0.0;
+    let frame = egui::Frame::default()
+        .inner_margin(egui::Margin::symmetric(6, 3))
+        .show(ui, |ui| {
+            ui.style_mut().spacing.item_spacing = egui::vec2(3.0, 0.5);
+            ui.horizontal(|ui| {
+                ui.label(
+                    egui::RichText::new("PINNED PRICES")
+                        .strong()
+                        .size(9.5)
+                        .color(MUTED_TEXT),
+                );
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    if ui
+                        .add_sized(
+                            [13.0, 13.0],
+                            egui::Button::new(
+                                egui::RichText::new("×").size(10.0).color(MUTED_TEXT),
+                            )
+                            .frame(false),
+                        )
+                        .on_hover_text("Close all pinned prices")
+                        .clicked()
+                    {
+                        *close_all = true;
+                    }
+                });
+            });
+            ui.separator();
+
+            egui::ScrollArea::vertical()
+                .max_height(scroll_cap)
+                .scroll_bar_visibility(egui::scroll_area::ScrollBarVisibility::AlwaysHidden)
+                .auto_shrink([false, true])
+                .show(ui, |ui| {
+                    for (index, row) in rows.iter().enumerate() {
+                        if index > 0 {
+                            ui.separator();
+                        }
+                        render_row(ui, row, remove);
+                    }
+                    rows_height = ui.min_rect().height();
+                });
+
+            ui.horizontal(|ui| {
+                let live = rows
+                    .iter()
+                    .filter(|row| row.live_market && row.priced)
+                    .count();
+                ui.label(
+                    egui::RichText::new(format!("{} models · {live} live", rows.len()))
+                        .size(8.5)
+                        .color(if live > 0 { LIVE_ACCENT } else { MUTED_TEXT }),
+                );
+                if let Some(at) = fetched_at {
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        ui.label(
+                            egui::RichText::new(format!("upd {}", format_clock(at)))
+                                .size(8.5)
+                                .color(MUTED_TEXT),
+                        );
+                    });
+                }
+            });
+        });
+    (frame.response.rect.height(), rows_height)
 }
 
 fn render_row(ui: &mut egui::Ui, row: &RowFeed, remove: &mut Option<String>) {
@@ -862,10 +925,68 @@ mod tests {
             window_size(MAX_VISIBLE_ROWS + 10)
         );
         assert!(window_size(2).y > window_size(1).y);
-        assert_eq!(visible_rows_height(1), ROW_CONTENT_HEIGHT);
         assert_eq!(
-            visible_rows_height(2),
-            ROW_CONTENT_HEIGHT * 2.0 + ROW_SEPARATOR_HEIGHT
+            window_size(1).y,
+            WINDOW_CHROME_HEIGHT + ROW_PITCH_HEIGHT + DPI_ROUNDING_GUARD
         );
+    }
+
+    /// `window_size` is only a first-frame estimate — `render` fits the
+    /// window to measured content afterwards — but it should stay close to
+    /// the real layout so the window does not flash at the wrong size.
+    /// If this drifts after an egui or font update, retune the constants.
+    #[test]
+    fn window_size_estimate_tracks_measured_layout() {
+        let ctx = egui::Context::default();
+        let row = RowFeed {
+            model_id: "m".into(),
+            display_name: "Model A".into(),
+            creator_color: PRIMARY_TEXT,
+            live_market: true,
+            priced: true,
+            free_offer_listed: false,
+            input: 1.0,
+            cache_read: Some(0.1),
+            output: 2.0,
+            blended: 1.2,
+            discount_pct: Some(25.0),
+            discount_flash_at: None,
+            last_change: None,
+        };
+        let mut measured = Vec::new();
+        for pass in 0..3 {
+            let mut out = ctx.run_ui(egui::RawInput::default(), |ui| {
+                ui.set_max_width(WINDOW_WIDTH);
+                let mut remove = None;
+                let mut close_all = false;
+                if pass == 0 {
+                    measured.clear();
+                }
+                for n in 1..=4usize {
+                    let rows = vec![row.clone(); n];
+                    let (frame_height, _) = window_frame(
+                        ui,
+                        &rows,
+                        Some(Utc::now()),
+                        f32::INFINITY,
+                        &mut remove,
+                        &mut close_all,
+                    );
+                    if pass == 0 {
+                        measured.push(frame_height);
+                    }
+                }
+            });
+            out.textures_delta.clear();
+        }
+        for (index, height) in measured.iter().enumerate() {
+            let estimate = window_size(index + 1).y - DPI_ROUNDING_GUARD;
+            assert!(
+                (estimate - height).abs() <= 8.0,
+                "rows {}: estimate {} vs measured {height}",
+                index + 1,
+                estimate
+            );
+        }
     }
 }

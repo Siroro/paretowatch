@@ -160,7 +160,7 @@ pub(crate) fn benchmarks_for_source(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::score_benchmark;
+    use crate::fetch::score_benchmark;
     use crate::testfix::test_quote;
     use crate::types::{BenchmarkKind, BenchmarkSource, ComparisonMode};
     use std::collections::HashMap;

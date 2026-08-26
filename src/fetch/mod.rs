@@ -29,10 +29,11 @@ use regex::Regex;
 use reqwest::blocking::Client;
 use serde_json::Value;
 
+use crate::alerts::evaluate_alerts;
 use crate::artificial_analysis_snapshot::artificial_analysis_snapshot;
-use crate::infer_creator;
+use crate::theme::infer_creator;
 use crate::types::{Benchmark, BenchmarkKind, BenchmarkSource, Quote, Settings};
-use crate::{WorkerCommand, WorkerMessage, evaluate_alerts};
+use crate::worker::{WorkerCommand, WorkerMessage};
 
 pub(crate) const BENCHMARK_REFRESH_SECS: u64 = 6 * 60 * 60;
 
@@ -205,4 +206,51 @@ pub(crate) fn number_value(value: &Value) -> Option<f64> {
     value
         .as_f64()
         .or_else(|| value.as_str()?.trim().parse::<f64>().ok())
+}
+
+pub(crate) fn json_shape(value: &Value) -> String {
+    match value {
+        Value::Object(map) => {
+            let mut keys = map.keys().take(12).cloned().collect::<Vec<_>>();
+            keys.sort();
+            format!("object keys [{}]", keys.join(", "))
+        }
+        Value::Array(items) => format!("array len {}", items.len()),
+        Value::Null => "null".into(),
+        Value::Bool(_) => "bool".into(),
+        Value::Number(_) => "number".into(),
+        Value::String(v) => format!("string len {}", v.len()),
+    }
+}
+
+pub(crate) fn first_number_path(value: &Value, paths: &[&[&str]]) -> Option<f64> {
+    paths
+        .iter()
+        .find_map(|p| value_at_path(value, p).and_then(value_as_f64))
+}
+
+fn value_as_f64(value: &Value) -> Option<f64> {
+    value
+        .as_f64()
+        .or_else(|| value.as_str()?.trim().parse::<f64>().ok())
+}
+
+pub(crate) fn first_string_path(value: &Value, paths: &[&[&str]]) -> Option<String> {
+    paths.iter().find_map(|p| {
+        value_at_path(value, p)
+            .and_then(Value::as_str)
+            .map(str::to_owned)
+    })
+}
+
+fn value_at_path<'a>(mut value: &'a Value, path: &[&str]) -> Option<&'a Value> {
+    for key in path {
+        value = value.get(*key)?;
+    }
+    Some(value)
+}
+
+pub(crate) fn string_at(value: &Value, keys: &[&str]) -> Option<String> {
+    keys.iter()
+        .find_map(|k| value.get(*k).and_then(Value::as_str).map(str::to_owned))
 }

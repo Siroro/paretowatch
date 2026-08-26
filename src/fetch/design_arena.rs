@@ -8,7 +8,7 @@ use reqwest::blocking::Client;
 use serde_json::{Value, json};
 
 use super::fetch_json_post;
-use crate::infer_creator;
+use crate::theme::infer_creator;
 use crate::types::{Benchmark, BenchmarkKind};
 
 const DESIGN_ARENA_LEADERBOARD_URL: &str = "https://www.designarena.ai/api/leaderboard";

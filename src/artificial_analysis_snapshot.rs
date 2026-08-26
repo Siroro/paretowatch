@@ -34,7 +34,8 @@
 //! prior for the missing evidence instead of renormalizing it away, so absent
 //! rows cost coverage confidence but never invent capability.
 
-use crate::{Benchmark, BenchmarkKind, score_benchmark};
+use crate::fetch::score_benchmark;
+use crate::types::{Benchmark, BenchmarkKind};
 
 pub(crate) const ARTIFICIAL_ANALYSIS_SNAPSHOT_DATE: &str = "2026-08-26";
 pub(crate) const ARTIFICIAL_ANALYSIS_SNAPSHOT_VERSION: &str = "v4.1.2";
@@ -247,7 +248,7 @@ pub(crate) fn artificial_analysis_snapshot() -> Vec<Benchmark> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::benchmark_model_key;
+    use crate::bench::matching::benchmark_model_key;
 
     #[test]
     fn rows_are_well_formed() {
@@ -332,5 +333,25 @@ mod tests {
                 row.slug
             );
         }
+    }
+
+    #[test]
+    fn aa_snapshot_covers_current_deepseek_and_glm_models() {
+        let rows = artificial_analysis_snapshot();
+        let deepseek_release = rows
+            .iter()
+            .find(|b| benchmark_model_key(&b.slug) == "deepseek v4 flash 0731")
+            .unwrap();
+        let deepseek_base = rows
+            .iter()
+            .find(|b| benchmark_model_key(&b.slug) == "deepseek v4 flash")
+            .unwrap();
+        let glm = rows
+            .iter()
+            .find(|b| benchmark_model_key(&b.slug) == "glm 5 3")
+            .unwrap();
+        assert_eq!(deepseek_release.agentic_coding, Some(52.0));
+        assert_eq!(deepseek_base.agentic_coding, Some(42.0));
+        assert_eq!(glm.agentic_coding, Some(60.0));
     }
 }

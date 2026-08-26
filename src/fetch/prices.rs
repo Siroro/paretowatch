@@ -9,10 +9,10 @@ use reqwest::blocking::Client;
 use serde_json::Value;
 
 use super::fetch_json;
+use super::{first_number_path, first_string_path, json_shape, string_at};
 use crate::bench::matching::normalize;
-use crate::infer_creator;
+use crate::theme::infer_creator;
 use crate::types::*;
-use crate::{first_number_path, first_string_path, json_shape, string_at};
 
 pub(crate) const SURPLUS_MARKETS_URL: &str = "https://api.surplusintelligence.ai/api/markets";
 pub(crate) const SURPLUS_PRICES_URL: &str = "https://api.surplusintelligence.ai/v1/prices";
