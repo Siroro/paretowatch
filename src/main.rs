@@ -2444,7 +2444,7 @@ fn make_tray_icon() -> Result<tray_icon::Icon> {
 
 #[cfg(target_os = "linux")]
 fn spawn_linux_tray() {
-    thread::spawn(|| {
+    std::thread::spawn(|| {
         if let Err(err) = gtk::init() {
             eprintln!("ParetoWatch tray: GTK init failed: {err}");
             return;
@@ -2512,6 +2512,28 @@ mod tests {
             let cap = composite.iter().find(|b| benchmark_model_key(&b.slug) == name).map(|b| b.agentic_coding.unwrap());
             let dep = deployment.iter().find(|b| benchmark_model_key(&b.slug) == name).map(|b| b.agentic_coding.unwrap());
             println!("{name}: capability {cap:?} · deployment {dep:?}");
+        }
+        println!("--- evidence breakdown ---");
+        for name in ["gpt 5 6 sol", "glm 5 3", "kimi k3"] {
+            if let Some(b) = composite.iter().find(|b| benchmark_model_key(&b.slug) == name) {
+                println!("{name} [{}]", b.name);
+            }
+            // Raw per-source standings: rank/total and raw score on each board.
+            for source in BenchmarkSource::consensus_sources() {
+                if source.is_composite() { continue; }
+                let rows = benchmarks_for_source(source, &sets, ComparisonMode::ModelCapability, "");
+                if rows.is_empty() { continue; }
+                let with_scores: Vec<(String, f64)> = rows
+                    .iter()
+                    .filter_map(|r| r.agentic_coding.filter(|s| s.is_finite()).map(|s| (benchmark_model_key(&r.slug), s)))
+                    .collect();
+                let Some(key) = with_scores.iter().find(|(k, _)| *k == name).map(|(k, _)| k.clone()) else { continue };
+                let mut sorted: Vec<(String, f64)> = with_scores.clone();
+                sorted.sort_by(|a, b| b.1.total_cmp(&a.1));
+                let rank = sorted.iter().position(|(k, _)| *k == key).unwrap_or(usize::MAX) + 1;
+                let score = sorted.iter().find(|(k, _)| *k == key).unwrap().1;
+                println!("    {:<22} {score:5.1}  #{rank}/{}", source.short_label(), sorted.len());
+            }
         }
     }
     use crate::testfix::test_quote;
