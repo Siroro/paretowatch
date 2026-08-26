@@ -1725,15 +1725,6 @@ impl eframe::App for ParetoWatchApp {
                 ui.horizontal(|ui| {
                     ui.small("Pricing:");
                     ui.hyperlink_to("Surplus Intelligence", "https://www.surplusintelligence.ai/");
-                    ui.small("· Benchmark:");
-                    if self.benchmark_source.is_composite() {
-                        ui.label(match self.benchmark_source.composite_flavor() {
-                            Some(CompositeFlavor::Deployment) => "Deployment composite (8 sources · harness results full weight)",
-                            _ => "Capability composite (8 sources incl. AA snapshot · harness results demoted)",
-                        });
-                    } else {
-                        ui.hyperlink_to(self.benchmark_source.label(), self.benchmark_source.source_url());
-                    }
                     if let Some(updated) = self.price_snapshot.as_ref().and_then(|s| s.comparison_updated_at.as_deref()) {
                         ui.separator();
                         ui.small(format!("Market data updated {updated}"));
