@@ -1,0 +1,68 @@
+name: release
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    name: build ${{ matrix.os }}
+    strategy:
+      matrix:
+        os: [windows-latest, ubuntu-latest]
+    runs-on: ${{ matrix.os }}
+    # The Windows build is the primary target; a Linux system-dep hiccup
+    # must not block the release from publishing.
+    continue-on-error: ${{ matrix.os == 'ubuntu-latest' }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Install Linux build deps
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libgtk-3-dev libdbus-1-dev libxkbcommon-dev libudev-dev
+
+      - name: Build
+        run: cargo build --release
+
+      - name: Package (Windows)
+        if: runner.os == 'Windows'
+        env:
+          TAG: ${{ github.ref_name }}
+        shell: pwsh
+        run: Compress-Archive -Path target/release/paretowatch.exe -DestinationPath "paretowatch-${env:TAG}-x86_64-windows.zip"
+
+      - name: Package (Linux)
+        if: runner.os == 'Linux'
+        env:
+          TAG: ${{ github.ref_name }}
+        run: tar -czf "paretowatch-${TAG}-x86_64-linux.tar.gz" -C target/release paretowatch
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: paretowatch-${{ runner.os }}
+          path: paretowatch-*.*
+
+  release:
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: paretowatch-*
+          merge-multiple: true
+
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            paretowatch-*.zip
+            paretowatch-*.tar.gz
+          generate_release_notes: true
