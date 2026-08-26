@@ -1053,81 +1053,136 @@ impl ParetoWatchApp {
         }
 
         let selected_id = self.selected_pareto_model.clone();
-        if let Some(p) = selected_id.as_deref().and_then(|id| joined.iter().find(|p| p.model_id.as_str() == id)) {
-            let selected_quote = self.selected_pareto_quote(&p.model_id);
-            let consensus = self.cached_consensus(&p.model_id);
-            ui.add_space(6.0);
-            egui::Frame::group(ui.style()).show(ui, |ui| {
-                ui.horizontal_wrapped(|ui| {
-                    ui.label(egui::RichText::new("●").color(creator_color(&p.creator)).size(16.0));
-                    ui.heading(&p.model);
-                    if p.vision {
-                        ui.colored_label(egui::Color32::from_rgb(120, 200, 255), "vision");
-                    } else {
-                        ui.small("text-only");
-                    }
-                    if p.live_market {
-                        ui.strong("live market");
-                    } else {
-                        ui.label("comparison/catalog price");
-                    }
-                });
-                ui.horizontal_wrapped(|ui| {
-                    ui.label(format!("Selected cost: ${:.4} {}", p.cost, self.cost_basis.unit()));
-                    ui.separator();
-                    ui.label(match self.benchmark_source {
-                        BenchmarkSource::LiveBench => format!("LiveBench {}: {:.1}", self.benchmark_metric.label(), p.score),
-                        _ => format!("{}: {:.1}", self.benchmark_source.short_label(), p.score),
-                    });
-                    ui.separator();
-                    ui.label(format!("Input ${:.4}", p.input));
-                    if let Some(cache_read) = p.cache_read {
-                        ui.separator();
-                        ui.label(format!("Cache read ${:.4}", cache_read));
-                    }
-                    ui.separator();
-                    ui.label(format!("Output ${:.4}", p.output));
-                });
-                if self.cost_basis == CostBasis::EstimatedPerTask {
-                    if let Some(tokens) = p.tokens_per_task {
-                        ui.horizontal_wrapped(|ui| {
-                            ui.label(format!("Benchmark workload: {} tokens/task", format_compact_number(tokens)));
-                            if let Some(profile) = &p.token_profile {
-                                ui.separator();
-                                ui.small(profile);
-                            }
-                            ui.separator();
-                            ui.small("repriced with current Surplus blended rate");
-                        });
-                    }
-                }
-                ui.horizontal_wrapped(|ui| {
-                    let mut shown = false;
-                    if !p.creator.is_empty() {
-                        ui.label(format!("Creator: {}", p.creator));
-                        shown = true;
-                    }
-                    if !p.provider.is_empty() {
-                        if shown {
-                            ui.separator();
-                        }
-                        ui.label(format!("Provider: {}", p.provider));
-                        shown = true;
-                    }
-                    // Composite row names carry the full method disclosure and the
-                    // source-by-source grid below repeats it; skip the duplicate.
-                    if !self.benchmark_source.is_composite() {
-                        if shown {
-                            ui.separator();
-                        }
-                        ui.label(format!("{} match: {}", self.benchmark_source.short_label(), p.benchmark_name));
-                    }
-                });
+        let selected = selected_id
+            .as_deref()
+            .and_then(|id| joined.iter().find(|p| p.model_id.as_str() == id));
 
-                if let Some(quote) = &selected_quote {
+        ui.horizontal(|ui| {
+            ui.strong(format!("{} matched models", joined.len()));
+            if self.modality_filter != ModalityFilter::All {
+                ui.small(self.modality_filter.label());
+            }
+            ui.separator();
+            ui.strong(format!("{} Pareto-efficient", frontier.len()));
+            if search_active {
+                ui.separator();
+                let total = search_matches.iter().filter(|m| **m).count();
+                ui.strong(format!("{total} match search"));
+            }
+        });
+
+        // Detail card and frontier table share one row when the window is wide
+        // enough; narrow windows keep them stacked (card above, table below).
+        if let (true, Some(p)) = (ui.available_width() >= 860.0, selected) {
+            let card_width = (ui.available_width() * 0.42).clamp(340.0, 560.0);
+            ui.horizontal(|ui| {
+                ui.vertical(|ui| {
+                    ui.set_max_width(card_width);
+                    ui.add_space(6.0);
+                    self.pareto_detail_card(ui, p);
+                });
+                ui.vertical(|ui| {
+                    ui.add_space(6.0);
+                    self.frontier_table(ui, &frontier);
+                });
+            });
+        } else {
+            if let Some(p) = selected {
+                ui.add_space(6.0);
+                self.pareto_detail_card(ui, p);
+            }
+            self.frontier_table(ui, &frontier);
+        }
+        });
+    }
+
+    fn pareto_detail_card(&mut self, ui: &mut egui::Ui, p: &JoinedPoint) {
+        let selected_quote = self.selected_pareto_quote(&p.model_id);
+        let consensus = self.cached_consensus(&p.model_id);
+        egui::Frame::group(ui.style()).show(ui, |ui| {
+            ui.horizontal_wrapped(|ui| {
+                ui.label(egui::RichText::new("●").color(creator_color(&p.creator)).size(16.0));
+                ui.heading(&p.model);
+                if p.vision {
+                    ui.colored_label(egui::Color32::from_rgb(120, 200, 255), "vision");
+                } else {
+                    ui.small("text-only");
+                }
+                if p.live_market {
+                    ui.strong("live market");
+                } else {
+                    ui.label("comparison/catalog price");
+                }
+            });
+            ui.horizontal_wrapped(|ui| {
+                ui.label(format!("Selected cost: ${:.4} {}", p.cost, self.cost_basis.unit()));
+                ui.separator();
+                ui.label(match self.benchmark_source {
+                    BenchmarkSource::LiveBench => format!("LiveBench {}: {:.1}", self.benchmark_metric.label(), p.score),
+                    _ => format!("{}: {:.1}", self.benchmark_source.short_label(), p.score),
+                });
+                ui.separator();
+                ui.label(format!("Input ${:.4}", p.input));
+                if let Some(cache_read) = p.cache_read {
+                    ui.separator();
+                    ui.label(format!("Cache read ${:.4}", cache_read));
+                }
+                ui.separator();
+                ui.label(format!("Output ${:.4}", p.output));
+            });
+            if self.cost_basis == CostBasis::EstimatedPerTask {
+                if let Some(tokens) = p.tokens_per_task {
                     ui.horizontal_wrapped(|ui| {
-                        ui.strong("Market quality:");
-                        if quote.live_market {
+                        ui.label(format!("Benchmark workload: {} tokens/task", format_compact_number(tokens)));
+                        if let Some(profile) = &p.token_profile {
+                            ui.separator();
+                            ui.small(profile);
+                        }
+                        ui.separator();
+                        ui.small("repriced with current Surplus blended rate");
+                    });
+                }
+            }
+            ui.horizontal_wrapped(|ui| {
+                let mut shown = false;
+                if !p.creator.is_empty() {
+                    ui.label(format!("Creator: {}", p.creator));
+                    shown = true;
+                }
+                if !p.provider.is_empty() {
+                    if shown {
+                        ui.separator();
+                    }
+                    ui.label(format!("Provider: {}", p.provider));
+                    shown = true;
+                }
+                // Composite row names carry the full method disclosure and the
+                // source-by-source grid below repeats it; skip the duplicate.
+                if !self.benchmark_source.is_composite() {
+                    if shown {
+                        ui.separator();
+                    }
+                    ui.label(format!("{} match: {}", self.benchmark_source.short_label(), p.benchmark_name));
+                }
+            });
+
+            if let Some(quote) = &selected_quote {
+                let header = if quote.live_market {
+                    let trust = match quote.provider_trusted {
+                        Some(true) => "trusted",
+                        Some(false) => "untrusted",
+                        None => "trust unknown",
+                    };
+                    format!(
+                        "Market quality: {trust} \u{00b7} {} healthy sellers",
+                        quote.healthy_seller_count.unwrap_or(0)
+                    )
+                } else {
+                    "Market quality: comparison/catalog quote".to_owned()
+                };
+                ui.collapsing(header, |ui| {
+                    if quote.live_market {
+                        ui.horizontal_wrapped(|ui| {
                             match quote.provider_trusted {
                                 Some(true) => { ui.colored_label(egui::Color32::from_rgb(54, 179, 126), "trusted provider"); }
                                 Some(false) => { ui.colored_label(egui::Color32::from_rgb(224, 86, 86), "untrusted provider"); }
@@ -1150,117 +1205,146 @@ impl ParetoWatchApp {
                             if let Some(discount) = quote.discount_pct {
                                 ui.separator();
                                 let direction = quote.discount_direction.as_deref().unwrap_or("stable");
-                                ui.label(format!("{discount:.1}% discount · {direction}"));
+                                ui.label(format!("{discount:.1}% discount \u{00b7} {direction}"));
                             }
-                        } else {
-                            ui.label("market metadata unavailable on comparison/catalog quote");
-                        }
-                    });
-                }
-
-                if self.benchmark_source.is_composite() {
-                    // The composite row name carries the full per-benchmark
-                    // breakdown (measured/adjusted, prior, every board's raw
-                    // score, pending boards). Show it — otherwise the method
-                    // exists only in data and never reaches the user.
-                    ui.collapsing("Composite breakdown", |ui| {
-                        ui.small(&p.benchmark_name);
-                    });
-                }
-
-                if let Some(consensus) = &consensus {
-                    ui.collapsing("Source-by-source percentile", |ui| {
-                        // Bounded so an open grid cannot push the Pareto-efficient
-                        // table below the window edge; long boards scroll inside.
-                        egui::ScrollArea::vertical()
-                            .max_height(220.0)
-                            .auto_shrink([true, true])
-                            .show(ui, |ui| {
-                                egui::Grid::new("selected_consensus_grid").striped(true).show(ui, |ui| {
-                                    ui.strong("Benchmark");
-                                    ui.strong("Percentile");
-                                    ui.strong("Rank");
-                                    ui.strong("Score");
-                                    ui.strong("Matched row");
-                                    ui.end_row();
-                                    for entry in &consensus.entries {
-                                        ui.label(entry.source.short_label());
-                                        ui.label(format_percentile(entry.percentile));
-                                        ui.label(format!("#{}/{}", entry.rank, entry.total));
-                                        ui.label(format!("{:.1}", entry.score));
-                                        ui.label(&entry.benchmark_name);
-                                        ui.end_row();
-                                    }
+                        });
+                    } else {
+                        ui.label("market metadata unavailable on comparison/catalog quote");
+                    }
+                    if !quote.market_options.is_empty() {
+                        ui.add_space(3.0);
+                        ui.small("All providers in this market (workload $/1M at current weights, \u{25cf} = plotted):");
+                        egui::Grid::new("market_quality_providers").striped(true).show(ui, |ui| {
+                            ui.strong("");
+                            ui.strong("Provider");
+                            ui.strong("Input");
+                            ui.strong("Cache read");
+                            ui.strong("Output");
+                            ui.strong("Workload");
+                            ui.strong("Trust");
+                            ui.strong("Healthy");
+                            ui.end_row();
+                            for option in &quote.market_options {
+                                ui.label(if option.provider == quote.provider { "\u{25cf}" } else { "" });
+                                ui.label(&option.provider);
+                                ui.label(format!("${:.4}", option.input));
+                                ui.label(match option.cache_read {
+                                    Some(rate) => format!("${rate:.4}"),
+                                    None => "\u{2014}".to_owned(),
                                 });
-                            });
-                    });
-                }
-
-                ui.horizontal_wrapped(|ui| {
-                    if self.cost_basis == CostBasis::PerMillion {
-                        if ui.button("Set price alert").clicked() {
-                            self.alert_model = p.model_id.clone();
-                            self.alert_mode = AlertMode::Threshold;
-                            self.alert_metric = self.price_metric;
-                            self.alert_cost_basis = CostBasis::PerMillion;
-                            self.alert_threshold = p.cost;
-                            self.tab = Tab::Alerts;
-                        }
-                    }
-                    if ui.button("Watch any change").clicked() {
-                        self.alert_model = p.model_id.clone();
-                        self.alert_mode = AlertMode::AnyChange;
-                        self.tab = Tab::Alerts;
-                    }
-                    if ui.button("Watch frontier entry").clicked() {
-                        self.alert_model = p.model_id.clone();
-                        self.alert_mode = AlertMode::EntersFrontier;
-                        self.alert_metric = self.price_metric;
-                        self.alert_cost_basis = self.cost_basis;
-                        self.tab = Tab::Alerts;
-                    }
-                    if ui.button("Watch frontier exit").clicked() {
-                        self.alert_model = p.model_id.clone();
-                        self.alert_mode = AlertMode::LeavesFrontier;
-                        self.alert_metric = self.price_metric;
-                        self.alert_cost_basis = self.cost_basis;
-                        self.tab = Tab::Alerts;
-                    }
-                    if ui.button("Watch cheapest ≥ current score").clicked() {
-                        self.alert_model = p.model_id.clone();
-                        self.alert_mode = AlertMode::CheapestAboveScore;
-                        self.alert_metric = self.price_metric;
-                        self.alert_cost_basis = self.cost_basis;
-                        self.alert_score_threshold = p.score;
-                        self.tab = Tab::Alerts;
+                                ui.label(format!("${:.4}", option.output));
+                                ui.label(format!(
+                                    "${:.4}",
+                                    option.workload_price(
+                                        self.settings.input_weight,
+                                        self.settings.cache_read_weight,
+                                        self.settings.output_weight,
+                                    )
+                                ));
+                                ui.label(match option.trusted {
+                                    Some(true) => "trusted",
+                                    Some(false) => "untrusted",
+                                    None => "\u{2014}",
+                                });
+                                ui.label(match option.healthy_seller_count {
+                                    Some(count) => format!("{count}"),
+                                    None => "\u{2014}".to_owned(),
+                                });
+                                ui.end_row();
+                            }
+                        });
                     }
                 });
+            }
+
+            if self.benchmark_source.is_composite() {
+                // The composite row name carries the full per-benchmark
+                // breakdown (measured/adjusted, prior, every board's raw
+                // score, pending boards). Show it — otherwise the method
+                // exists only in data and never reaches the user.
+                ui.collapsing("Composite breakdown", |ui| {
+                    ui.small(&p.benchmark_name);
+                });
+            }
+
+            if let Some(consensus) = &consensus {
+                ui.collapsing("Source-by-source percentile", |ui| {
+                    // Bounded so an open grid cannot push the Pareto-efficient
+                    // table below the window edge; long boards scroll inside.
+                    egui::ScrollArea::vertical()
+                        .max_height(220.0)
+                        .auto_shrink([true, true])
+                        .show(ui, |ui| {
+                            egui::Grid::new("selected_consensus_grid").striped(true).show(ui, |ui| {
+                                ui.strong("Benchmark");
+                                ui.strong("Percentile");
+                                ui.strong("Rank");
+                                ui.strong("Score");
+                                ui.strong("Matched row");
+                                ui.end_row();
+                                for entry in &consensus.entries {
+                                    ui.label(entry.source.short_label());
+                                    ui.label(format_percentile(entry.percentile));
+                                    ui.label(format!("#{}/{}", entry.rank, entry.total));
+                                    ui.label(format!("{:.1}", entry.score));
+                                    ui.label(&entry.benchmark_name);
+                                    ui.end_row();
+                                }
+                            });
+                        });
+                });
+            }
+
+            ui.horizontal_wrapped(|ui| {
+                if self.cost_basis == CostBasis::PerMillion {
+                    if ui.button("Set price alert").clicked() {
+                        self.alert_model = p.model_id.clone();
+                        self.alert_mode = AlertMode::Threshold;
+                        self.alert_metric = self.price_metric;
+                        self.alert_cost_basis = CostBasis::PerMillion;
+                        self.alert_threshold = p.cost;
+                        self.tab = Tab::Alerts;
+                    }
+                }
+                if ui.button("Watch any change").clicked() {
+                    self.alert_model = p.model_id.clone();
+                    self.alert_mode = AlertMode::AnyChange;
+                    self.tab = Tab::Alerts;
+                }
+                if ui.button("Watch frontier entry").clicked() {
+                    self.alert_model = p.model_id.clone();
+                    self.alert_mode = AlertMode::EntersFrontier;
+                    self.alert_metric = self.price_metric;
+                    self.alert_cost_basis = self.cost_basis;
+                    self.tab = Tab::Alerts;
+                }
+                if ui.button("Watch frontier exit").clicked() {
+                    self.alert_model = p.model_id.clone();
+                    self.alert_mode = AlertMode::LeavesFrontier;
+                    self.alert_metric = self.price_metric;
+                    self.alert_cost_basis = self.cost_basis;
+                    self.tab = Tab::Alerts;
+                }
+                if ui.button("Watch cheapest ≥ current score").clicked() {
+                    self.alert_model = p.model_id.clone();
+                    self.alert_mode = AlertMode::CheapestAboveScore;
+                    self.alert_metric = self.price_metric;
+                    self.alert_cost_basis = self.cost_basis;
+                    self.alert_score_threshold = p.score;
+                    self.tab = Tab::Alerts;
+                }
             });
-        }
-
-        ui.horizontal(|ui| {
-            ui.strong(format!("{} matched models", joined.len()));
-            if self.modality_filter != ModalityFilter::All {
-                ui.small(self.modality_filter.label());
-            }
-            ui.separator();
-            ui.strong(format!("{} Pareto-efficient", frontier.len()));
-            if search_active {
-                ui.separator();
-                let total = search_matches.iter().filter(|m| **m).count();
-                ui.strong(format!("{total} match search"));
-            }
         });
+    }
 
-        // The tab body already scrolls as one page; the frontier table simply
-        // grows with its rows instead of squeezing into a fixed leftover box.
+    fn frontier_table(&mut self, ui: &mut egui::Ui, frontier: &[JoinedPoint]) {
         egui::Grid::new("frontier_table").striped(true).show(ui, |ui| {
             ui.strong("Model");
             ui.strong(if self.cost_basis == CostBasis::EstimatedPerTask { "Est. $/task" } else { "Price" });
             ui.strong("Score");
             ui.strong("Source");
             ui.end_row();
-            for p in &frontier {
+            for p in frontier {
                 ui.horizontal(|ui| {
                     ui.label(egui::RichText::new("●").color(creator_color(&p.creator)).size(11.0));
                     if ui.selectable_label(self.selected_pareto_model.as_deref() == Some(p.model_id.as_str()), &p.model).clicked() {
@@ -1272,7 +1356,6 @@ impl ParetoWatchApp {
                 ui.label(if p.live_market { "Surplus market" } else { "Surplus comparison/catalog" });
                 ui.end_row();
             }
-        });
         });
     }
 
