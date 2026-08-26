@@ -9,7 +9,22 @@ use egui::{ViewportClass, ViewportCommand, ViewportId, WindowLevel};
 
 use crate::alerts::prices_differ;
 use crate::theme::{creator_color, discount_color};
-use crate::types::{PriceSnapshot, Settings, blended_price};
+use crate::types::{LiquidityFilter, PriceSnapshot, Quote, Settings, blended_price};
+
+/// The pinned row's prices under the active market-quality filter: the
+/// cheapest provider that satisfies it, or `None` when nothing does.
+fn effective_quote(
+    quote: &Quote,
+    liquidity: LiquidityFilter,
+    settings: &Settings,
+) -> Option<Quote> {
+    liquidity.apply(
+        quote,
+        settings.input_weight,
+        settings.cache_read_weight,
+        settings.output_weight,
+    )
+}
 
 /// Base pinned-price text size the layout constants were measured at. The
 /// user-facing setting scales every text size (and the window width) from
@@ -50,8 +65,6 @@ const CARD_STROKE: egui::Color32 = egui::Color32::from_rgba_unmultiplied_const(8
 const PRIMARY_TEXT: egui::Color32 = egui::Color32::from_rgb(232, 237, 244);
 const METRIC_TEXT: egui::Color32 = egui::Color32::from_rgb(196, 205, 219);
 const MUTED_TEXT: egui::Color32 = egui::Color32::from_rgb(148, 157, 171);
-const DOWN_GREEN: egui::Color32 = egui::Color32::from_rgb(54, 179, 126);
-const UP_RED: egui::Color32 = egui::Color32::from_rgb(224, 86, 86);
 const LIVE_ACCENT: egui::Color32 = egui::Color32::from_rgb(92, 186, 255);
 
 #[derive(Debug, Clone, PartialEq)]
@@ -76,21 +89,6 @@ struct LastChange {
     at: DateTime<Utc>,
     old_blended: f64,
     new_blended: f64,
-    old_input: f64,
-    new_input: f64,
-    old_output: f64,
-    new_output: f64,
-}
-
-impl LastChange {
-    fn delta(&self) -> f64 {
-        self.new_blended - self.old_blended
-    }
-
-    fn percent_delta(&self) -> Option<f64> {
-        (self.old_blended.abs() > f64::EPSILON)
-            .then(|| (self.new_blended - self.old_blended) / self.old_blended * 100.0)
-    }
 }
 
 #[derive(Default)]
@@ -198,6 +196,7 @@ impl PriceWidgetManager {
         ctx: &egui::Context,
         snapshot: Option<&PriceSnapshot>,
         settings: &Settings,
+        liquidity: LiquidityFilter,
         model_id: &str,
         near: egui::Pos2,
     ) {
@@ -240,10 +239,15 @@ impl PriceWidgetManager {
         let window = self.window.as_mut().expect("quote window just created");
         let already_pinned = window.rows.iter().any(|row| row.model_id == model_id);
         if !already_pinned {
-            let (feed, observed) = initial_feed(quote, settings);
+            // Metadata comes from the raw quote; prices come from the
+            // market-quality-filtered selection. A model excluded by the
+            // filter pins as not priced, mirroring a missing quote.
+            let effective = effective_quote(quote, liquidity, settings);
+            let (mut feed, observed) = initial_feed(effective.as_ref().unwrap_or(quote), settings);
+            feed.priced = effective.is_some();
             window.rows.push(PinnedRow {
                 model_id: model_id.to_owned(),
-                last_seen: Some(observed),
+                last_seen: effective.is_some().then_some(observed),
             });
             window.builder = window.builder.clone().with_inner_size(window_size(
                 window.rows.len(),
@@ -261,6 +265,7 @@ impl PriceWidgetManager {
         &mut self,
         snapshot: Option<&PriceSnapshot>,
         settings: &Settings,
+        liquidity: LiquidityFilter,
     ) -> bool {
         let Some(window) = &mut self.window else {
             return false;
@@ -272,9 +277,13 @@ impl PriceWidgetManager {
         for pin in &mut window.rows {
             let old_feed = previous.iter().find(|feed| feed.model_id == pin.model_id);
             let quote = snapshot.and_then(|s| s.quotes.iter().find(|q| q.model == pin.model_id));
-            let feed = match quote {
-                Some(quote) => {
-                    let observed = observe(quote, settings);
+            // Rows follow the market-quality filter: prices re-select to the
+            // cheapest qualifying provider, and a model with no qualifying
+            // provider reads as not priced.
+            let effective = quote.and_then(|quote| effective_quote(quote, liquidity, settings));
+            let feed = match effective {
+                Some(effective) => {
+                    let observed = observe(&effective, settings);
                     let same_feed = pin
                         .last_seen
                         .is_some_and(|old| old.live_market == observed.live_market);
@@ -283,10 +292,6 @@ impl PriceWidgetManager {
                             at: snapshot.map(|s| s.fetched_at).unwrap_or_else(Utc::now),
                             old_blended: old.blended,
                             new_blended: observed.blended,
-                            old_input: old.input,
-                            new_input: observed.input,
-                            old_output: old.output,
-                            new_output: observed.output,
                         }),
                         _ => old_feed.and_then(|feed| feed.last_change),
                     };
@@ -300,15 +305,15 @@ impl PriceWidgetManager {
                     };
                     pin.last_seen = Some(observed);
                     RowFeed {
-                        model_id: quote.model.clone(),
-                        display_name: quote.display_name.clone(),
-                        creator_color: creator_color(&quote.creator),
-                        live_market: quote.live_market,
+                        model_id: effective.model.clone(),
+                        display_name: effective.display_name.clone(),
+                        creator_color: creator_color(&effective.creator),
+                        live_market: effective.live_market,
                         priced: true,
-                        free_offer_listed: quote.free_offer_listed,
-                        input: quote.input,
-                        cache_read: quote.cache_read,
-                        output: quote.output,
+                        free_offer_listed: effective.free_offer_listed,
+                        input: effective.input,
+                        cache_read: effective.cache_read,
+                        output: effective.output,
                         blended: observed.blended,
                         discount_pct: observed.discount_pct,
                         discount_flash_at,
@@ -690,12 +695,22 @@ fn render_row(ui: &mut egui::Ui, row: &RowFeed, font_size: f32, remove: &mut Opt
             {
                 *remove = Some(row.model_id.clone());
             }
-            ui.label(
+            let price = ui.label(
                 egui::RichText::new(format!("${:.4}", row.blended))
                     .strong()
                     .size(scaled(11.0, font_size))
                     .color(price_color),
             );
+            // The change trail never owns visible space; it lives on hover so
+            // the discount label below cannot be displaced by tiny jitters.
+            if let Some(change) = row.last_change {
+                price.on_hover_text(format!(
+                    "${:.4} → ${:.4} · {}",
+                    change.old_blended,
+                    change.new_blended,
+                    format_age(change.at),
+                ));
+            }
         });
     });
     ui.horizontal(|ui| {
@@ -713,31 +728,7 @@ fn render_row(ui: &mut egui::Ui, row: &RowFeed, font_size: f32, remove: &mut Opt
             .color(METRIC_TEXT),
         );
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-            if let Some(change) = row.last_change {
-                let delta = change.delta();
-                let (direction, color) = if delta < 0.0 {
-                    ("-", DOWN_GREEN)
-                } else if delta > 0.0 {
-                    ("+", UP_RED)
-                } else {
-                    ("=", MUTED_TEXT)
-                };
-                let pct = change
-                    .percent_delta()
-                    .map(|value| format!(" {value:+.1}%"))
-                    .unwrap_or_default();
-                ui.label(
-                    egui::RichText::new(format!("{direction}{pct}"))
-                        .size(scaled(8.5, font_size))
-                        .color(color),
-                )
-                .on_hover_text(format!(
-                    "${:.4} → ${:.4} · {}",
-                    change.old_blended,
-                    change.new_blended,
-                    format_age(change.at),
-                ));
-            } else if let Some(discount) = row.discount_pct {
+            if let Some(discount) = row.discount_pct {
                 ui.label(
                     egui::RichText::new(format!("{discount:.1}% off"))
                         .size(scaled(8.5, font_size))
@@ -792,6 +783,7 @@ fn format_age(at: DateTime<Utc>) -> String {
 mod tests {
     use super::*;
     use crate::testfix::test_quote;
+    use crate::types::ProviderMarketQuote;
 
     fn snapshot_at(quotes: Vec<crate::types::Quote>, fetched_at: DateTime<Utc>) -> PriceSnapshot {
         PriceSnapshot {
@@ -832,6 +824,7 @@ mod tests {
             &ctx,
             Some(&snap),
             &settings,
+            LiquidityFilter::Any,
             "model-a",
             egui::pos2(1.0, 1.0),
         );
@@ -839,6 +832,7 @@ mod tests {
             &ctx,
             Some(&snap),
             &settings,
+            LiquidityFilter::Any,
             "model-b",
             egui::pos2(2.0, 2.0),
         );
@@ -846,6 +840,7 @@ mod tests {
             &ctx,
             Some(&snap),
             &settings,
+            LiquidityFilter::Any,
             "model-a",
             egui::pos2(3.0, 3.0),
         );
@@ -878,8 +873,22 @@ mod tests {
             t0,
         );
         let mut mgr = PriceWidgetManager::default();
-        mgr.spawn(&ctx, Some(&initial), &settings, "model-a", egui::Pos2::ZERO);
-        mgr.spawn(&ctx, Some(&initial), &settings, "model-b", egui::Pos2::ZERO);
+        mgr.spawn(
+            &ctx,
+            Some(&initial),
+            &settings,
+            LiquidityFilter::Any,
+            "model-a",
+            egui::Pos2::ZERO,
+        );
+        mgr.spawn(
+            &ctx,
+            Some(&initial),
+            &settings,
+            LiquidityFilter::Any,
+            "model-b",
+            egui::Pos2::ZERO,
+        );
 
         let next = snapshot_at(
             vec![
@@ -888,7 +897,7 @@ mod tests {
             ],
             t1,
         );
-        assert!(mgr.refresh(Some(&next), &settings));
+        assert!(mgr.refresh(Some(&next), &settings, LiquidityFilter::Any));
         let feeds = rows(&mgr);
         assert!(feeds.iter().all(|feed| feed.last_change.is_some()));
         assert_eq!(
@@ -901,7 +910,65 @@ mod tests {
                 .fetched_at,
             Some(t1)
         );
-        assert!(!mgr.refresh(Some(&next), &settings));
+        assert!(!mgr.refresh(Some(&next), &settings, LiquidityFilter::Any));
+    }
+
+    #[test]
+    fn pinned_rows_follow_the_market_quality_filter() {
+        let ctx = egui::Context::default();
+        let settings = Settings::default();
+        let mut quote = test_quote("model-a", 1.0, true);
+        quote.provider = "cheap-untrusted".into();
+        quote.input = 0.5;
+        quote.output = 1.0;
+        quote.cache_read = Some(0.05);
+        quote.market_options = vec![
+            ProviderMarketQuote {
+                provider: "cheap-untrusted".into(),
+                input: 0.5,
+                output: 1.0,
+                cache_read: Some(0.05),
+                trusted: Some(false),
+                healthy_seller_count: Some(2),
+            },
+            ProviderMarketQuote {
+                provider: "trusted-provider".into(),
+                input: 0.6,
+                output: 1.1,
+                cache_read: Some(0.06),
+                trusted: Some(true),
+                healthy_seller_count: Some(5),
+            },
+        ];
+        let snap = snapshot_at(vec![quote], Utc::now());
+        let mut mgr = PriceWidgetManager::default();
+
+        // Trusted live provider: the row prices from the trusted ask, not
+        // the cheaper untrusted headline.
+        mgr.spawn(
+            &ctx,
+            Some(&snap),
+            &settings,
+            LiquidityFilter::Trusted,
+            "model-a",
+            egui::Pos2::ZERO,
+        );
+        let feed = &rows(&mgr)[0];
+        assert!(feed.priced);
+        assert!((feed.input - 0.6).abs() < 1e-9);
+        assert_eq!(feed.cache_read, Some(0.06));
+        assert!((feed.blended - 0.193).abs() < 1e-9);
+
+        // Tightened past every seller: not priced, keeps the last display.
+        assert!(mgr.refresh(Some(&snap), &settings, LiquidityFilter::Healthy10));
+        assert!(!rows(&mgr)[0].priced);
+        assert!((rows(&mgr)[0].input - 0.6).abs() < 1e-9);
+
+        // Any pricing: back to the cheapest ask.
+        assert!(mgr.refresh(Some(&snap), &settings, LiquidityFilter::Any));
+        let feed = &rows(&mgr)[0];
+        assert!(feed.priced);
+        assert!((feed.input - 0.5).abs() < 1e-9);
     }
 
     #[test]
@@ -911,16 +978,28 @@ mod tests {
         let now = Utc::now();
         let initial = snapshot_at(vec![test_quote("model-a", 1.0, true)], now);
         let mut mgr = PriceWidgetManager::default();
-        mgr.spawn(&ctx, Some(&initial), &settings, "model-a", egui::Pos2::ZERO);
+        mgr.spawn(
+            &ctx,
+            Some(&initial),
+            &settings,
+            LiquidityFilter::Any,
+            "model-a",
+            egui::Pos2::ZERO,
+        );
 
         mgr.refresh(
             Some(&snapshot_at(vec![test_quote("model-a", 0.9, false)], now)),
             &settings,
+            LiquidityFilter::Any,
         );
         assert!(rows(&mgr)[0].last_change.is_none());
         assert!(!rows(&mgr)[0].live_market);
 
-        mgr.refresh(Some(&snapshot_at(Vec::new(), now)), &settings);
+        mgr.refresh(
+            Some(&snapshot_at(Vec::new(), now)),
+            &settings,
+            LiquidityFilter::Any,
+        );
         assert!(!rows(&mgr)[0].priced);
         assert!((rows(&mgr)[0].input - 0.9).abs() < 1e-9);
     }
@@ -934,15 +1013,30 @@ mod tests {
         let mut quote = test_quote("model-a", 1.0, true);
         let initial = snapshot_at(vec![quote.clone()], t0);
         let mut mgr = PriceWidgetManager::default();
-        mgr.spawn(&ctx, Some(&initial), &settings, "model-a", egui::Pos2::ZERO);
+        mgr.spawn(
+            &ctx,
+            Some(&initial),
+            &settings,
+            LiquidityFilter::Any,
+            "model-a",
+            egui::Pos2::ZERO,
+        );
 
         quote.discount_pct = Some(85.0);
-        mgr.refresh(Some(&snapshot_at(vec![quote.clone()], t1)), &settings);
+        mgr.refresh(
+            Some(&snapshot_at(vec![quote.clone()], t1)),
+            &settings,
+            LiquidityFilter::Any,
+        );
         assert_eq!(rows(&mgr)[0].discount_flash_at, Some(t1));
 
         let mut catalog = test_quote("model-a", 1.0, false);
         catalog.discount_pct = None;
-        mgr.refresh(Some(&snapshot_at(vec![catalog], t1)), &settings);
+        mgr.refresh(
+            Some(&snapshot_at(vec![catalog], t1)),
+            &settings,
+            LiquidityFilter::Any,
+        );
         assert_eq!(rows(&mgr)[0].discount_flash_at, Some(t1));
     }
 
@@ -958,8 +1052,22 @@ mod tests {
             Utc::now(),
         );
         let mut mgr = PriceWidgetManager::default();
-        mgr.spawn(&ctx, Some(&snap), &settings, "model-a", egui::Pos2::ZERO);
-        mgr.spawn(&ctx, Some(&snap), &settings, "model-b", egui::Pos2::ZERO);
+        mgr.spawn(
+            &ctx,
+            Some(&snap),
+            &settings,
+            LiquidityFilter::Any,
+            "model-a",
+            egui::Pos2::ZERO,
+        );
+        mgr.spawn(
+            &ctx,
+            Some(&snap),
+            &settings,
+            LiquidityFilter::Any,
+            "model-b",
+            egui::Pos2::ZERO,
+        );
 
         {
             let window = mgr.window.as_ref().unwrap();
@@ -1103,7 +1211,14 @@ mod tests {
         let now = Utc::now();
         let snap = snapshot_at(vec![test_quote("model-a", 1.0, true)], now);
         let mut mgr = PriceWidgetManager::default();
-        mgr.spawn(&ctx, Some(&snap), &settings, "model-a", egui::Pos2::ZERO);
+        mgr.spawn(
+            &ctx,
+            Some(&snap),
+            &settings,
+            LiquidityFilter::Any,
+            "model-a",
+            egui::Pos2::ZERO,
+        );
         assert_eq!(
             mgr.window
                 .as_ref()
@@ -1116,7 +1231,7 @@ mod tests {
         );
 
         settings.pinned_price_font_size = 14.0;
-        assert!(mgr.refresh(Some(&snap), &settings));
+        assert!(mgr.refresh(Some(&snap), &settings, LiquidityFilter::Any));
         assert_eq!(
             mgr.window
                 .as_ref()
@@ -1128,6 +1243,6 @@ mod tests {
             14.0
         );
         // Nothing left to change: the same settings report no delta.
-        assert!(!mgr.refresh(Some(&snap), &settings));
+        assert!(!mgr.refresh(Some(&snap), &settings, LiquidityFilter::Any));
     }
 }

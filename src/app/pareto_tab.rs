@@ -125,7 +125,6 @@ impl ParetoWatchApp {
             }
 
             if self.price_metric == PriceMetric::Blended {
-                ui.separator();
                 ui.label("Fresh input");
                 if ui
                     .add(
@@ -612,7 +611,14 @@ impl ParetoWatchApp {
             self.selected_pareto_model = Some(model_id);
         }
         if let Some((model_id, at)) = right_clicked_model {
-            self.widgets.spawn(ui.ctx(), self.price_snapshot.as_ref(), &self.settings, &model_id, at);
+            self.widgets.spawn(
+                ui.ctx(),
+                self.price_snapshot.as_ref(),
+                &self.settings,
+                self.liquidity_filter,
+                &model_id,
+                at,
+            );
         }
 
         let selected_id = self.selected_pareto_model.clone();

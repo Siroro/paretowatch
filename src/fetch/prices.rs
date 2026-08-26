@@ -188,8 +188,10 @@ pub(crate) fn fetch_prices(client: &Client, settings: &Settings) -> Result<Price
 /// market-vs-list discount that includes the cache-read leg. List
 /// input/output prefer the market's own direct prices (fresher than the
 /// catalogue); the list cache price is catalogue-only because the market
-/// feed publishes no direct cache price. Falls back to the feed number
-/// when the list side degenerates.
+/// feed publishes no direct cache price. The market cache leg uses the
+/// selected provider's ask, or the market-wide best cache ask when that
+/// provider publishes none. Falls back to the feed number when the list
+/// side degenerates.
 fn market_discount_pct(
     market: &MarketOverlay,
     catalog_input: f64,
@@ -204,7 +206,7 @@ fn market_discount_pct(
     let list_output = market.direct_output.unwrap_or(catalog_output);
     workload_discount_pct(
         market.input,
-        market.cache_read,
+        market.cache_read.or(market.top_cache_read),
         market.output,
         list_input,
         catalog_cache_read,
@@ -535,6 +537,12 @@ pub(crate) struct MarketOverlay {
     pub(crate) input: f64,
     pub(crate) output: f64,
     pub(crate) cache_read: Option<f64>,
+    /// Entry-level cheapest cache-read ask across the whole market. The
+    /// headline `cache_read` follows the selected provider and is `None`
+    /// whenever that provider publishes no cache price; the discount still
+    /// uses this market-wide best rather than falling back to the input
+    /// price.
+    pub(crate) top_cache_read: Option<f64>,
     /// Official (direct) list prices published by the market feed itself.
     /// The feed has no direct cache-read price; that leg comes from the
     /// catalogue quote being overlaid.
@@ -766,6 +774,7 @@ pub(crate) fn parse_market_overlay(root: &Value, settings: &Settings) -> Vec<Mar
             input,
             output,
             cache_read,
+            top_cache_read,
             direct_input,
             direct_output,
             provider,
@@ -920,6 +929,50 @@ mod tests {
         market.direct_input = None;
         let pct = market_discount_pct(market, 0.0, Some(0.0), 0.0, &settings).unwrap();
         assert!((pct - 42.0).abs() < 1e-9);
+    }
+
+    #[test]
+    fn cache_inclusive_discount_uses_market_best_cache_when_provider_lacks_one() {
+        // Live glm-5.3 shape (2026-08): the cheapest provider publishes no
+        // cache ask, so the headline cache price is None even though the
+        // market-wide best cache ask exists. The discount must price that
+        // leg from the market best, not fall back to the input ask.
+        let v = serde_json::json!({
+            "markets": [{
+                "model": "glm-5.3",
+                "best_input_per_1m": 46006,
+                "best_output_per_1m": 144590,
+                "best_cache_read_per_1m": 8544,
+                "direct_input_per_1m": 1400000,
+                "direct_output_per_1m": 4400000,
+                "discount_trend": {"current_discount_pct": 91.22, "direction": "stable"},
+                "providers": [
+                    {"provider": "inferhub", "best_input_per_1m": 46006, "best_output_per_1m": 144590},
+                    {"provider": "zai", "best_input_per_1m": 112000, "best_output_per_1m": 352000}
+                ]
+            }]
+        });
+        let rows = parse_market_overlay(&v, &Settings::default());
+        let market = &rows[0];
+        assert_eq!(market.provider.as_deref(), Some("inferhub"));
+        assert_eq!(market.cache_read, None);
+        assert!((market.top_cache_read.unwrap() - 0.008544).abs() < 1e-12);
+
+        let settings = Settings {
+            include_cache_read_in_discount: true,
+            ..Settings::default()
+        };
+        // Catalogue cache list price $0.26; direct list pair $1.40/$4.40.
+        let pct = market_discount_pct(market, 15.0, Some(0.26), 75.0, &settings).unwrap();
+        let expected = (1.0
+            - (0.046006 * 15.0 + 0.008544 * 80.0 + 0.14459 * 5.0)
+                / (1.40 * 15.0 + 0.26 * 80.0 + 4.40 * 5.0))
+            * 100.0;
+        assert!((pct - expected).abs() < 1e-9);
+        assert!(
+            pct > 96.0,
+            "cache leg priced from the market best, well above the feed's {expected:.1}% neighborhood"
+        );
     }
 
     #[test]

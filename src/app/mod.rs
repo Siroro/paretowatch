@@ -648,10 +648,11 @@ impl eframe::App for ParetoWatchApp {
         self.handle_worker_messages();
         // Runs here (not in ui) so floating price widgets keep updating while
         // the main window is hidden in the tray.
-        if self
-            .widgets
-            .refresh(self.price_snapshot.as_ref(), &self.settings)
-        {
+        if self.widgets.refresh(
+            self.price_snapshot.as_ref(),
+            &self.settings,
+            self.liquidity_filter,
+        ) {
             self.widgets.request_repaints(ctx);
         }
         self.widgets.prune_closed();

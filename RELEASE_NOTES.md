@@ -1,14 +1,14 @@
-# ParetoWatch v0.8.0
+# ParetoWatch v0.9.0
 
 ## Highlights
 
-- Added a configurable pinned-price font size in Settings, persisted with the rest of the application preferences.
-- Made pinned-price windows responsive to the selected font size and measured content, while preserving capped visible rows and scrolling for larger watchlists.
-- Improved pinned-price state propagation, row sizing, and refresh behavior, with coverage for responsive dimensions and window-size estimates.
-- Reduced history UI work by reusing cached ordering, borrowing model data where possible, and windowing metric series rendering.
-- Added safer history behavior when a previously selected model is no longer available.
-- Refined settings presentation, feed-status display, and pricing-mix controls.
+- Propagated the active liquidity filter into pinned-price windows so displayed prices follow the same provider-quality policy as the Pareto view.
+- Re-select the cheapest qualifying provider for pinned rows and clearly show an unpriced state when no provider satisfies the selected filter.
+- Corrected cache-inclusive market discounts to use the market-wide best cache-read ask when the selected provider does not publish a cache price.
+- Kept discount labels visible by moving price-change details into hover text and clarified blended fresh-input presentation.
+- Added regression coverage for filtered pinned rows, cache-inclusive discounts, provider fallback behavior, and market pricing edge cases.
+- Refined Pareto and pricing presentation for consistent provider, discount, and workload-mix semantics.
 
 ## Validation
 
-The v0.8.0 changes are validated with the repository's formatting, check, test, and release-build commands. GitHub release packages are produced for Windows and Linux by the `v0.8.0` tag workflow.
+The v0.9.0 pricing and pinned-widget changes are validated with the repository's formatting, locked check, locked test, Clippy, and locked build commands. GitHub release packages are produced for Windows and Linux by the `v0.9.0` tag workflow.
