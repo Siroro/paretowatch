@@ -89,6 +89,22 @@ pub(crate) const MISSING_EVIDENCE_FRACTION: f64 = 0.25;
 /// is preserved; only the confidence in their standing is reduced.
 pub(crate) const ZERO_EVIDENCE_CONFIDENCE: f64 = 0.75;
 
+/// Coverage at which evidence confers full confidence — the same threshold
+/// `evidence_tier` uses for "strong evidence".
+pub(crate) const STRONG_EVIDENCE_COVERAGE: f64 = 0.60;
+
+/// Evidence confidence ramps linearly from `ZERO_EVIDENCE_CONFIDENCE` at no
+/// board coverage to 1.0 at strong coverage, and the final score shrinks
+/// toward the neutral midpoint by it. The zero-board case is exactly the
+/// historical discount; partial coverage now gets a proportional version —
+/// a two-board model whose every percentile sits at its prior was carrying
+/// full confidence, which let thin evidence outrank broad measured coverage
+/// (GLM-5.3 above GPT-5.6 Sol on 2-of-7 boards).
+pub(crate) fn evidence_confidence(coverage: f64) -> f64 {
+    ZERO_EVIDENCE_CONFIDENCE
+        + (1.0 - ZERO_EVIDENCE_CONFIDENCE) * (coverage / STRONG_EVIDENCE_COVERAGE).min(1.0)
+}
+
 /// Percentile precision scales with population: a #1-of-1 leaderboard row is
 /// nearly uninformative while a 60-model board is a solid measurement. Rank
 /// variance shrinks like 1/n, so weights are scaled by n/(n+k): tiny boards
@@ -233,6 +249,59 @@ pub(crate) fn aa_anchor_keys(
     (keys.len() >= MIN_ANCHORED_POPULATION).then_some(keys)
 }
 
+/// Re-express one board's within-field percentiles on the anchored elite
+/// scale using the field's own quality. Anchoring membership (ranking only
+/// against AA-covered models) is not enough: a #5 of 13 in an all-frontier
+/// field still reads "68th percentile" while a #8 of 47 in a mixed field
+/// reads "84th", so elite fields are underpriced and mixed fields overpriced.
+/// The board's AA-covered members carry anchored AA standings; their
+/// distribution is the empirical worth of each position in this field:
+/// calibrated(m) = AA-standings at the m-th board percentile position.
+/// Monotone in board standing, so the board's ordering is preserved; when
+/// the board's ordering agrees with AA, calibrated equals each member's own
+/// AA standing (the board adds nothing, honestly). Skipped when too few
+/// members have anchored standings to characterize the field.
+/// Minimum AA-covered members needed to characterize a board's field quality
+/// for calibration. Lower than `MIN_ANCHORED_POPULATION` (which guards
+/// ranking precision): SWE-rebench — the elite agentic standard — carries
+/// only 5 AA-covered members of 13, and skipping its calibration priced
+/// #5-of-13-frontier-coders as a generic 68th percentile while boards with
+/// broader AA overlap calibrated normally.
+pub(crate) const MIN_CALIBRATION_FIELD: usize = 5;
+
+pub(crate) fn calibrate_percentiles_to_field_quality(
+    percentiles: &HashMap<String, f64>,
+    aa_percentiles: Option<&HashMap<String, f64>>,
+) -> HashMap<String, f64> {
+    let Some(aa) = aa_percentiles else {
+        return percentiles.clone();
+    };
+    let mut field_q: Vec<f64> = percentiles
+        .keys()
+        .filter_map(|key| aa.get(key).copied())
+        .collect();
+    if field_q.len() < MIN_CALIBRATION_FIELD {
+        return percentiles.clone();
+    }
+    field_q.sort_by(|a, b| a.total_cmp(b));
+    percentiles
+        .iter()
+        .map(|(key, p)| (key.clone(), field_quantile(&field_q, *p)))
+        .collect()
+}
+
+/// Linear interpolation inside the sorted standings of a board's field:
+/// the anchored percentile at cumulative position `pct` (0..100).
+fn field_quantile(sorted: &[f64], pct: f64) -> f64 {
+    if sorted.len() <= 1 {
+        return sorted.first().copied().unwrap_or(50.0);
+    }
+    let t = (pct.clamp(0.0, 100.0) / 100.0) * (sorted.len() - 1) as f64;
+    let lo = t.floor() as usize;
+    let hi = (lo + 1).min(sorted.len() - 1);
+    sorted[lo] + (t - lo as f64) * (sorted[hi] - sorted[lo])
+}
+
 pub(crate) fn composite_weight_factor(source: BenchmarkSource, flavor: CompositeFlavor) -> f64 {
     match flavor {
         CompositeFlavor::Capability => {
@@ -338,16 +407,6 @@ pub(crate) fn build_agentic_composite(
     // and outrank strictly stronger models that have full coverage.
     let anchor = aa_anchor_keys(sets);
 
-    let mut percentiles: HashMap<BenchmarkSource, HashMap<String, f64>> = HashMap::new();
-    let mut populations: HashMap<BenchmarkSource, usize> = HashMap::new();
-    for (source, _) in weights {
-        if source == BenchmarkSource::ArtificialAnalysisSnapshot { continue; }
-        let Some(rows) = source_scores.get(&source) else { continue };
-        let (map, population) = tie_aware_percentiles(rows.iter().map(|(k, (_, s))| (k.clone(), *s)), anchor.as_ref());
-        percentiles.insert(source, map);
-        populations.insert(source, population);
-    }
-
     // The AA prior must live on the SAME scale as the board percentiles.
     // The fixed calibration curve ranks against the broad snapshot population
     // (bottom-heavy with legacy models: an Intelligence score of 61 maps to
@@ -357,7 +416,10 @@ pub(crate) fn build_agentic_composite(
     // other. Instead: rank AA empirically WITHIN the union of models the
     // agentic boards actually evaluate — the cohort this chart compares — and
     // keep the calibration curve only as a fallback when that cohort is too
-    // small to rank against.
+    // small to rank against. Computed before the board pass: each board's
+    // percentiles are then calibrated through its own field's AA standings,
+    // so a mid-rank in an elite field finally prices above a high rank in a
+    // mixed field (no circularity — standings come from AA scores only).
     let mut board_union: std::collections::HashSet<String> = std::collections::HashSet::new();
     for (source, rows) in &source_scores {
         if prior_cohort_source(*source) {
@@ -373,6 +435,17 @@ pub(crate) fn build_agentic_composite(
             )
         })
         .map(|(map, _)| map);
+
+    let mut percentiles: HashMap<BenchmarkSource, HashMap<String, f64>> = HashMap::new();
+    let mut populations: HashMap<BenchmarkSource, usize> = HashMap::new();
+    for (source, _) in weights {
+        if source == BenchmarkSource::ArtificialAnalysisSnapshot { continue; }
+        let Some(rows) = source_scores.get(&source) else { continue };
+        let (map, population) = tie_aware_percentiles(rows.iter().map(|(k, (_, s))| (k.clone(), *s)), anchor.as_ref());
+        let map = calibrate_percentiles_to_field_quality(&map, aa_prior_percentiles.as_ref());
+        percentiles.insert(source, map);
+        populations.insert(source, population);
+    }
 
     let mut all_keys = std::collections::HashSet::new();
     for rows in source_scores.values() {
@@ -478,12 +551,19 @@ pub(crate) fn build_agentic_composite(
             }
         }
         let (adjusted, _) = posterior(&robust_w);
-        // Zero independent board evidence: discount the pure-prior standing.
-        let score = if contribs.is_empty() {
-            50.0 + (adjusted - 50.0) * ZERO_EVIDENCE_CONFIDENCE
-        } else {
-            adjusted
-        };
+        // Tier reflects how much real information the agentic universe reported
+        // on this model: coverage counts population-scaled weight, so a single
+        // 1-row board is nearly no coverage at all (the prior does not count).
+        let covered_base: f64 = contribs.iter().map(|(source, _, base, _, _)| {
+            base * population_factor(populations.get(source).copied().unwrap_or(0))
+        }).sum();
+        let coverage = (covered_base / AGENTIC_EVIDENCE_TOTAL_WEIGHT).min(1.0);
+        // Confidence scales with coverage: zero-board models keep the
+        // historical ZERO_EVIDENCE_CONFIDENCE discount; partial coverage gets
+        // a proportional one. Without the ramp, a thin two-board model whose
+        // every percentile sits near its prior carried full confidence and
+        // outranked broad measured coverage.
+        let score = 50.0 + (adjusted - 50.0) * evidence_confidence(coverage);
         let measured = if robust_w.iter().any(|w| *w > 0.0) {
             let mut sum = 0.0;
             let mut denom = 0.0;
@@ -495,14 +575,6 @@ pub(crate) fn build_agentic_composite(
         } else {
             prior_pct
         };
-
-        // Tier reflects how much real information the agentic universe reported
-        // on this model: coverage counts population-scaled weight, so a single
-        // 1-row board is nearly no coverage at all (the prior does not count).
-        let covered_base: f64 = contribs.iter().map(|(source, _, base, _, _)| {
-            base * population_factor(populations.get(source).copied().unwrap_or(0))
-        }).sum();
-        let coverage = (covered_base / AGENTIC_EVIDENCE_TOTAL_WEIGHT).min(1.0);
 
         for (index, (source, _, _, _, raw_score)) in contribs.iter().enumerate() {
             let downweighted = robust_w[index] < contribs[index].1 * DOWNWEIGHT_DISCLOSURE_THRESHOLD;
@@ -637,9 +709,10 @@ pub(crate) fn benchmark_consensus_for_quote(
         let Some(keyed) = keyed_by_source.get(&source) else { continue };
         let Some(matched) = best_benchmark_match(quote, rows) else { continue };
         let Some(score) = matched.agentic_coding else { continue };
-        let (percentiles, population) = if source == BenchmarkSource::ArtificialAnalysisSnapshot {
+        let matched_key = benchmark_model_key(&matched.slug);
+        let (percentiles, raw_percentile, population) = if source == BenchmarkSource::ArtificialAnalysisSnapshot {
             match &aa_ranked {
-                Some((map, n)) => (map.clone(), *n),
+                Some((map, n)) => (map.clone(), None, *n),
                 // Anchored cohort too small: fall back to the calibration
                 // curve, whose percentile carries no rank meaning, so show
                 // the raw snapshot population for honest totals.
@@ -650,22 +723,30 @@ pub(crate) fn benchmark_consensus_for_quote(
                             .iter()
                             .map(|(k, s)| (k.clone(), calibrated_aa_percentile(*s)))
                             .collect(),
+                        None,
                         keyed.len(),
                     )
                 }
             }
         } else {
-            tie_aware_percentiles(keyed.iter().cloned(), anchor.as_ref())
+            let (raw, population) = tie_aware_percentiles(keyed.iter().cloned(), anchor.as_ref());
+            // Same field-quality calibration the composite weighs, so the
+            // grid's board percentiles agree with what actually moved the
+            // score. Rank stays the raw position in the field.
+            let calibrated = calibrate_percentiles_to_field_quality(&raw, aa_ranked.as_ref().map(|(m, _)| m));
+            (calibrated, raw.get(&matched_key).copied(), population)
         };
-        let matched_key = benchmark_model_key(&matched.slug);
         let Some(percentile) = percentiles.get(&matched_key).copied() else { continue };
         // Rank/total must describe the SAME population the percentile was
         // computed over (the anchored cohort when anchoring applied), not the
         // raw board size — "#3/130" next to an anchored percentile is two
         // different claims glued together. Derive the rank from the tie-aware
-        // midpoint percentile: pct = (first+last)/2 / (n-1).
+        // midpoint percentile: pct = (first+last)/2 / (n-1). Board entries
+        // carry a field-calibrated percentile (no longer positional), so the
+        // raw positional percentile is used for the rank instead.
         let total = population.max(1);
-        let rank = (((100.0 - percentile) / 100.0) * (total as f64 - 1.0)).round() as usize + 1;
+        let positional = raw_percentile.unwrap_or(percentile);
+        let rank = (((100.0 - positional) / 100.0) * (total as f64 - 1.0)).round() as usize + 1;
         // Distinguish rows that differ only by effort (e.g. Sol [max] vs
         // [medium]) — otherwise the grid shows two identical-looking matches.
         let benchmark_name = match matched.reasoning_effort.as_deref() {
@@ -1145,4 +1226,154 @@ mod tests {
         assert_eq!(benchmark_model_key(&composite[0].slug), "deepseek v4 flash 0731");
     }
 
+    #[test]
+    fn field_quality_calibration_prices_elite_fields_above_mixed_fields() {
+        // Unit behavior of the position-worth mapping.
+        let mk_map = |pairs: &[(&str, f64)]| pairs.iter().map(|(k, v)| (k.to_string(), *v)).collect();
+        // Elite field: ten members whose AA standings run 85..99.
+        let elite_aa: HashMap<String, f64> = (0..10)
+            .map(|i| (format!("e{i}"), 85.0 + i as f64 * (14.0 / 9.0)))
+            .collect();
+        let elite_p = mk_map(&[
+            ("e0", 100.0), ("e1", 90.0), ("e2", 80.0), ("e3", 70.0), ("e4", 60.0),
+            ("e5", 50.0), ("e6", 40.0), ("e7", 30.0), ("e8", 20.0), ("e9", 10.0),
+        ]);
+        // Mixed field: ten members spanning 10..99.
+        let mixed_aa: HashMap<String, f64> = (0..10)
+            .map(|i| (format!("m{i}"), 10.0 + i as f64 * (89.0 / 9.0)))
+            .collect();
+        let mixed_p = mk_map(&[
+            ("m0", 100.0), ("m1", 90.0), ("m2", 80.0), ("m3", 70.0), ("m4", 60.0),
+            ("m5", 50.0), ("m6", 40.0), ("m7", 30.0), ("m8", 20.0), ("m9", 10.0),
+        ]);
+        let elite = calibrate_percentiles_to_field_quality(&elite_p, Some(&elite_aa));
+        let mixed = calibrate_percentiles_to_field_quality(&mixed_p, Some(&mixed_aa));
+        // A 60th-percentile standing in the elite field is worth ~93rd on the
+        // elite scale; a 60th in a mixed field is worth ~60th.
+        assert!(elite["e4"] > 90.0, "elite field 60th percentile calibrated to {}", elite["e4"]);
+        assert!((mixed["m4"] - 60.0).abs() < 5.0, "mixed field 60th percentile calibrated to {}", mixed["m4"]);
+        // Monotone in standing.
+        assert!(elite["e0"] > elite["e4"] && elite["e4"] > elite["e9"]);
+        // Too few anchored standings: identity.
+        let tiny = mk_map(&[("a", 80.0), ("b", 20.0)]);
+        let tiny_aa: HashMap<String, f64> = [("a".to_string(), 90.0), ("b".to_string(), 10.0)].into();
+        assert_eq!(calibrate_percentiles_to_field_quality(&tiny, Some(&tiny_aa))["a"], 80.0);
+        assert_eq!(calibrate_percentiles_to_field_quality(&tiny, None)["b"], 20.0);
+    }
+
+    #[test]
+    fn thin_two_board_high_prior_model_lands_below_shared_board_superior() {
+        // Regression (live 2026-08-26): GLM-5.3 sat ABOVE GPT-5.6 Sol at 86.2
+        // vs 77.7 despite losing the AA prior (60 vs 61), losing the one
+        // shared agentic board head-to-head (DeepSWE #5/26 vs #2/26), and
+        // appearing on only 2 of 7 boards. GLM's single win (LiveBench, a
+        // mixed-strength field) plus full confidence in a near-prior
+        // posterior carried it. Field-quality calibration + the coverage
+        // confidence ramp must restore the ordering.
+        //
+        // Fixture mirrors production structure: a wide 50-model AA cohort
+        // (63.5 down to 14), SWE-rebench drawn from the TOP of that cohort,
+        // LiveBench spanning all of it, DeepSWE the upper-middle, Code Index
+        // upper-middle without GLM.
+        let mk = |name: &str, score: f64| score_benchmark(name, score, None, None, BenchmarkKind::Model);
+        let mut sets = HashMap::new();
+
+        // AA world: 6 heroes + 44 fillers stepping down to AA 14.
+        let mut aa_rows = vec![
+            mk("Claude Fable 5", 63.5), mk("Claude Opus 5", 63.0), mk("GPT-5.6 Sol", 61.0),
+            mk("Grok 4.6", 60.5), mk("GLM-5.3", 60.0), mk("Kimi K3", 60.0),
+        ];
+        for i in 0..44 {
+            aa_rows.push(mk(&format!("aa{i}"), 57.0 - i as f64));
+        }
+        sets.insert(BenchmarkSource::ArtificialAnalysisSnapshot, aa_rows);
+
+        // SWE-rebench: 13-model ELITE field (top of the AA world). Sol #5.
+        // GLM absent (production shape).
+        sets.insert(
+            BenchmarkSource::SWERebench,
+            vec![
+                mk("Claude Fable 5", 70.0), mk("Claude Opus 5", 68.0), mk("Kimi K3", 64.0),
+                mk("aa0", 63.5), mk("GPT-5.6 Sol", 62.3), mk("Grok 4.6", 61.0),
+                mk("aa1", 60.0), mk("aa2", 58.0), mk("aa3", 56.0), mk("aa4", 54.0),
+                mk("aa5", 52.0), mk("aa6", 50.0), mk("aa7", 48.0),
+            ],
+        );
+
+        // DeepSWE: 26-model upper-middle field; the shared board.
+        // Sol #2, GLM #5, K3 #4.
+        let mut deepswe = vec![
+            mk("Claude Fable 5", 76.0), mk("GPT-5.6 Sol", 72.7), mk("Claude Opus 5", 71.0),
+            mk("Kimi K3", 69.5), mk("GLM-5.3", 69.0), mk("Grok 4.6", 68.0),
+        ];
+        for i in 0..20 {
+            deepswe.push(mk(&format!("aa{}", 10 + i), 66.0 - i as f64));
+        }
+        sets.insert(BenchmarkSource::DeepSWE11, deepswe);
+
+        // LiveBench: 47-model field spanning the whole cohort. GLM's one win
+        // (#8); Sol #15; K3 #5.
+        let mut livebench = vec![
+            mk("Claude Fable 5", 70.0), mk("Claude Opus 5", 68.0), mk("Kimi K3", 62.2),
+            mk("aa0", 62.0), mk("aa1", 61.5), mk("Grok 4.6", 61.2), mk("aa2", 61.0),
+            mk("GLM-5.3", 60.9), mk("aa3", 60.5), mk("aa4", 60.0), mk("aa5", 59.5),
+            mk("aa6", 59.0), mk("aa7", 58.5), mk("aa8", 58.2), mk("GPT-5.6 Sol", 56.2),
+        ];
+        for i in 0..32 {
+            livebench.push(mk(&format!("aa{}", 9 + i), 55.0 - i as f64));
+        }
+        sets.insert(BenchmarkSource::LiveBench, livebench);
+
+        // Code Index: 17-model upper-middle field, Sol #2, K3 #5. GLM absent.
+        let mut code_index = vec![
+            mk("Claude Fable 5", 55.0), mk("GPT-5.6 Sol", 51.2), mk("aa5", 50.0),
+            mk("aa6", 49.5), mk("Kimi K3", 39.6),
+        ];
+        for i in 0..12 {
+            code_index.push(mk(&format!("aa{}", 7 + i), 48.0 - i as f64));
+        }
+        sets.insert(BenchmarkSource::ReveloCodeIndex, code_index);
+
+        // Loaded boards neither hero appears on: they add pending-board
+        // pseudo-evidence for BOTH models (at their own priors).
+        sets.insert(
+            BenchmarkSource::TerminalBench3,
+            (0..9).map(|i| mk(&format!("aa{}", 10 + i), 40.0 - i as f64))
+                .chain(std::iter::once(mk("Grok 4.6", 35.0)))
+                .collect(),
+        );
+        sets.insert(
+            BenchmarkSource::SWEBenchLive,
+            (0..10).map(|i| mk(&format!("aa{}", 5 + i), 45.0 - i as f64)).collect(),
+        );
+        sets.insert(
+            BenchmarkSource::SWEBenchVerified,
+            (0..15).map(|i| mk(&format!("aa{}", 20 + i), 40.0 - i as f64)).collect(),
+        );
+
+        let composite = build_agentic_composite(&sets, ComparisonMode::ModelCapability, "", CompositeFlavor::Capability);
+        let sol = composite.iter().find(|b| benchmark_model_key(&b.slug) == "gpt 5 6 sol").unwrap();
+        let glm = composite.iter().find(|b| benchmark_model_key(&b.slug) == "glm 5 3").unwrap();
+        let sol_score = sol.agentic_coding.unwrap();
+        let glm_score = glm.agentic_coding.unwrap();
+        assert!(
+            sol_score > glm_score,
+            "GPT-5.6 Sol ({sol_score}) must outrank a 2-board GLM-5.3 ({glm_score}) that loses AA, loses DeepSWE head-to-head, and wins only LiveBench\nSol: {}\nGLM: {}",
+            sol.name, glm.name,
+        );
+        // The thin-evidence model must carry the sparse tier and pending
+        // boards disclosure.
+        assert!(glm.name.contains("sparse evidence"), "{}", glm.name);
+        assert!(glm.name.contains("boards pending"), "{}", glm.name);
+        assert!(sol.name.contains("strong evidence") || sol.name.contains("moderate evidence"), "{}", sol.name);
+    }
+
+    #[test]
+    fn evidence_confidence_ramps_from_zero_coverage_to_strong() {
+        assert!((evidence_confidence(0.0) - ZERO_EVIDENCE_CONFIDENCE).abs() < 1e-12);
+        assert!((evidence_confidence(STRONG_EVIDENCE_COVERAGE) - 1.0).abs() < 1e-12);
+        assert!((evidence_confidence(1.0) - 1.0).abs() < 1e-12);
+        let quarter = evidence_confidence(0.15);
+        assert!(quarter > ZERO_EVIDENCE_CONFIDENCE && quarter < evidence_confidence(0.45));
+    }
 }

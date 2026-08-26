@@ -50,6 +50,7 @@ Swap the Y-axis from the **Benchmark** dropdown without touching pricing.
 | Revelo Code Index | public research page | scraped table |
 | SWE-bench Live | official reports JSONL | latest rows aggregated across languages |
 | SWE-bench Verified [legacy] | official `leaderboards.json` | model+agent evidence, kept for history |
+| Frontend Design Elo | [Design Arena](https://designarena.ai/leaderboard) public API | crowdsourced blinded-vote Elo across design categories; model-level, not part of the agentic composite |
 
 All feeds are public/no-key, refresh independently every six hours, and fail independently — one broken source shows its error in Settings without removing the others.
 

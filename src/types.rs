@@ -103,6 +103,7 @@ pub(crate) enum BenchmarkSource {
     ReveloCodeIndex,
     SWEBenchLive,
     SWEBenchVerified,
+    DesignArena,
 }
 
 /// Which question a composite answers. Capability/value asks "how good is the
@@ -134,6 +135,7 @@ impl BenchmarkSource {
             Self::ReveloCodeIndex => "Revelo Code Index",
             Self::SWEBenchLive => "SWE-bench Live",
             Self::SWEBenchVerified => "SWE-bench Verified [legacy]",
+            Self::DesignArena => "Frontend Design Elo (Design Arena)",
         }
     }
 
@@ -149,6 +151,7 @@ impl BenchmarkSource {
             Self::ReveloCodeIndex => "Code Index",
             Self::SWEBenchLive => "SWE-bench Live",
             Self::SWEBenchVerified => "SWE-bench Verified",
+            Self::DesignArena => "Design Elo",
         }
     }
 
@@ -168,7 +171,7 @@ impl BenchmarkSource {
     /// SWE-rebench is deliberately excluded — its uniform harness makes it an
     /// agentic-capability standard that stays fully weighted in both flavors.
     pub(crate) fn is_model_level(self) -> bool {
-        matches!(self, Self::ArtificialAnalysisSnapshot | Self::LiveBench)
+        matches!(self, Self::ArtificialAnalysisSnapshot | Self::LiveBench | Self::DesignArena)
     }
 
     pub(crate) fn is_harness_specific(self) -> bool {
@@ -182,7 +185,7 @@ impl BenchmarkSource {
         )
     }
 
-    pub(crate) fn remote_sources() -> [Self; 7] {
+    pub(crate) fn remote_sources() -> [Self; 8] {
         [
             Self::SWERebench,
             Self::TerminalBench3,
@@ -191,10 +194,11 @@ impl BenchmarkSource {
             Self::ReveloCodeIndex,
             Self::SWEBenchLive,
             Self::SWEBenchVerified,
+            Self::DesignArena,
         ]
     }
 
-    pub(crate) fn consensus_sources() -> [Self; 8] {
+    pub(crate) fn consensus_sources() -> [Self; 9] {
         [
             Self::ArtificialAnalysisSnapshot,
             Self::SWERebench,
@@ -204,10 +208,11 @@ impl BenchmarkSource {
             Self::ReveloCodeIndex,
             Self::SWEBenchLive,
             Self::SWEBenchVerified,
+            Self::DesignArena,
         ]
     }
 
-    pub(crate) fn display_sources() -> [Self; 8] {
+    pub(crate) fn display_sources() -> [Self; 9] {
         Self::consensus_sources()
     }
 
@@ -222,6 +227,7 @@ impl BenchmarkSource {
             Self::ReveloCodeIndex => REVELO_CODE_INDEX_URL,
             Self::SWEBenchLive => "https://swe-bench-live.github.io/",
             Self::SWEBenchVerified => "https://www.swebench.com/",
+            Self::DesignArena => "https://designarena.ai/leaderboard",
         }
     }
 }

@@ -3,6 +3,7 @@
 //! across board fetchers.
 
 pub(crate) mod deepswe;
+pub(crate) mod design_arena;
 pub(crate) mod livebench;
 pub(crate) mod prices;
 pub(crate) mod revelo;
@@ -11,6 +12,7 @@ pub(crate) mod swe_rebench;
 pub(crate) mod terminal_bench;
 
 pub(crate) use deepswe::*;
+pub(crate) use design_arena::*;
 pub(crate) use livebench::*;
 pub(crate) use prices::*;
 pub(crate) use revelo::*;
@@ -120,6 +122,15 @@ pub(crate) fn fetch_text(client: &Client, url: &str, label: &str) -> Result<Stri
         .with_context(|| format!("Could not read {label} response ({url})"))
 }
 
+pub(crate) fn fetch_json_post(client: &Client, url: &str, body: &Value, label: &str) -> Result<Value> {
+    client.post(url).json(body).send()
+        .with_context(|| format!("{label} request failed ({url})"))?
+        .error_for_status()
+        .with_context(|| format!("{label} returned an HTTP error ({url})"))?
+        .json::<Value>()
+        .with_context(|| format!("{label} returned invalid JSON ({url})"))
+}
+
 pub(crate) fn fetch_benchmark_source(client: &Client, source: BenchmarkSource) -> Result<Vec<Benchmark>> {
     match source {
         BenchmarkSource::ArtificialAnalysisSnapshot => Ok(artificial_analysis_snapshot()),
@@ -130,6 +141,7 @@ pub(crate) fn fetch_benchmark_source(client: &Client, source: BenchmarkSource) -
         BenchmarkSource::ReveloCodeIndex => fetch_revelo_code_index(client),
         BenchmarkSource::SWEBenchLive => fetch_swebench_live(client),
         BenchmarkSource::SWEBenchVerified => fetch_swebench_verified(client),
+        BenchmarkSource::DesignArena => fetch_design_arena(client),
         BenchmarkSource::CompositeAgentic | BenchmarkSource::CompositeDeployment => {
             Err(anyhow!("Composite is derived locally and is not fetched"))
         }

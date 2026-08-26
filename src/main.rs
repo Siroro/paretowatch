@@ -888,6 +888,7 @@ impl ParetoWatchApp {
             BenchmarkSource::ReveloCodeIndex => "Revelo Code Index".to_owned(),
             BenchmarkSource::SWEBenchLive => "SWE-bench Live resolved %".to_owned(),
             BenchmarkSource::SWEBenchVerified => "SWE-bench Verified resolved % (legacy)".to_owned(),
+            BenchmarkSource::DesignArena => "Design Arena Elo".to_owned(),
         };
 
         // The chart body scrolls as one page with the card and table below it,
@@ -2514,7 +2515,7 @@ mod tests {
             println!("{name}: capability {cap:?} · deployment {dep:?}");
         }
         println!("--- evidence breakdown ---");
-        for name in ["gpt 5 6 sol", "glm 5 3", "kimi k3"] {
+        for name in ["gpt 5 6 sol", "glm 5 3", "kimi k3", "claude fable 5", "opus 5"] {
             if let Some(b) = composite.iter().find(|b| benchmark_model_key(&b.slug) == name) {
                 println!("{name} [{}]", b.name);
             }
@@ -2535,6 +2536,41 @@ mod tests {
                 println!("    {:<22} {score:5.1}  #{rank}/{}", source.short_label(), sorted.len());
             }
         }
+        println!("--- board field AA coverage ---");
+        let anchor = crate::bench::scoring::aa_anchor_keys(&sets);
+        let mut board_union: std::collections::HashSet<String> = std::collections::HashSet::new();
+        for source in BenchmarkSource::remote_sources() {
+            if crate::bench::scoring::prior_cohort_source(source) {
+                for row in benchmarks_for_source(source, &sets, ComparisonMode::ModelCapability, "") {
+                    board_union.insert(benchmark_model_key(&row.slug));
+                }
+            }
+        }
+        let aa_rows = benchmarks_for_source(BenchmarkSource::ArtificialAnalysisSnapshot, &sets, ComparisonMode::ModelCapability, "");
+        let aa_keys: std::collections::HashSet<String> = aa_rows.iter().map(|r| benchmark_model_key(&r.slug)).collect();
+        let mut aa_scores: Vec<(String, f64)> = aa_rows.iter()
+            .filter_map(|r| r.agentic_coding.filter(|s| s.is_finite()).map(|s| (benchmark_model_key(&r.slug), s)))
+            .collect();
+        aa_scores.retain(|(k, _)| board_union.contains(k));
+        let (aa_map, _) = crate::bench::scoring::anchored_aa_percentiles(aa_rows.iter().filter_map(|r| r.agentic_coding.filter(|s| s.is_finite()).map(|s| (benchmark_model_key(&r.slug), s))), &board_union).unwrap_or((HashMap::new(), 0));
+        for source in BenchmarkSource::remote_sources() {
+            let rows = benchmarks_for_source(source, &sets, ComparisonMode::ModelCapability, "");
+            if rows.is_empty() { continue; }
+            let keys: Vec<String> = rows.iter().map(|r| benchmark_model_key(&r.slug)).collect();
+            let covered = keys.iter().filter(|k| anchor.as_ref().is_some_and(|a| a.contains(*k))).count();
+            let mut field_q: Vec<f64> = keys.iter().filter_map(|k| aa_map.get(k).copied()).collect();
+            field_q.sort_by(|a, b| a.total_cmp(b));
+            let q_desc: Vec<String> = field_q.iter().rev().take(8).map(|q| format!("{q:.0}")).collect();
+            println!(
+                "{:<22} rows {:>3} · AA-covered {:>3} · calibrates={} · top field q: {}",
+                source.short_label(),
+                keys.len(),
+                covered,
+                field_q.len() >= 10,
+                q_desc.join(" "),
+            );
+        }
+        let _ = aa_scores;
     }
     use crate::testfix::test_quote;
 

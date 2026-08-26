@@ -92,6 +92,24 @@ pub(crate) fn insert_best_benchmark(best: &mut HashMap<String, Benchmark>, row: 
 
 pub(crate) fn clean_swe_rebench_model(raw: &str) -> String {
     let mut s = raw.trim().to_owned();
+    // The live table renders mini-leaderboard badges inside some model cells;
+    // after tag-stripping they glue onto the name (`Tokens per Problem 1
+    // Anthropic Fable 5`). Cut the badge label plus its rank digit so the
+    // row joins the model it belongs to — otherwise the model silently loses
+    // this board's evidence.
+    for label in ["tokens per problem", "cost per problem", "problems per dollar"] {
+        let n = normalize(&s);
+        if n.starts_with(label) {
+            let rest = s.split_whitespace().skip(3).collect::<Vec<_>>();
+            let rest = if rest.first().is_some_and(|t| t.chars().all(|c| c.is_ascii_digit())) {
+                &rest[1..]
+            } else {
+                &rest[..]
+            };
+            s = rest.join(" ");
+            break;
+        }
+    }
     // Strip vendor prefixes only when they are distinct from the actual model
     // family. Do not strip `Grok`, `DeepSeek`, or `MiniMax`: those words are
     // themselves part of the canonical model name.
@@ -166,6 +184,21 @@ mod tests {
         assert_eq!(rows.len(), 1);
         assert_eq!(rows[0].tokens_per_task, Some(605_340.0));
         assert!(rows[0].token_profile.as_deref().unwrap_or_default().contains("84.7% cached"));
+    }
+
+    #[test]
+    fn badge_prefixed_model_cell_still_joins_the_model() {
+        // Regression (live 2026-08-26): the rebench table renders a
+        // `Tokens per Problem 1` mini-leaderboard badge inside Fable 5's
+        // model cell; after tag-stripping it glued onto the name and the
+        // row scored a phantom model, silently dropping Fable's #1 board.
+        let html = r#"<table><tr><td>Tokens per Problem 1 Anthropic Fable 5 [high]<span>Model</span></td><td>64.5% ± 1.41%</td><td>78.4%</td><td>$4.40</td><td>2,518,308 94.9% cached</td></tr></table>"#;
+        let rows = parse_swe_rebench_html(html);
+        assert_eq!(rows.len(), 1, "badge row must parse as exactly one model");
+        assert_eq!(benchmark_model_key(&rows[0].slug), "fable 5");
+        assert!((rows[0].agentic_coding.unwrap() - 64.5).abs() < 1e-9);
+        // The cleaned key must be exactly joinable with the Surplus quote.
+        assert_eq!(benchmark_model_key("anthropic/claude-fable-5"), benchmark_model_key(&rows[0].slug));
     }
 
 }
