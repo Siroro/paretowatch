@@ -271,7 +271,7 @@ pub(crate) fn detect_price_changes(
         }
         changes.push(PriceChangeEvent {
             display_name: new.display_name.clone(),
-            at: current.fetched_at.clone(),
+            at: current.fetched_at,
             old_blended: old.price(
                 PriceMetric::Blended,
                 settings.input_weight,

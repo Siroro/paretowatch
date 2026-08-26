@@ -7,20 +7,21 @@ mod pareto_tab;
 mod settings_tab;
 
 use std::collections::{HashMap, VecDeque};
+use std::sync::Arc;
 use std::sync::mpsc::{self, Receiver, Sender, TryRecvError};
 
 use chrono::Utc;
 use eframe::egui;
 use notify_rust::Notification;
 
-use crate::alerts::{PriceChangeEvent, detect_price_changes};
+use crate::alerts::{PriceChangeEvent, detect_price_changes, semantic_alert_status};
 use crate::artificial_analysis_snapshot::artificial_analysis_snapshot;
 use crate::bench::{
     BenchmarkConsensus, available_scaffolds, benchmark_consensus_for_quote, benchmarks_for_source,
 };
 use crate::fetch::start_worker;
 use crate::history;
-use crate::pareto::{ParetoCache, ParetoCacheKey, ParetoView, joined_points, pareto_frontier};
+use crate::pareto::{ParetoCache, ParetoCacheKey, joined_points, pareto_frontier};
 use crate::settings_store::{load_settings, save_settings};
 use crate::tray::{UiCommand, create_tray, install_tray_event_handlers};
 use crate::types::{
@@ -76,7 +77,10 @@ pub(crate) struct ParetoWatchApp {
     semantic_alert_state: HashMap<u64, bool>,
     data_version: u64,
     scaffold_cache: Option<(u64, Vec<String>)>,
-    pareto_cache: Option<ParetoCache>,
+    pareto_cache: Option<Arc<ParetoCache>>,
+    /// Status text per alert id for the Alerts tab, keyed to the data version
+    /// and workload weights it was computed at.
+    alert_status_cache: HashMap<u64, (u64, f64, f64, f64, String)>,
     consensus_cache: Option<(
         u64,
         ComparisonMode,
@@ -148,6 +152,7 @@ impl ParetoWatchApp {
             data_version: 0,
             scaffold_cache: None,
             pareto_cache: None,
+            alert_status_cache: HashMap::new(),
             consensus_cache: None,
             status: "Starting…".into(),
             last_price_error: None,
@@ -215,7 +220,6 @@ impl ParetoWatchApp {
                     self.price_snapshot = Some(snapshot);
                     self.last_price_error = None;
                     self.data_version += 1;
-                    self.evaluate_semantic_alerts();
                     data_dirty = true;
                 }
                 Ok(WorkerMessage::Prices(Err(err))) => {
@@ -234,9 +238,13 @@ impl ParetoWatchApp {
                 Err(TryRecvError::Empty) | Err(TryRecvError::Disconnected) => break,
             }
         }
-        // Long-term history: diff each delivered poll against the last
-        // recorded state. Writes only when something actually changed.
         if data_dirty {
+            // Frontier/cheapest alerts depend on benchmark boards too, so a
+            // board refresh (every six hours) must re-evaluate them instead
+            // of waiting for the next price poll.
+            self.evaluate_semantic_alerts();
+            // Long-term history: diff each delivered poll against the last
+            // recorded state. Writes only when something actually changed.
             if let Some(snapshot) = &self.price_snapshot {
                 self.history.record(
                     snapshot,
@@ -283,12 +291,13 @@ impl ParetoWatchApp {
     }
 
     /// Returns the cached join/frontier for the current inputs, recomputing it
-    /// only when data or a relevant control actually changed.
-    fn ensure_pareto_view(&mut self) -> Option<ParetoView> {
+    /// only when data or a relevant control actually changed. The `Arc` clone
+    /// keeps per-frame handoff cheap — the joined points are never copied.
+    fn ensure_pareto_view(&mut self) -> Option<Arc<ParetoCache>> {
         let key = self.pareto_cache_key();
-        if let Some(cache) = self.pareto_cache.as_ref() {
+        if let Some(cache) = &self.pareto_cache {
             if cache.key == key {
-                return Some(cache.view());
+                return Some(Arc::clone(cache));
             }
         }
         let snapshot = self.price_snapshot.as_ref()?;
@@ -324,14 +333,14 @@ impl ParetoWatchApp {
             weights.2,
         );
         let frontier = pareto_frontier(&joined);
-        self.pareto_cache = Some(ParetoCache {
+        self.pareto_cache = Some(Arc::new(ParetoCache {
             key,
             benchmarks_present,
             filtered_quotes,
             joined,
             frontier,
-        });
-        self.pareto_cache.as_ref().map(ParetoCache::view)
+        }));
+        self.pareto_cache.as_ref().map(Arc::clone)
     }
 
     fn selected_pareto_quote(&self, model_id: &str) -> Option<Quote> {
@@ -370,6 +379,75 @@ impl ParetoWatchApp {
             consensus.clone(),
         ));
         consensus
+    }
+
+    /// "Current" column text for every alert row, aligned with
+    /// `settings.alerts`. Semantic statuses re-run the whole benchmark join
+    /// and frontier, so they are cached per alert until prices, boards, or
+    /// the workload weights change; threshold/any-change rows are a cheap
+    /// quote lookup and are formatted fresh each call.
+    fn cached_alert_statuses(&mut self) -> Vec<String> {
+        let data_version = self.data_version;
+        let (input_weight, cache_read_weight, output_weight) = (
+            self.settings.input_weight,
+            self.settings.cache_read_weight,
+            self.settings.output_weight,
+        );
+        let quotes: &[Quote] = self
+            .price_snapshot
+            .as_ref()
+            .map(|s| s.quotes.as_slice())
+            .unwrap_or(&[]);
+        let mut statuses = Vec::with_capacity(self.settings.alerts.len());
+        for alert in &self.settings.alerts {
+            let status = if alert.mode.benchmark_dependent() {
+                let cached = self
+                    .alert_status_cache
+                    .get(&alert.id)
+                    .filter(|(version, iw, cw, ow, _)| {
+                        *version == data_version
+                            && (*iw, *cw, *ow) == (input_weight, cache_read_weight, output_weight)
+                    })
+                    .map(|(_, _, _, _, text)| text.clone());
+                match cached {
+                    Some(text) => text,
+                    None => {
+                        let text = semantic_alert_status(
+                            alert,
+                            quotes,
+                            &self.benchmark_sets,
+                            input_weight,
+                            cache_read_weight,
+                            output_weight,
+                        );
+                        self.alert_status_cache.insert(
+                            alert.id,
+                            (
+                                data_version,
+                                input_weight,
+                                cache_read_weight,
+                                output_weight,
+                                text.clone(),
+                            ),
+                        );
+                        text
+                    }
+                }
+            } else {
+                quotes
+                    .iter()
+                    .find(|q| q.model == alert.model)
+                    .map(|q| {
+                        format!(
+                            "${:.4}",
+                            q.price(alert.metric, input_weight, cache_read_weight, output_weight,)
+                        )
+                    })
+                    .unwrap_or_else(|| "—".into())
+            };
+            statuses.push(status);
+        }
+        statuses
     }
 
     fn evaluate_semantic_alerts(&mut self) {
@@ -514,6 +592,8 @@ impl ParetoWatchApp {
             .map(|a| a.id)
             .collect::<std::collections::HashSet<_>>();
         self.semantic_alert_state
+            .retain(|id, _| valid_ids.contains(id));
+        self.alert_status_cache
             .retain(|id, _| valid_ids.contains(id));
         let _ = self
             .worker_tx

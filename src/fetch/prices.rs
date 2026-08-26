@@ -1,7 +1,7 @@
 //! Surplus price feeds: the comparison-matrix price page, the `/v1/models`
 //! catalog (modalities, creators), and the live market overlay.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use anyhow::{Result, anyhow};
 use chrono::Utc;
@@ -70,11 +70,12 @@ pub(crate) fn fetch_prices(client: &Client, settings: &Settings) -> Result<Price
     }
 
     if !catalog_quotes.is_empty() {
-        let catalog_by_key = catalog_quotes
+        // Normalized-key lookup over borrowed catalog rows: no deep Quote
+        // clones just to consult the catalog.
+        let catalog_by_key: HashMap<String, &Quote> = catalog_quotes
             .iter()
-            .cloned()
             .map(|q| (normalize(&q.model), q))
-            .collect::<HashMap<_, _>>();
+            .collect();
 
         // Drop anything the text-output catalog does not recognize, and use its
         // canonical display/provider metadata for more reliable benchmark joins.
@@ -90,10 +91,10 @@ pub(crate) fn fetch_prices(client: &Client, settings: &Settings) -> Result<Price
 
         // The comparison matrix may lag the catalog. Keep missing text models
         // available using their catalog price until the matrix catches up.
-        for catalog in catalog_quotes.iter().cloned() {
-            let key = normalize(&catalog.model);
-            if !quotes.iter().any(|q| normalize(&q.model) == key) {
-                quotes.push(catalog);
+        let mut quote_keys: HashSet<String> = quotes.iter().map(|q| normalize(&q.model)).collect();
+        for catalog in &catalog_quotes {
+            if quote_keys.insert(normalize(&catalog.model)) {
+                quotes.push(catalog.clone());
             }
         }
         if base_source.is_empty() {
@@ -123,30 +124,36 @@ pub(crate) fn fetch_prices(client: &Client, settings: &Settings) -> Result<Price
                     json_shape(&value)
                 ));
             } else {
+                let quote_index: HashMap<String, usize> = quotes
+                    .iter()
+                    .enumerate()
+                    .map(|(i, q)| (normalize(&q.model), i))
+                    .collect();
                 for market in markets {
-                    let target = normalize(&market.model);
                     // Only overlay models already admitted by the text-output
                     // catalog. Do not append unmatched market products: the market
                     // feed also contains image, video, music and other media SKUs.
-                    if let Some(q) = quotes.iter_mut().find(|q| normalize(&q.model) == target) {
-                        q.input = market.input;
-                        q.output = market.output;
-                        q.cache_read = market.cache_read;
-                        if let Some(provider) = market.provider {
-                            q.provider = provider;
-                        }
-                        q.seller_count = market.seller_count;
-                        q.healthy_seller_count = market.healthy_seller_count;
-                        q.provider_trusted = market.provider_trusted;
-                        q.requests_24h = market.requests_24h;
-                        q.volume_24h = market.volume_24h;
-                        q.discount_pct = market.discount_pct;
-                        q.discount_direction = market.discount_direction.clone();
-                        q.free_offer_listed = market.free_offer_listed;
-                        q.market_options = market.provider_options.clone();
-                        q.live_market = true;
-                        overlay_count += 1;
+                    let Some(&index) = quote_index.get(&normalize(&market.model)) else {
+                        continue;
+                    };
+                    let q = &mut quotes[index];
+                    q.input = market.input;
+                    q.output = market.output;
+                    q.cache_read = market.cache_read;
+                    if let Some(provider) = market.provider {
+                        q.provider = provider;
                     }
+                    q.seller_count = market.seller_count;
+                    q.healthy_seller_count = market.healthy_seller_count;
+                    q.provider_trusted = market.provider_trusted;
+                    q.requests_24h = market.requests_24h;
+                    q.volume_24h = market.volume_24h;
+                    q.discount_pct = market.discount_pct;
+                    q.discount_direction = market.discount_direction.clone();
+                    q.free_offer_listed = market.free_offer_listed;
+                    q.market_options = market.provider_options.clone();
+                    q.live_market = true;
+                    overlay_count += 1;
                 }
             }
         }

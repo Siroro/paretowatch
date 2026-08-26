@@ -9,9 +9,7 @@ use egui_plot::{HoverPosition, Line, Plot, PlotPoint, PlotPoints, Points, Text};
 use crate::artificial_analysis_snapshot::ARTIFICIAL_ANALYSIS_SNAPSHOT_DATE;
 use crate::bench::{format_percentile, normalize};
 use crate::format::{format_compact_number, format_price_tick};
-use crate::pareto::{
-    JoinedPoint, ParetoView, pareto_search_matches, price_from_plot_x, price_to_plot_x,
-};
+use crate::pareto::{JoinedPoint, pareto_search_matches, price_from_plot_x, price_to_plot_x};
 use crate::theme::{creator_color, discount_color, free_offer_badge, group_label};
 use crate::types::{
     AlertMode, BenchmarkMetric, BenchmarkSource, ComparisonMode, CostBasis, LiquidityFilter,
@@ -307,13 +305,15 @@ impl ParetoWatchApp {
             ui.label("Waiting for pricing data…");
             return;
         }
-        let ParetoView { joined, frontier, benchmarks_present } = self
-            .ensure_pareto_view()
-            .unwrap_or_else(|| ParetoView {
-                joined: Vec::new(),
-                frontier: Vec::new(),
-                benchmarks_present: false,
-            });
+        let view = self.ensure_pareto_view();
+        let (joined, frontier, benchmarks_present) = match view.as_deref() {
+            Some(cache) => (
+                cache.joined.as_slice(),
+                cache.frontier.as_slice(),
+                cache.benchmarks_present,
+            ),
+            None => (&[][..], &[][..], false),
+        };
 
         if joined.is_empty() {
             if self.cost_basis == CostBasis::EstimatedPerTask && benchmarks_present {
@@ -371,7 +371,7 @@ impl ParetoWatchApp {
 
         // Colour legend for the model groups (creators) currently on the chart.
         let mut group_counts: HashMap<&str, usize> = HashMap::new();
-        for p in &joined {
+        for p in joined {
             *group_counts.entry(group_label(&p.creator)).or_insert(0) += 1;
         }
         let mut group_counts: Vec<(&str, usize)> = group_counts.into_iter().collect();
@@ -401,10 +401,17 @@ impl ParetoWatchApp {
         let cost_basis = self.cost_basis;
         // The selection/search halos are separate series that share the data
         // point, so the formatter can receive their internal name; map ids
-        // back to display names.
+        // back to display names. Only ringed points (the selection plus search
+        // matches) are looked up, so the map stays tiny when no search is
+        // active.
         let display_names: HashMap<String, String> = joined
             .iter()
-            .map(|p| (p.model_id.clone(), p.model.clone()))
+            .zip(search_matches.iter().copied())
+            .filter(|(p, matches)| {
+                selected_before.as_deref() == Some(p.model_id.as_str())
+                    || (search_active && *matches)
+            })
+            .map(|(p, _)| (p.model_id.clone(), p.model.clone()))
             .collect();
         let x_axis_label = match (self.cost_basis, log_price_axis) {
             (CostBasis::PerMillion, true) => format!("{} price ($ / 1M, log scale)", self.price_metric.label()),
@@ -599,7 +606,7 @@ impl ParetoWatchApp {
                 }
             })
             .inner;
-        *ui.style_mut() = (*saved_style).clone();
+        ui.set_style(saved_style);
 
         if let Some(model_id) = clicked_model {
             self.selected_pareto_model = Some(model_id);
@@ -639,7 +646,7 @@ impl ParetoWatchApp {
                 });
                 ui.vertical(|ui| {
                     ui.add_space(6.0);
-                    self.frontier_table(ui, &frontier);
+                    self.frontier_table(ui, frontier);
                 });
             });
         } else {
@@ -647,7 +654,7 @@ impl ParetoWatchApp {
                 ui.add_space(6.0);
                 self.pareto_detail_card(ui, p);
             }
-            self.frontier_table(ui, &frontier);
+            self.frontier_table(ui, frontier);
         }
         });
     }

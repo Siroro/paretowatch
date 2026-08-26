@@ -46,30 +46,16 @@ pub(crate) struct ParetoCacheKey {
     pub(crate) output_weight: f64,
 }
 
+/// Cached join/frontier for the current inputs. Kept behind an `Arc` in the
+/// app so handing it to the UI each frame is a refcount bump instead of a
+/// deep clone of every joined point.
 #[derive(Debug, Clone)]
-pub(crate) struct ParetoView {
-    pub(crate) joined: Vec<JoinedPoint>,
-    pub(crate) frontier: Vec<JoinedPoint>,
-    pub(crate) benchmarks_present: bool,
-}
-
-#[derive(Debug)]
 pub(crate) struct ParetoCache {
     pub(crate) key: ParetoCacheKey,
     pub(crate) benchmarks_present: bool,
     pub(crate) filtered_quotes: Vec<Quote>,
     pub(crate) joined: Vec<JoinedPoint>,
     pub(crate) frontier: Vec<JoinedPoint>,
-}
-
-impl ParetoCache {
-    pub(crate) fn view(&self) -> ParetoView {
-        ParetoView {
-            joined: self.joined.clone(),
-            frontier: self.frontier.clone(),
-            benchmarks_present: self.benchmarks_present,
-        }
-    }
 }
 
 pub(crate) fn price_to_plot_x(price: f64, log_scale: bool) -> f64 {
