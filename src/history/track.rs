@@ -360,8 +360,10 @@ impl HistoryTracker {
         self.ids.get(slug).and_then(|id| self.series.get(id))
     }
 
-    pub(crate) fn model_slugs(&self) -> Vec<String> {
-        self.series.values().map(|s| s.slug.clone()).collect()
+    /// Borrowed iteration over every tracked series, so UI code can build
+    /// catalogs without cloning each slug first.
+    pub(crate) fn series_list(&self) -> impl Iterator<Item = &ModelSeries> {
+        self.series.values()
     }
 
     pub(crate) fn model_count(&self) -> usize {
@@ -728,11 +730,10 @@ mod tests {
             bytes
         );
         let shown = t
-            .model_slugs()
-            .into_iter()
-            .filter_map(|slug| t.series(&slug).map(|s| s.clone()))
+            .series_list()
             .filter(|s| !s.capability.is_empty())
             .take(3)
+            .cloned()
             .collect::<Vec<_>>();
         for s in &shown {
             println!(

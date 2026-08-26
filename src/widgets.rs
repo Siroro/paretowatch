@@ -11,10 +11,18 @@ use crate::alerts::prices_differ;
 use crate::theme::{creator_color, discount_color};
 use crate::types::{PriceSnapshot, Settings, blended_price};
 
+/// Base pinned-price text size the layout constants were measured at. The
+/// user-facing setting scales every text size (and the window width) from
+/// here; 10.0 reproduces the original hard-coded look.
+pub(crate) const BASE_FONT_SIZE: f32 = 10.0;
+/// Allowed range for the pinned-prices font size setting.
+pub(crate) const PINNED_FONT_MIN: f32 = 8.0;
+pub(crate) const PINNED_FONT_MAX: f32 = 16.0;
+
 const WINDOW_WIDTH: f32 = 240.0;
 /// Everything around the row list (title, separators, footer, frame
-/// margins), measured from a real `window_frame` layout with the default
-/// fonts (see `window_size_estimate_tracks_measured_layout`).
+/// margins), measured from a real `window_frame` layout at
+/// `BASE_FONT_SIZE` (see `window_size_estimate_tracks_measured_layout`).
 const WINDOW_CHROME_HEIGHT: f32 = 45.0;
 /// One pinned row plus the separator below it, measured the same way. This
 /// only sizes the window until its first laid-out frame; the renderer then
@@ -27,6 +35,15 @@ const SIZE_MATCH_EPSILON: f32 = 1.0;
 const MAX_VISIBLE_ROWS: usize = 6;
 const FLASH_SECS: f64 = 1.6;
 const RAISE_INTERVAL: Duration = Duration::from_secs(1);
+
+fn font_scale(font_size: f32) -> f32 {
+    (font_size.clamp(PINNED_FONT_MIN, PINNED_FONT_MAX) / BASE_FONT_SIZE).max(0.1)
+}
+
+/// One of the window's original text sizes, scaled to the configured font.
+fn scaled(size: f32, font_size: f32) -> f32 {
+    size * font_scale(font_size)
+}
 
 const CARD_FILL: egui::Color32 = egui::Color32::from_rgba_unmultiplied_const(16, 18, 23, 220);
 const CARD_STROKE: egui::Color32 = egui::Color32::from_rgba_unmultiplied_const(86, 95, 111, 230);
@@ -86,6 +103,8 @@ struct SharedWindow {
     /// Height budget for the row list: the measured list height scaled to
     /// `MAX_VISIBLE_ROWS`, refreshed by the renderer every frame.
     scroll_cap: f32,
+    /// Base text size pushed from `Settings` by `refresh`; zero until then.
+    font_size: f32,
 }
 
 type SharedHandle = Arc<Mutex<SharedWindow>>;
@@ -190,19 +209,24 @@ impl PriceWidgetManager {
         if self.window.is_none() {
             let shared = Arc::new(Mutex::new(SharedWindow {
                 fetched_at: snapshot.map(|s| s.fetched_at),
-                scroll_cap: ROW_PITCH_HEIGHT * MAX_VISIBLE_ROWS as f32,
+                scroll_cap: ROW_PITCH_HEIGHT
+                    * font_scale(settings.pinned_price_font_size)
+                    * MAX_VISIBLE_ROWS as f32,
+                font_size: settings.pinned_price_font_size,
                 ..Default::default()
             }));
             let mut builder = egui::ViewportBuilder::default()
                 .with_title("ParetoWatch · pinned prices")
-                .with_inner_size(window_size(1))
+                .with_inner_size(window_size(1, settings.pinned_price_font_size))
                 .with_decorations(false)
                 .with_resizable(false)
                 .with_always_on_top()
                 .with_active(false)
                 .with_taskbar(false)
                 .with_transparent(true);
-            if let Some(pos) = spawn_position(ctx, near, window_size(1)) {
+            if let Some(pos) =
+                spawn_position(ctx, near, window_size(1, settings.pinned_price_font_size))
+            {
                 builder = builder.with_position(pos);
             }
             self.window = Some(QuoteWindow {
@@ -221,10 +245,10 @@ impl PriceWidgetManager {
                 model_id: model_id.to_owned(),
                 last_seen: Some(observed),
             });
-            window.builder = window
-                .builder
-                .clone()
-                .with_inner_size(window_size(window.rows.len()));
+            window.builder = window.builder.clone().with_inner_size(window_size(
+                window.rows.len(),
+                settings.pinned_price_font_size,
+            ));
             let mut shared = window.shared.lock().expect("quote window state");
             shared.rows.push(feed);
             shared.fetched_at = snapshot.map(|s| s.fetched_at);
@@ -304,9 +328,11 @@ impl PriceWidgetManager {
         }
 
         let fetched_at = snapshot.map(|s| s.fetched_at);
-        let changed = shared.rows != rows || shared.fetched_at != fetched_at;
+        let font_changed = shared.font_size != settings.pinned_price_font_size;
+        let changed = shared.rows != rows || shared.fetched_at != fetched_at || font_changed;
         shared.rows = rows;
         shared.fetched_at = fetched_at;
+        shared.font_size = settings.pinned_price_font_size;
         changed
     }
 
@@ -332,9 +358,13 @@ impl PriceWidgetManager {
         let Some(window) = &mut self.window else {
             return;
         };
-        let (close, remove) = {
+        let (close, remove, font_size) = {
             let mut shared = window.shared.lock().expect("quote window state");
-            (shared.close, std::mem::take(&mut shared.remove))
+            (
+                shared.close,
+                std::mem::take(&mut shared.remove),
+                shared.font_size,
+            )
         };
         if close {
             self.window = None;
@@ -348,7 +378,7 @@ impl PriceWidgetManager {
                 window.builder = window
                     .builder
                     .clone()
-                    .with_inner_size(window_size(window.rows.len()));
+                    .with_inner_size(window_size(window.rows.len(), font_size));
             }
         }
     }
@@ -375,10 +405,13 @@ fn raise_to_top(ctx: &egui::Context, viewport_id: ViewportId) {
 /// Estimated inner size for the given number of pinned rows, used when the
 /// window is created or a row is added — before the next frame measures the
 /// real layout. `render` corrects the native size from measured content.
-fn window_size(row_count: usize) -> egui::Vec2 {
+/// Only the width scales with the font: across the allowed 8–16 range the
+/// row height is dominated by egui's minimum widget sizes (the × buttons),
+/// so the base-font height estimate stays close at every size.
+fn window_size(row_count: usize, font_size: f32) -> egui::Vec2 {
     let visible = row_count.clamp(1, MAX_VISIBLE_ROWS) as f32;
     egui::vec2(
-        WINDOW_WIDTH,
+        WINDOW_WIDTH * font_scale(font_size),
         WINDOW_CHROME_HEIGHT + ROW_PITCH_HEIGHT * visible + DPI_ROUNDING_GUARD,
     )
 }
@@ -398,15 +431,26 @@ fn spawn_position(ctx: &egui::Context, near: egui::Pos2, size: egui::Vec2) -> Op
 }
 
 fn render(ui: &mut egui::Ui, class: ViewportClass, shared: &SharedHandle) {
-    let (rows, fetched_at, scroll_cap) = {
+    let (rows, fetched_at, scroll_cap, font_size) = {
         let state = shared.lock().expect("quote window state");
-        (state.rows.clone(), state.fetched_at, state.scroll_cap)
+        (
+            state.rows.clone(),
+            state.fetched_at,
+            state.scroll_cap,
+            state.font_size,
+        )
     };
-    // Before the first measured frame the cap is zero; keep the list visible.
+    // Before the first `refresh` pushes settings the defaults are zero;
+    // keep the list visible and the text at the original size.
+    let font_size = if font_size > 0.0 {
+        font_size
+    } else {
+        BASE_FONT_SIZE
+    };
     let scroll_cap = if scroll_cap > 0.0 {
         scroll_cap
     } else {
-        ROW_PITCH_HEIGHT * MAX_VISIBLE_ROWS as f32
+        ROW_PITCH_HEIGHT * font_scale(font_size) * MAX_VISIBLE_ROWS as f32
     };
     let os_close = ui.ctx().input(|i| i.viewport().close_requested());
 
@@ -436,6 +480,7 @@ fn render(ui: &mut egui::Ui, class: ViewportClass, shared: &SharedHandle) {
         &rows,
         fetched_at,
         scroll_cap,
+        font_size,
         &mut remove,
         &mut close_all,
     );
@@ -443,13 +488,18 @@ fn render(ui: &mut egui::Ui, class: ViewportClass, shared: &SharedHandle) {
     // Fit the native window to the laid-out content. The constants behind
     // `window_size` only estimate the size until the first frame; eframe
     // never re-applies later `ViewportBuilder` inner-size changes, so a
-    // resize command is the only reliable channel.
+    // resize command is the only reliable channel. Both the row height and
+    // the width track the configured font size, so this also re-fits the
+    // window whenever the setting changes.
     if !rows.is_empty() {
         let per_row = rows_height / rows.len() as f32;
         shared.lock().expect("quote window state").scroll_cap = per_row * MAX_VISIBLE_ROWS as f32;
     }
     if class == ViewportClass::Deferred {
-        let needed = egui::vec2(WINDOW_WIDTH, frame_height + DPI_ROUNDING_GUARD);
+        let needed = egui::vec2(
+            WINDOW_WIDTH * font_scale(font_size),
+            frame_height + DPI_ROUNDING_GUARD,
+        );
         let matches = ui.input(|i| i.viewport().inner_rect).is_some_and(|rect| {
             (rect.width() - needed.x).abs() <= SIZE_MATCH_EPSILON
                 && (rect.height() - needed.y).abs() <= SIZE_MATCH_EPSILON
@@ -517,12 +567,13 @@ fn render(ui: &mut egui::Ui, class: ViewportClass, shared: &SharedHandle) {
 /// Lay out the whole pinned-prices card content (title, row list, footer)
 /// and return `(frame outer height, full height of the row list)`. The row
 /// list height is the unclamped content height, even when `scroll_cap`
-/// clips what is visible.
+/// clips what is visible. All text is scaled from `font_size`.
 fn window_frame(
     ui: &mut egui::Ui,
     rows: &[RowFeed],
     fetched_at: Option<DateTime<Utc>>,
     scroll_cap: f32,
+    font_size: f32,
     remove: &mut Option<String>,
     close_all: &mut bool,
 ) -> (f32, f32) {
@@ -535,15 +586,18 @@ fn window_frame(
                 ui.label(
                     egui::RichText::new("PINNED PRICES")
                         .strong()
-                        .size(9.5)
+                        .size(scaled(9.5, font_size))
                         .color(MUTED_TEXT),
                 );
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    let button = scaled(13.0, font_size);
                     if ui
                         .add_sized(
-                            [13.0, 13.0],
+                            [button, button],
                             egui::Button::new(
-                                egui::RichText::new("×").size(10.0).color(MUTED_TEXT),
+                                egui::RichText::new("×")
+                                    .size(scaled(10.0, font_size))
+                                    .color(MUTED_TEXT),
                             )
                             .frame(false),
                         )
@@ -565,7 +619,7 @@ fn window_frame(
                         if index > 0 {
                             ui.separator();
                         }
-                        render_row(ui, row, remove);
+                        render_row(ui, row, font_size, remove);
                     }
                     rows_height = ui.min_rect().height();
                 });
@@ -577,14 +631,14 @@ fn window_frame(
                     .count();
                 ui.label(
                     egui::RichText::new(format!("{} models · {live} live", rows.len()))
-                        .size(8.5)
+                        .size(scaled(8.5, font_size))
                         .color(if live > 0 { LIVE_ACCENT } else { MUTED_TEXT }),
                 );
                 if let Some(at) = fetched_at {
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                         ui.label(
                             egui::RichText::new(format!("upd {}", format_clock(at)))
-                                .size(8.5)
+                                .size(scaled(8.5, font_size))
                                 .color(MUTED_TEXT),
                         );
                     });
@@ -594,10 +648,14 @@ fn window_frame(
     (frame.response.rect.height(), rows_height)
 }
 
-fn render_row(ui: &mut egui::Ui, row: &RowFeed, remove: &mut Option<String>) {
+fn render_row(ui: &mut egui::Ui, row: &RowFeed, font_size: f32, remove: &mut Option<String>) {
     let price_color = row.discount_pct.map(discount_color).unwrap_or(PRIMARY_TEXT);
     ui.horizontal(|ui| {
-        ui.label(egui::RichText::new("●").color(row.creator_color).size(9.0));
+        ui.label(
+            egui::RichText::new("●")
+                .color(row.creator_color)
+                .size(scaled(9.0, font_size)),
+        );
         let mut name = row.display_name.clone();
         if row.free_offer_listed {
             name.push('*');
@@ -605,22 +663,27 @@ fn render_row(ui: &mut egui::Ui, row: &RowFeed, remove: &mut Option<String>) {
         ui.label(
             egui::RichText::new(name)
                 .strong()
-                .size(10.0)
+                .size(scaled(10.0, font_size))
                 .color(PRIMARY_TEXT),
         );
         if !row.priced {
             ui.label(
                 egui::RichText::new("not priced")
-                    .size(8.0)
+                    .size(scaled(8.0, font_size))
                     .color(MUTED_TEXT),
             );
         }
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+            let button = scaled(12.0, font_size);
             if ui
                 .add_sized(
-                    [12.0, 12.0],
-                    egui::Button::new(egui::RichText::new("×").size(9.0).color(MUTED_TEXT))
-                        .frame(false),
+                    [button, button],
+                    egui::Button::new(
+                        egui::RichText::new("×")
+                            .size(scaled(9.0, font_size))
+                            .color(MUTED_TEXT),
+                    )
+                    .frame(false),
                 )
                 .on_hover_text("Remove this model")
                 .clicked()
@@ -630,7 +693,7 @@ fn render_row(ui: &mut egui::Ui, row: &RowFeed, remove: &mut Option<String>) {
             ui.label(
                 egui::RichText::new(format!("${:.4}", row.blended))
                     .strong()
-                    .size(11.0)
+                    .size(scaled(11.0, font_size))
                     .color(price_color),
             );
         });
@@ -646,7 +709,7 @@ fn render_row(ui: &mut egui::Ui, row: &RowFeed, remove: &mut Option<String>) {
                     .unwrap_or_default(),
                 compact_price(row.output),
             ))
-            .size(8.5)
+            .size(scaled(8.5, font_size))
             .color(METRIC_TEXT),
         );
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
@@ -665,7 +728,7 @@ fn render_row(ui: &mut egui::Ui, row: &RowFeed, remove: &mut Option<String>) {
                     .unwrap_or_default();
                 ui.label(
                     egui::RichText::new(format!("{direction}{pct}"))
-                        .size(8.5)
+                        .size(scaled(8.5, font_size))
                         .color(color),
                 )
                 .on_hover_text(format!(
@@ -677,7 +740,7 @@ fn render_row(ui: &mut egui::Ui, row: &RowFeed, remove: &mut Option<String>) {
             } else if let Some(discount) = row.discount_pct {
                 ui.label(
                     egui::RichText::new(format!("{discount:.1}% off"))
-                        .size(8.5)
+                        .size(scaled(8.5, font_size))
                         .color(price_color),
                 );
             }
@@ -919,16 +982,27 @@ mod tests {
 
     #[test]
     fn window_height_is_capped() {
-        assert_eq!(window_size(0), window_size(1));
         assert_eq!(
-            window_size(MAX_VISIBLE_ROWS),
-            window_size(MAX_VISIBLE_ROWS + 10)
+            window_size(0, BASE_FONT_SIZE),
+            window_size(1, BASE_FONT_SIZE)
         );
-        assert!(window_size(2).y > window_size(1).y);
         assert_eq!(
-            window_size(1).y,
+            window_size(MAX_VISIBLE_ROWS, BASE_FONT_SIZE),
+            window_size(MAX_VISIBLE_ROWS + 10, BASE_FONT_SIZE)
+        );
+        assert!(window_size(2, BASE_FONT_SIZE).y > window_size(1, BASE_FONT_SIZE).y);
+        assert_eq!(
+            window_size(1, BASE_FONT_SIZE).y,
             WINDOW_CHROME_HEIGHT + ROW_PITCH_HEIGHT + DPI_ROUNDING_GUARD
         );
+        // A bigger font widens the estimate; the height stays at the
+        // base-font estimate (widget minimums dominate it), and the
+        // setting range is clamped.
+        let bigger = window_size(2, PINNED_FONT_MAX);
+        let smaller = window_size(2, PINNED_FONT_MIN);
+        assert!(bigger.x > smaller.x && bigger.y >= smaller.y);
+        assert_eq!(window_size(1, 4.0), window_size(1, PINNED_FONT_MIN));
+        assert_eq!(window_size(1, 99.0), window_size(1, PINNED_FONT_MAX));
     }
 
     /// `window_size` is only a first-frame estimate — `render` fits the
@@ -937,7 +1011,6 @@ mod tests {
     /// If this drifts after an egui or font update, retune the constants.
     #[test]
     fn window_size_estimate_tracks_measured_layout() {
-        let ctx = egui::Context::default();
         let row = RowFeed {
             model_id: "m".into(),
             display_name: "Model A".into(),
@@ -953,34 +1026,41 @@ mod tests {
             discount_flash_at: None,
             last_change: None,
         };
-        let mut measured = Vec::new();
-        for pass in 0..3 {
-            let mut out = ctx.run_ui(egui::RawInput::default(), |ui| {
-                ui.set_max_width(WINDOW_WIDTH);
-                let mut remove = None;
-                let mut close_all = false;
-                if pass == 0 {
-                    measured.clear();
-                }
-                for n in 1..=4usize {
-                    let rows = vec![row.clone(); n];
-                    let (frame_height, _) = window_frame(
-                        ui,
-                        &rows,
-                        Some(Utc::now()),
-                        f32::INFINITY,
-                        &mut remove,
-                        &mut close_all,
-                    );
+        let measure = |font_size: f32| -> Vec<f32> {
+            let ctx = egui::Context::default();
+            let mut measured = Vec::new();
+            for pass in 0..3 {
+                let mut out = ctx.run_ui(egui::RawInput::default(), |ui| {
+                    ui.set_max_width(WINDOW_WIDTH * font_scale(font_size));
+                    let mut remove = None;
+                    let mut close_all = false;
                     if pass == 0 {
-                        measured.push(frame_height);
+                        measured.clear();
                     }
-                }
-            });
-            out.textures_delta.clear();
-        }
-        for (index, height) in measured.iter().enumerate() {
-            let estimate = window_size(index + 1).y - DPI_ROUNDING_GUARD;
+                    for n in 1..=4usize {
+                        let rows = vec![row.clone(); n];
+                        let (frame_height, _) = window_frame(
+                            ui,
+                            &rows,
+                            Some(Utc::now()),
+                            f32::INFINITY,
+                            font_size,
+                            &mut remove,
+                            &mut close_all,
+                        );
+                        if pass == 0 {
+                            measured.push(frame_height);
+                        }
+                    }
+                });
+                out.textures_delta.clear();
+            }
+            measured
+        };
+
+        let base = measure(BASE_FONT_SIZE);
+        for (index, height) in base.iter().enumerate() {
+            let estimate = window_size(index + 1, BASE_FONT_SIZE).y - DPI_ROUNDING_GUARD;
             assert!(
                 (estimate - height).abs() <= 8.0,
                 "rows {}: estimate {} vs measured {height}",
@@ -988,5 +1068,66 @@ mod tests {
                 estimate
             );
         }
+
+        // Off-base fonts: egui's minimum widget sizes (the × buttons) keep
+        // the real row height nearly flat across the 8–16 range, so the
+        // base-font height estimate should stay close at every size.
+        // `render` sizes the window from measurement, not this estimate, so
+        // the other property that matters is that the per-row pitch stays
+        // uniform — the scroll cap divides content height by row count.
+        for font in [PINNED_FONT_MIN, 12.0, PINNED_FONT_MAX] {
+            let measured = measure(font);
+            let pitches = measured.windows(2).map(|w| w[1] - w[0]).collect::<Vec<_>>();
+            for pitch in &pitches {
+                assert!(
+                    (pitch - pitches[0]).abs() <= 2.0,
+                    "font {font}: non-uniform row pitch {pitches:?}"
+                );
+            }
+            for (index, height) in measured.iter().enumerate() {
+                let estimate = window_size(index + 1, font).y - DPI_ROUNDING_GUARD;
+                assert!(
+                    (estimate - height).abs() <= 10.0,
+                    "font {font} rows {}: estimate {} vs measured {height}",
+                    index + 1,
+                    estimate
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn font_size_setting_flows_into_window_state() {
+        let ctx = egui::Context::default();
+        let mut settings = Settings::default();
+        let now = Utc::now();
+        let snap = snapshot_at(vec![test_quote("model-a", 1.0, true)], now);
+        let mut mgr = PriceWidgetManager::default();
+        mgr.spawn(&ctx, Some(&snap), &settings, "model-a", egui::Pos2::ZERO);
+        assert_eq!(
+            mgr.window
+                .as_ref()
+                .unwrap()
+                .shared
+                .lock()
+                .unwrap()
+                .font_size,
+            settings.pinned_price_font_size
+        );
+
+        settings.pinned_price_font_size = 14.0;
+        assert!(mgr.refresh(Some(&snap), &settings));
+        assert_eq!(
+            mgr.window
+                .as_ref()
+                .unwrap()
+                .shared
+                .lock()
+                .unwrap()
+                .font_size,
+            14.0
+        );
+        // Nothing left to change: the same settings report no delta.
+        assert!(!mgr.refresh(Some(&snap), &settings));
     }
 }

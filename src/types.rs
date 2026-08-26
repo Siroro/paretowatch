@@ -427,6 +427,9 @@ pub(crate) struct Settings {
     pub(crate) cache_read_weight: f64,
     pub(crate) output_weight: f64,
     pub(crate) alerts: Vec<AlertRule>,
+    /// Base text size for the floating Pinned Prices window; every size in
+    /// that window scales from it (10 is the original hard-coded look).
+    pub(crate) pinned_price_font_size: f32,
 }
 
 impl Default for Settings {
@@ -437,6 +440,7 @@ impl Default for Settings {
             cache_read_weight: 80.0,
             output_weight: 5.0,
             alerts: vec![],
+            pinned_price_font_size: 10.0,
         }
     }
 }

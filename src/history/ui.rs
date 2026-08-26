@@ -159,31 +159,36 @@ pub(crate) fn show(
 
     // Model catalog for pickers: everything the log has ever seen, plus
     // anything live in the current snapshot that history has not added yet.
-    let mut models: Vec<(String, String)> = Vec::new();
-    for slug in tracker.model_slugs() {
-        if let Some(s) = tracker.series(&slug) {
-            models.push((s.slug.clone(), s.display.clone()));
-        }
+    // Borrowed slugs plus a seen-set: no per-frame string clones or O(n·m)
+    // scans while the History tab repaints.
+    let mut models: Vec<(&str, &str)> = Vec::new();
+    let mut known: std::collections::HashSet<&str> = std::collections::HashSet::new();
+    for s in tracker.series_list() {
+        known.insert(s.slug.as_str());
+        models.push((s.slug.as_str(), s.display.as_str()));
     }
     if let Some(snap) = snapshot {
         for q in &snap.quotes {
-            if !models.iter().any(|(slug, _)| *slug == q.model) {
-                models.push((q.model.clone(), q.display_name.clone()));
+            if known.insert(q.model.as_str()) {
+                models.push((q.model.as_str(), q.display_name.as_str()));
             }
         }
     }
-    models.sort_by(|a, b| a.1.to_lowercase().cmp(&b.1.to_lowercase()));
+    models.sort_by_cached_key(|(_, display)| display.to_lowercase());
     if models.is_empty() {
         ui.label("History will start recording with the first data poll.");
         return;
     }
 
-    if state.selected.is_empty() {
-        state.selected.push(models[0].0.clone());
-    }
+    // Retain first, then re-default: a persisted selection whose models have
+    // all vanished (e.g. degraded history plus a restart) must never leave
+    // `selected` empty — `controls` indexes `[0]`.
     state
         .selected
         .retain(|slug| models.iter().any(|(m, _)| m == slug));
+    if state.selected.is_empty() {
+        state.selected.push(models[0].0.to_owned());
+    }
 
     let selected_before_controls = state.selected.clone();
     controls(ui, &models, state);
@@ -195,8 +200,8 @@ pub(crate) fn show(
     let display_of = |slug: &str| {
         models
             .iter()
-            .find(|(m, _)| m == slug)
-            .map(|(_, d)| d.clone())
+            .find(|(m, _)| *m == slug)
+            .map(|(_, d)| (*d).to_owned())
             .unwrap_or_else(|| slug.to_owned())
     };
 
@@ -205,15 +210,12 @@ pub(crate) fn show(
         let Some(series) = tracker.series(slug) else {
             continue;
         };
-        let Some(mut points) = raw_metric_series(series, state.metric, settings) else {
+        let Some(points) = windowed_metric_series(series, state.metric, settings, state.range, now)
+        else {
             continue;
         };
-        points = window(&points, state.range, now);
-        if points.is_empty() {
-            continue;
-        }
         let anchor = points[0].1;
-        let mut shown = points.clone();
+        let mut shown = points;
         if state.normalize && anchor.abs() > f64::EPSILON {
             for (_, v) in &mut shown {
                 *v = *v / anchor * 100.0;
@@ -243,27 +245,27 @@ pub(crate) fn show(
         return;
     }
 
-    chart(ui, &prepared, state, now);
+    chart(ui, &mut prepared, state, now);
     ui.add_space(6.0);
     event_log(ui, &prepared, state);
     footer(ui, tracker);
 }
 
-fn controls(ui: &mut egui::Ui, models: &[(String, String)], state: &mut HistoryUiState) {
+fn controls(ui: &mut egui::Ui, models: &[(&str, &str)], state: &mut HistoryUiState) {
     ui.horizontal_wrapped(|ui| {
         let selected_label = models
             .iter()
             .find(|(m, _)| *m == state.selected[0])
-            .map(|(_, d)| d.as_str())
+            .map(|(_, d)| *d)
             .unwrap_or("Select model");
         egui::ComboBox::from_id_salt("history_model")
             .selected_text(selected_label)
             .width(ui.available_width() * 0.4)
             .show_ui(ui, |ui| {
-                for (slug, display) in models {
-                    let is_selected = *slug == state.selected[0];
-                    ui.selectable_value(&mut state.selected[0], slug.clone(), display);
-                    if !is_selected && *slug == state.selected[0] {
+                for &(slug, display) in models {
+                    let is_selected = slug == state.selected[0];
+                    ui.selectable_value(&mut state.selected[0], slug.to_owned(), display);
+                    if !is_selected && slug == state.selected[0] {
                         state.reset_zoom = true;
                     }
                 }
@@ -277,11 +279,11 @@ fn controls(ui: &mut egui::Ui, models: &[(String, String)], state: &mut HistoryU
             .selected_text("+ compare")
             .width(150.0)
             .show_ui(ui, |ui| {
-                for (slug, display) in models {
-                    if state.selected.contains(slug) {
+                for &(slug, display) in models {
+                    if state.selected.iter().any(|s| s == slug) {
                         continue;
                     }
-                    ui.selectable_value(&mut pick, slug.clone(), display);
+                    ui.selectable_value(&mut pick, slug.to_owned(), display);
                 }
             });
         if !pick.is_empty() {
@@ -293,8 +295,8 @@ fn controls(ui: &mut egui::Ui, models: &[(String, String)], state: &mut HistoryU
             let display = models
                 .iter()
                 .find(|(m, _)| *m == slug)
-                .map(|(_, d)| d.clone())
-                .unwrap_or(slug);
+                .map(|(_, d)| *d)
+                .unwrap_or(slug.as_str());
             let chip = egui::Button::new(format!("{display} ×"))
                 .small()
                 .fill(egui::Color32::from_rgb(40, 46, 60));
@@ -358,30 +360,44 @@ fn controls(ui: &mut egui::Ui, models: &[(String, String)], state: &mut HistoryU
     });
 }
 
-fn raw_metric_series(
+/// Windowed change points for one metric. Direct metrics slice into their
+/// stored series (copying only the visible window); derived metrics are
+/// computed first and then windowed. Never clones the full stored history
+/// except for the "All" range, which is inherently fully visible.
+fn windowed_metric_series(
     series: &ModelSeries,
     metric: HistoryMetric,
     settings: &Settings,
+    range: HistoryRange,
+    now: DateTime<Utc>,
 ) -> Option<Vec<(f64, f64)>> {
-    let out = match metric {
-        HistoryMetric::Input => series.input.clone(),
-        HistoryMetric::Output => series.output.clone(),
-        HistoryMetric::CacheRead => series.cache_read.clone(),
-        HistoryMetric::Blended => blended_series(
-            series,
-            settings.input_weight,
-            settings.cache_read_weight,
-            settings.output_weight,
-        ),
-        HistoryMetric::Capability => series.capability.clone(),
-        HistoryMetric::Deployment => series.deployment.clone(),
-        HistoryMetric::VolumeDaily => series
-            .telemetry
-            .iter()
-            .map(|(ts, _, vol)| (*ts, *vol))
-            .collect(),
+    let derived;
+    let src: &[(f64, f64)] = match metric {
+        HistoryMetric::Input => &series.input,
+        HistoryMetric::Output => &series.output,
+        HistoryMetric::CacheRead => &series.cache_read,
+        HistoryMetric::Capability => &series.capability,
+        HistoryMetric::Deployment => &series.deployment,
+        HistoryMetric::Blended => {
+            derived = blended_series(
+                series,
+                settings.input_weight,
+                settings.cache_read_weight,
+                settings.output_weight,
+            );
+            &derived
+        }
+        HistoryMetric::VolumeDaily => {
+            derived = series
+                .telemetry
+                .iter()
+                .map(|(ts, _, vol)| (*ts, *vol))
+                .collect();
+            &derived
+        }
     };
-    (!out.is_empty()).then_some(out)
+    let points = window(src, range, now);
+    (!points.is_empty()).then_some(points)
 }
 
 /// Keeps points inside the window plus the last point before it as a
@@ -399,7 +415,7 @@ fn window(points: &[(f64, f64)], range: HistoryRange, now: DateTime<Utc>) -> Vec
 
 fn chart(
     ui: &mut egui::Ui,
-    prepared: &[PreparedSeries],
+    prepared: &mut [PreparedSeries],
     state: &mut HistoryUiState,
     now: DateTime<Utc>,
 ) {
@@ -464,7 +480,7 @@ fn chart(
                 let mut x_max = f64::MIN;
                 let mut y_min = f64::MAX;
                 let mut y_max = f64::MIN;
-                for s in prepared {
+                for s in &*prepared {
                     for [x, y] in &s.steps {
                         x_min = x_min.min(*x);
                         x_max = x_max.max(*x);
@@ -506,11 +522,14 @@ fn chart(
                         .width(1.0),
                 );
             }
-            for s in prepared {
+            for s in &mut *prepared {
                 plot_ui.line(
-                    Line::new(s.name.clone(), PlotPoints::from(s.steps.clone()))
-                        .color(s.color)
-                        .width(2.0),
+                    Line::new(
+                        s.name.clone(),
+                        PlotPoints::from(std::mem::take(&mut s.steps)),
+                    )
+                    .color(s.color)
+                    .width(2.0),
                 );
                 if let Some(x) = hover_x {
                     if let Some((_, v)) = nearest_at_or_before(&s.points, x) {
@@ -530,7 +549,7 @@ fn chart(
             response.response.on_hover_ui(|ui| {
                 ui.vertical(|ui| {
                     ui.strong(format_time_utc(x));
-                    for s in prepared {
+                    for s in &*prepared {
                         match nearest_at_or_before(&s.points, x) {
                             Some((ts, v)) => {
                                 let prev =
@@ -555,7 +574,7 @@ fn chart(
             });
         }
     }
-    *ui.style_mut() = (*saved_style).clone();
+    ui.set_style(saved_style);
 }
 
 fn series_tooltip_row(
