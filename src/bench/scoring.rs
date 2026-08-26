@@ -4,13 +4,13 @@
 
 use std::collections::HashMap;
 
+use super::{benchmarks_for_source, collapse_benchmark_rows};
 use crate::artificial_analysis_snapshot::INHERITED_EXECUTION_MODES;
 use crate::bench::matching::{benchmark_model_key, best_benchmark_match};
 use crate::types::{
-    Benchmark, BenchmarkKind, BenchmarkSource, ComparisonMode, CompositeFlavor, Quote,
-    HARNESS_DEMOTION_FACTOR,
+    Benchmark, BenchmarkKind, BenchmarkSource, ComparisonMode, CompositeFlavor,
+    HARNESS_DEMOTION_FACTOR, Quote,
 };
-use super::{benchmarks_for_source, collapse_benchmark_rows};
 
 /// Percentile ranks are only comparable across sources when they are computed
 /// against comparable model populations. Each leaderboard covers a different
@@ -61,8 +61,8 @@ pub(crate) fn calibrated_aa_percentile(score: f64) -> f64 {
 
 /// Total base weight of the agentic (non-AA) sources that can contribute
 /// evidence on top of the AA prior: rebench .20 + TB3 .15 + DeepSWE .15 +
-/// LiveBench .10 + SWE-bench Live .075 + Revelo .05 + Verified .025.
-pub(crate) const AGENTIC_EVIDENCE_TOTAL_WEIGHT: f64 = 0.75;
+/// LiveBench .10 + Revelo .05.
+pub(crate) const AGENTIC_EVIDENCE_TOTAL_WEIGHT: f64 = 0.65;
 
 /// Weight of the AA prior inside the posterior. Small on purpose: among the
 /// frontier models this chart actually compares, AA is a weak discriminator
@@ -185,9 +185,19 @@ pub(crate) fn tie_aware_percentiles(
     let n = ranked.len();
     let mut map = HashMap::new();
     for (index, (key, score)) in ranked.iter().enumerate() {
-        let first = ranked.iter().position(|(_, s)| (*s - *score).abs() <= 1e-9).unwrap_or(index);
-        let last = ranked.iter().rposition(|(_, s)| (*s - *score).abs() <= 1e-9).unwrap_or(index);
-        let pct = if n <= 1 { 100.0 } else { ((first + last) as f64 / 2.0) / (n as f64 - 1.0) * 100.0 };
+        let first = ranked
+            .iter()
+            .position(|(_, s)| (*s - *score).abs() <= 1e-9)
+            .unwrap_or(index);
+        let last = ranked
+            .iter()
+            .rposition(|(_, s)| (*s - *score).abs() <= 1e-9)
+            .unwrap_or(index);
+        let pct = if n <= 1 {
+            100.0
+        } else {
+            ((first + last) as f64 / 2.0) / (n as f64 - 1.0) * 100.0
+        };
         map.insert(key.clone(), pct);
     }
     (map, n)
@@ -220,9 +230,14 @@ pub(crate) fn anchored_aa_percentiles(
     sorted.sort_by(|a, b| a.total_cmp(b));
     let total = n + 1;
     for (key, score) in all {
-        if map.contains_key(&key) { continue; }
+        if map.contains_key(&key) {
+            continue;
+        }
         let less = sorted.iter().filter(|s| **s < score - 1e-9).count();
-        let equal = sorted.iter().filter(|s| (**s - score).abs() <= 1e-9).count();
+        let equal = sorted
+            .iter()
+            .filter(|s| (**s - score).abs() <= 1e-9)
+            .count();
         // Tie-aware midpoint of the newcomer's slot within cohort + itself.
         let first = less + 1;
         let last = less + equal + 1;
@@ -321,16 +336,11 @@ pub(crate) fn composite_weight_factor(source: BenchmarkSource, flavor: Composite
     }
 }
 
-/// Sources whose models define the AA prior's anchored cohort. SWE-bench
-/// Verified is excluded: it is the explicitly-legacy board (180 rows of
-/// mostly superseded models), and letting it contribute would drag 100+
-/// legacy AA models into the "elite cohort", inflating every prior and
-/// every insertion rank computed against it.
+/// Sources whose models define the AA prior's anchored cohort. The AA board
+/// itself is excluded: the prior cannot anchor against its own population,
+/// which spans hundreds of models the agentic boards never evaluate.
 pub(crate) fn prior_cohort_source(source: BenchmarkSource) -> bool {
-    !matches!(
-        source,
-        BenchmarkSource::ArtificialAnalysisSnapshot | BenchmarkSource::SWEBenchVerified
-    )
+    !matches!(source, BenchmarkSource::ArtificialAnalysisSnapshot)
 }
 
 pub(crate) fn build_agentic_composite(
@@ -363,13 +373,12 @@ pub(crate) fn build_agentic_composite(
         (BenchmarkSource::TerminalBench3, 0.15_f64),
         (BenchmarkSource::DeepSWE11, 0.15_f64),
         (BenchmarkSource::LiveBench, 0.10_f64),
-        (BenchmarkSource::SWEBenchLive, 0.075_f64),
         (BenchmarkSource::ReveloCodeIndex, 0.05_f64),
-        (BenchmarkSource::SWEBenchVerified, 0.025_f64),
     ];
     let aliases = execution_mode_aliases();
 
-    let mut source_scores: HashMap<BenchmarkSource, HashMap<String, (Benchmark, f64)>> = HashMap::new();
+    let mut source_scores: HashMap<BenchmarkSource, HashMap<String, (Benchmark, f64)>> =
+        HashMap::new();
     for (source, _) in weights {
         let source_mode = if source == BenchmarkSource::ArtificialAnalysisSnapshot {
             ComparisonMode::ModelCapability
@@ -384,7 +393,9 @@ pub(crate) fn build_agentic_composite(
         let collapsed = benchmarks_for_source(source, sets, source_mode, common_scaffold);
         let mut by_model: HashMap<String, (Benchmark, f64)> = HashMap::new();
         for row in collapsed {
-            let Some(score) = row.agentic_coding else { continue };
+            let Some(score) = row.agentic_coding else {
+                continue;
+            };
             let key = benchmark_model_key(&row.slug);
             if !key.is_empty() && score.is_finite() {
                 by_model.insert(key, (row, score));
@@ -439,9 +450,16 @@ pub(crate) fn build_agentic_composite(
     let mut percentiles: HashMap<BenchmarkSource, HashMap<String, f64>> = HashMap::new();
     let mut populations: HashMap<BenchmarkSource, usize> = HashMap::new();
     for (source, _) in weights {
-        if source == BenchmarkSource::ArtificialAnalysisSnapshot { continue; }
-        let Some(rows) = source_scores.get(&source) else { continue };
-        let (map, population) = tie_aware_percentiles(rows.iter().map(|(k, (_, s))| (k.clone(), *s)), anchor.as_ref());
+        if source == BenchmarkSource::ArtificialAnalysisSnapshot {
+            continue;
+        }
+        let Some(rows) = source_scores.get(&source) else {
+            continue;
+        };
+        let (map, population) = tie_aware_percentiles(
+            rows.iter().map(|(k, (_, s))| (k.clone(), *s)),
+            anchor.as_ref(),
+        );
         let map = calibrate_percentiles_to_field_quality(&map, aa_prior_percentiles.as_ref());
         percentiles.insert(source, map);
         populations.insert(source, population);
@@ -461,9 +479,20 @@ pub(crate) fn build_agentic_composite(
         let mut task_profile: Option<(f64, String)> = None;
 
         for (source, base_weight) in weights {
-            if source == BenchmarkSource::ArtificialAnalysisSnapshot { continue; }
-            let Some((row, raw_score)) = source_scores.get(&source).and_then(|rows| rows.get(&key)) else { continue };
-            let Some(percentile) = percentiles.get(&source).and_then(|rows| rows.get(&key)).copied() else { continue };
+            if source == BenchmarkSource::ArtificialAnalysisSnapshot {
+                continue;
+            }
+            let Some((row, raw_score)) = source_scores.get(&source).and_then(|rows| rows.get(&key))
+            else {
+                continue;
+            };
+            let Some(percentile) = percentiles
+                .get(&source)
+                .and_then(|rows| rows.get(&key))
+                .copied()
+            else {
+                continue;
+            };
             // Precision weighting: the hand-tuned base weight encodes construct
             // relevance and flavor trust; the population factor encodes how
             // sharply this board's percentile scale can actually distinguish
@@ -473,12 +502,19 @@ pub(crate) fn build_agentic_composite(
                 * composite_weight_factor(source, flavor)
                 * population_factor(population);
             contribs.push((source, weight, base_weight, percentile, *raw_score));
-            if representative.is_none() { representative = Some(row.clone()); }
+            if representative.is_none() {
+                representative = Some(row.clone());
+            }
             if task_profile.is_none() {
-                if let Some(tokens) = row.tokens_per_task.filter(|tokens| tokens.is_finite() && *tokens > 0.0) {
+                if let Some(tokens) = row
+                    .tokens_per_task
+                    .filter(|tokens| tokens.is_finite() && *tokens > 0.0)
+                {
                     task_profile = Some((
                         tokens,
-                        row.token_profile.clone().unwrap_or_else(|| source.short_label().to_owned()),
+                        row.token_profile
+                            .clone()
+                            .unwrap_or_else(|| source.short_label().to_owned()),
                     ));
                 }
             }
@@ -491,7 +527,9 @@ pub(crate) fn build_agentic_composite(
         // the evaluated set). The broad calibration curve enters only in the
         // pure-AA world (no board cohort exists yet): there it is the only
         // scale in play, so it stays self-consistent.
-        let anchored_prior = aa_prior_percentiles.as_ref().and_then(|rows| rows.get(&key).copied());
+        let anchored_prior = aa_prior_percentiles
+            .as_ref()
+            .and_then(|rows| rows.get(&key).copied());
         let pure_aa_prior = if aa_prior_percentiles.is_none() && contribs.is_empty() {
             source_scores
                 .get(&BenchmarkSource::ArtificialAnalysisSnapshot)
@@ -507,12 +545,18 @@ pub(crate) fn build_agentic_composite(
         let mut prior_weight = PRIOR_WEIGHT;
         let mut missing_boards = 0usize;
         for (source, base_weight) in weights {
-            if source == BenchmarkSource::ArtificialAnalysisSnapshot { continue; }
-            if contribs.iter().any(|(s, ..)| *s == source) { continue; }
+            if source == BenchmarkSource::ArtificialAnalysisSnapshot {
+                continue;
+            }
+            if contribs.iter().any(|(s, ..)| *s == source) {
+                continue;
+            }
             // Only loaded boards count: a feed with no rows is missing for
             // every model equally and adds no per-model information.
             let population = populations.get(&source).copied().unwrap_or(0);
-            if population == 0 { continue; }
+            if population == 0 {
+                continue;
+            }
             prior_weight += base_weight
                 * composite_weight_factor(source, flavor)
                 * population_factor(population)
@@ -520,7 +564,9 @@ pub(crate) fn build_agentic_composite(
             missing_boards += 1;
         }
 
-        if anchored_prior.is_none() && pure_aa_prior.is_none() && contribs.is_empty() { continue; }
+        if anchored_prior.is_none() && pure_aa_prior.is_none() && contribs.is_empty() {
+            continue;
+        }
 
         // Robust precision-weighted posterior:
         //   score = (prior_w·prior + Σ wᵢ·pctᵢ) / (prior_w + Σ wᵢ)
@@ -554,9 +600,12 @@ pub(crate) fn build_agentic_composite(
         // Tier reflects how much real information the agentic universe reported
         // on this model: coverage counts population-scaled weight, so a single
         // 1-row board is nearly no coverage at all (the prior does not count).
-        let covered_base: f64 = contribs.iter().map(|(source, _, base, _, _)| {
-            base * population_factor(populations.get(source).copied().unwrap_or(0))
-        }).sum();
+        let covered_base: f64 = contribs
+            .iter()
+            .map(|(source, _, base, _, _)| {
+                base * population_factor(populations.get(source).copied().unwrap_or(0))
+            })
+            .sum();
         let coverage = (covered_base / AGENTIC_EVIDENCE_TOTAL_WEIGHT).min(1.0);
         // Confidence scales with coverage: zero-board models keep the
         // historical ZERO_EVIDENCE_CONFIDENCE discount; partial coverage gets
@@ -577,7 +626,8 @@ pub(crate) fn build_agentic_composite(
         };
 
         for (index, (source, _, _, _, raw_score)) in contribs.iter().enumerate() {
-            let downweighted = robust_w[index] < contribs[index].1 * DOWNWEIGHT_DISCLOSURE_THRESHOLD;
+            let downweighted =
+                robust_w[index] < contribs[index].1 * DOWNWEIGHT_DISCLOSURE_THRESHOLD;
             parts.push(if downweighted {
                 format!("{} {:.1} (downweighted)", source.short_label(), raw_score)
             } else {
@@ -600,7 +650,10 @@ pub(crate) fn build_agentic_composite(
         });
         representative.slug = key;
         let pending = if missing_boards > 0 {
-            format!(" · {missing_boards} board{} pending", if missing_boards == 1 { "" } else { "s" })
+            format!(
+                " · {missing_boards} board{} pending",
+                if missing_boards == 1 { "" } else { "s" }
+            )
         } else {
             String::new()
         };
@@ -624,7 +677,11 @@ pub(crate) fn build_agentic_composite(
         }
         out.push(representative);
     }
-    out.sort_by(|a, b| b.agentic_coding.unwrap_or_default().total_cmp(&a.agentic_coding.unwrap_or_default()));
+    out.sort_by(|a, b| {
+        b.agentic_coding
+            .unwrap_or_default()
+            .total_cmp(&a.agentic_coding.unwrap_or_default())
+    });
     out
 }
 
@@ -677,7 +734,9 @@ pub(crate) fn benchmark_consensus_for_quote(
     let mut keyed_by_source: HashMap<BenchmarkSource, Vec<(String, f64)>> = HashMap::new();
     for source in BenchmarkSource::consensus_sources() {
         let rows = benchmarks_for_source(source, sets, mode, common_scaffold);
-        if rows.is_empty() { continue; }
+        if rows.is_empty() {
+            continue;
+        }
         let keyed: Vec<(String, f64)> = rows
             .iter()
             .filter_map(|row| {
@@ -705,19 +764,31 @@ pub(crate) fn benchmark_consensus_for_quote(
 
     let mut entries = Vec::new();
     for source in BenchmarkSource::consensus_sources() {
-        let Some(rows) = rows_by_source.get(&source) else { continue };
-        let Some(keyed) = keyed_by_source.get(&source) else { continue };
-        let Some(matched) = best_benchmark_match(quote, rows) else { continue };
-        let Some(score) = matched.agentic_coding else { continue };
+        let Some(rows) = rows_by_source.get(&source) else {
+            continue;
+        };
+        let Some(keyed) = keyed_by_source.get(&source) else {
+            continue;
+        };
+        let Some(matched) = best_benchmark_match(quote, rows) else {
+            continue;
+        };
+        let Some(score) = matched.agentic_coding else {
+            continue;
+        };
         let matched_key = benchmark_model_key(&matched.slug);
-        let (percentiles, raw_percentile, population) = if source == BenchmarkSource::ArtificialAnalysisSnapshot {
+        let (percentiles, raw_percentile, population) = if source
+            == BenchmarkSource::ArtificialAnalysisSnapshot
+        {
             match &aa_ranked {
                 Some((map, n)) => (map.clone(), None, *n),
                 // Anchored cohort too small: fall back to the calibration
                 // curve, whose percentile carries no rank meaning, so show
                 // the raw snapshot population for honest totals.
                 None => {
-                    let Some(keyed) = keyed_by_source.get(&source) else { continue };
+                    let Some(keyed) = keyed_by_source.get(&source) else {
+                        continue;
+                    };
                     (
                         keyed
                             .iter()
@@ -733,10 +804,13 @@ pub(crate) fn benchmark_consensus_for_quote(
             // Same field-quality calibration the composite weighs, so the
             // grid's board percentiles agree with what actually moved the
             // score. Rank stays the raw position in the field.
-            let calibrated = calibrate_percentiles_to_field_quality(&raw, aa_ranked.as_ref().map(|(m, _)| m));
+            let calibrated =
+                calibrate_percentiles_to_field_quality(&raw, aa_ranked.as_ref().map(|(m, _)| m));
             (calibrated, raw.get(&matched_key).copied(), population)
         };
-        let Some(percentile) = percentiles.get(&matched_key).copied() else { continue };
+        let Some(percentile) = percentiles.get(&matched_key).copied() else {
+            continue;
+        };
         // Rank/total must describe the SAME population the percentile was
         // computed over (the anchored cohort when anchoring applied), not the
         // raw board size — "#3/130" next to an anchored percentile is two
@@ -764,10 +838,10 @@ pub(crate) fn benchmark_consensus_for_quote(
             benchmark_name,
         });
     }
-    if entries.is_empty() { return None; }
-    Some(BenchmarkConsensus {
-        entries,
-    })
+    if entries.is_empty() {
+        return None;
+    }
+    Some(BenchmarkConsensus { entries })
 }
 
 #[cfg(test)]
@@ -781,103 +855,227 @@ mod tests {
 
     #[test]
     fn composite_prefers_fresh_agentic_sources_and_discloses_method() {
-        let mk = |name: &str, score: f64| score_benchmark(name, score, None, None, BenchmarkKind::Model);
+        let mk =
+            |name: &str, score: f64| score_benchmark(name, score, None, None, BenchmarkKind::Model);
         let mut sets = HashMap::new();
-        sets.insert(BenchmarkSource::SWERebench, vec![mk("GPT-5.6 Sol", 62.3), mk("GLM-5.3", 50.0)]);
-        sets.insert(BenchmarkSource::TerminalBench3, vec![mk("GPT-5.6 Sol", 34.6), mk("GLM-5.3", 28.3)]);
-        sets.insert(BenchmarkSource::DeepSWE11, vec![mk("GPT-5.6 Sol", 72.7), mk("GLM-5.3", 66.9)]);
-        sets.insert(BenchmarkSource::LiveBench, vec![mk("GPT-5.6 Sol", 70.0), mk("GLM-5.3", 80.0)]);
-        sets.insert(BenchmarkSource::SWEBenchLive, vec![mk("GPT-5.6 Sol", 55.0), mk("GLM-5.3", 45.0)]);
-        let composite = build_agentic_composite(&sets, ComparisonMode::ModelCapability, "mini-SWE-agent", CompositeFlavor::Capability);
-        let sol = composite.iter().find(|b| benchmark_model_key(&b.slug) == "gpt 5 6 sol").unwrap();
-        let glm = composite.iter().find(|b| benchmark_model_key(&b.slug) == "glm 5 3").unwrap();
+        sets.insert(
+            BenchmarkSource::SWERebench,
+            vec![mk("GPT-5.6 Sol", 62.3), mk("GLM-5.3", 50.0)],
+        );
+        sets.insert(
+            BenchmarkSource::TerminalBench3,
+            vec![mk("GPT-5.6 Sol", 34.6), mk("GLM-5.3", 28.3)],
+        );
+        sets.insert(
+            BenchmarkSource::DeepSWE11,
+            vec![mk("GPT-5.6 Sol", 72.7), mk("GLM-5.3", 66.9)],
+        );
+        sets.insert(
+            BenchmarkSource::LiveBench,
+            vec![mk("GPT-5.6 Sol", 70.0), mk("GLM-5.3", 80.0)],
+        );
+        let composite = build_agentic_composite(
+            &sets,
+            ComparisonMode::ModelCapability,
+            "mini-SWE-agent",
+            CompositeFlavor::Capability,
+        );
+        let sol = composite
+            .iter()
+            .find(|b| benchmark_model_key(&b.slug) == "gpt 5 6 sol")
+            .unwrap();
+        let glm = composite
+            .iter()
+            .find(|b| benchmark_model_key(&b.slug) == "glm 5 3")
+            .unwrap();
         assert!(sol.agentic_coding.unwrap() > glm.agentic_coding.unwrap());
         // The method must stay disclosed in the row name.
-        assert!(sol.name.contains("measured"), "missing measured disclosure: {}", sol.name);
-        assert!(sol.name.contains("adjusted"), "missing adjusted disclosure: {}", sol.name);
-        assert!(sol.name.contains("prior"), "missing prior disclosure: {}", sol.name);
+        assert!(
+            sol.name.contains("measured"),
+            "missing measured disclosure: {}",
+            sol.name
+        );
+        assert!(
+            sol.name.contains("adjusted"),
+            "missing adjusted disclosure: {}",
+            sol.name
+        );
+        assert!(
+            sol.name.contains("prior"),
+            "missing prior disclosure: {}",
+            sol.name
+        );
     }
 
     #[test]
     fn sparse_evidence_stays_near_neutral_and_broad_coverage_approaches_measured() {
-        let mk = |name: &str, score: f64| score_benchmark(name, score, None, None, BenchmarkKind::Model);
+        let mk =
+            |name: &str, score: f64| score_benchmark(name, score, None, None, BenchmarkKind::Model);
         let mut sets = HashMap::new();
         // Lone wolf: one strong-looking result on a tiny board plus a middling
         // AA score. No anchored AA cohort exists (one board model), so the
         // calibrated broad-scale AA percentile may NOT enter the posterior —
         // the neutral prior is the only scale-safe anchor.
-        sets.insert(BenchmarkSource::ArtificialAnalysisSnapshot, vec![mk("Lucky", 42.0)]);
+        sets.insert(
+            BenchmarkSource::ArtificialAnalysisSnapshot,
+            vec![mk("Lucky", 42.0)],
+        );
         sets.insert(BenchmarkSource::ReveloCodeIndex, vec![mk("Lucky", 19.6)]);
-        let composite = build_agentic_composite(&sets, ComparisonMode::ModelCapability, "", CompositeFlavor::Capability);
-        let lucky = composite.iter().find(|b| benchmark_model_key(&b.slug) == "lucky").unwrap();
+        let composite = build_agentic_composite(
+            &sets,
+            ComparisonMode::ModelCapability,
+            "",
+            CompositeFlavor::Capability,
+        );
+        let lucky = composite
+            .iter()
+            .find(|b| benchmark_model_key(&b.slug) == "lucky")
+            .unwrap();
         let lucky_score = lucky.agentic_coding.unwrap();
         assert!(lucky.name.contains("sparse evidence"), "{}", lucky.name);
         // The 1-row Revelo board's 100th percentile carries almost no precision
         // (population factor), so the score must stay near the neutral prior
         // instead of riding the tiny board.
-        assert!(lucky_score > 50.0, "score {lucky_score} should sit above the neutral prior but close");
-        assert!(lucky_score < 55.0, "score {lucky_score} rode the tiny board: {}", lucky.name);
+        assert!(
+            lucky_score > 50.0,
+            "score {lucky_score} should sit above the neutral prior but close"
+        );
+        assert!(
+            lucky_score < 55.0,
+            "score {lucky_score} rode the tiny board: {}",
+            lucky.name
+        );
         assert!(lucky.name.contains("prior neutral 50th"), "{}", lucky.name);
-    
+
         // Broad agentic coverage dominates the neutral prior: the adjusted
         // score must lie between the prior and the measured mean, and land
         // reasonably close to the measurement (fixture boards are tiny, so the
         // population damping keeps the prior's share larger than in production).
         let mut full = HashMap::new();
-        full.insert(BenchmarkSource::ArtificialAnalysisSnapshot, vec![mk("Steady", 53.0)]);
-        full.insert(BenchmarkSource::SWERebench, vec![mk("Steady", 50.0), mk("r2", 55.0), mk("r3", 48.0)]);
-        full.insert(BenchmarkSource::TerminalBench3, vec![mk("Steady", 30.0), mk("t2", 28.0), mk("t3", 22.0)]);
-        full.insert(BenchmarkSource::DeepSWE11, vec![mk("Steady", 55.0), mk("d2", 44.0), mk("d3", 40.0)]);
-        full.insert(BenchmarkSource::LiveBench, vec![mk("Steady", 56.2), mk("l2", 52.0), mk("l3", 47.0)]);
-        full.insert(BenchmarkSource::SWEBenchLive, vec![mk("Steady", 55.0), mk("s2", 45.0), mk("s3", 40.0)]);
-        let composite = build_agentic_composite(&full, ComparisonMode::ModelCapability, "", CompositeFlavor::Capability);
-        let steady = composite.iter().find(|b| benchmark_model_key(&b.slug) == "steady").unwrap();
+        full.insert(
+            BenchmarkSource::ArtificialAnalysisSnapshot,
+            vec![mk("Steady", 53.0)],
+        );
+        full.insert(
+            BenchmarkSource::SWERebench,
+            vec![mk("Steady", 50.0), mk("r2", 55.0), mk("r3", 48.0)],
+        );
+        full.insert(
+            BenchmarkSource::TerminalBench3,
+            vec![mk("Steady", 30.0), mk("t2", 28.0), mk("t3", 22.0)],
+        );
+        full.insert(
+            BenchmarkSource::DeepSWE11,
+            vec![mk("Steady", 55.0), mk("d2", 44.0), mk("d3", 40.0)],
+        );
+        full.insert(
+            BenchmarkSource::LiveBench,
+            vec![mk("Steady", 56.2), mk("l2", 52.0), mk("l3", 47.0)],
+        );
+        let composite = build_agentic_composite(
+            &full,
+            ComparisonMode::ModelCapability,
+            "",
+            CompositeFlavor::Capability,
+        );
+        let steady = composite
+            .iter()
+            .find(|b| benchmark_model_key(&b.slug) == "steady")
+            .unwrap();
         // Fixture boards have only 3-4 rows each, so population-scaled coverage
         // caps at "moderate" here; real boards (30+ rows) reach strong.
         assert!(steady.name.contains("moderate evidence"), "{}", steady.name);
         let steady_score = steady.agentic_coding.unwrap();
-        let measured = steady.name.split("measured ").nth(1)
+        let measured = steady
+            .name
+            .split("measured ")
+            .nth(1)
             .and_then(|rest| rest.split(' ').next())
             .and_then(|v| v.parse::<f64>().ok())
             .unwrap();
-        assert!(50.0 - 1e-9 <= steady_score && steady_score <= measured + 1e-9, "adjusted {steady_score} outside [50, {measured}]");
-        assert!((steady_score - measured).abs() < 20.0, "adjusted {steady_score} strayed from measured {measured}");
+        assert!(
+            50.0 - 1e-9 <= steady_score && steady_score <= measured + 1e-9,
+            "adjusted {steady_score} outside [50, {measured}]"
+        );
+        assert!(
+            (steady_score - measured).abs() < 20.0,
+            "adjusted {steady_score} strayed from measured {measured}"
+        );
     }
 
     #[test]
     fn lucky_sparse_board_never_beats_dominant_broader_evidence() {
-        let mk = |name: &str, score: f64| score_benchmark(name, score, None, None, BenchmarkKind::Model);
+        let mk =
+            |name: &str, score: f64| score_benchmark(name, score, None, None, BenchmarkKind::Model);
         let mut sets = HashMap::new();
         // HY3-shaped: weaker AA, elite-looking on one small board, nothing else.
-        sets.insert(BenchmarkSource::ArtificialAnalysisSnapshot, vec![mk("Lucky", 42.0), mk("Dominant", 53.0)]);
+        sets.insert(
+            BenchmarkSource::ArtificialAnalysisSnapshot,
+            vec![mk("Lucky", 42.0), mk("Dominant", 53.0)],
+        );
         sets.insert(
             BenchmarkSource::ReveloCodeIndex,
-            vec![mk("Lucky", 19.6), mk("Dominant", 30.8), mk("f1", 12.0), mk("f2", 10.0), mk("f3", 8.0), mk("f4", 6.0)],
+            vec![
+                mk("Lucky", 19.6),
+                mk("Dominant", 30.8),
+                mk("f1", 12.0),
+                mk("f2", 10.0),
+                mk("f3", 8.0),
+                mk("f4", 6.0),
+            ],
         );
         // GLM-5.2-shaped: stronger everywhere they overlap, broader coverage,
         // including one weak harness result that robustness must downweight.
         sets.insert(
             BenchmarkSource::SWERebench,
-            vec![mk("Dominant", 62.9), mk("f1", 60.0), mk("f2", 58.0), mk("f3", 55.0), mk("f4", 52.0)],
+            vec![
+                mk("Dominant", 62.9),
+                mk("f1", 60.0),
+                mk("f2", 58.0),
+                mk("f3", 55.0),
+                mk("f4", 52.0),
+            ],
         );
-        sets.insert(BenchmarkSource::TerminalBench3, vec![mk("Dominant", 4.6), mk("f1", 30.0), mk("f2", 26.0)]);
-        sets.insert(BenchmarkSource::DeepSWE11, vec![mk("Dominant", 43.8), mk("f1", 42.0), mk("f2", 38.0)]);
-        sets.insert(BenchmarkSource::LiveBench, vec![mk("Dominant", 51.8), mk("f1", 50.0), mk("f2", 45.0)]);
-        let composite = build_agentic_composite(&sets, ComparisonMode::ModelCapability, "", CompositeFlavor::Capability);
-        let lucky_row = composite.iter().find(|b| benchmark_model_key(&b.slug) == "lucky").unwrap();
-        let dominant_row = composite.iter().find(|b| benchmark_model_key(&b.slug) == "dominant").unwrap();
+        sets.insert(
+            BenchmarkSource::TerminalBench3,
+            vec![mk("Dominant", 4.6), mk("f1", 30.0), mk("f2", 26.0)],
+        );
+        sets.insert(
+            BenchmarkSource::DeepSWE11,
+            vec![mk("Dominant", 43.8), mk("f1", 42.0), mk("f2", 38.0)],
+        );
+        sets.insert(
+            BenchmarkSource::LiveBench,
+            vec![mk("Dominant", 51.8), mk("f1", 50.0), mk("f2", 45.0)],
+        );
+        let composite = build_agentic_composite(
+            &sets,
+            ComparisonMode::ModelCapability,
+            "",
+            CompositeFlavor::Capability,
+        );
+        let lucky_row = composite
+            .iter()
+            .find(|b| benchmark_model_key(&b.slug) == "lucky")
+            .unwrap();
+        let dominant_row = composite
+            .iter()
+            .find(|b| benchmark_model_key(&b.slug) == "dominant")
+            .unwrap();
         let lucky = lucky_row.agentic_coding.unwrap();
         let dominant = dominant_row.agentic_coding.unwrap();
         assert!(
             dominant > lucky,
             "dominant broad evidence ({dominant}) must outrank lucky sparse evidence ({lucky})\nLucky: {}\nDominant: {}",
-            lucky_row.name, dominant_row.name,
+            lucky_row.name,
+            dominant_row.name,
         );
     }
 
     #[test]
     fn execution_mode_sku_inherits_base_variant_rows() {
-        let mk = |name: &str, score: f64| score_benchmark(name, score, None, None, BenchmarkKind::Model);
+        let mk =
+            |name: &str, score: f64| score_benchmark(name, score, None, None, BenchmarkKind::Model);
         let mut sets = HashMap::new();
         sets.insert(
             BenchmarkSource::ArtificialAnalysisSnapshot,
@@ -888,9 +1086,20 @@ mod tests {
             BenchmarkSource::SWERebench,
             vec![mk("gpt-5.6-sol", 62.3), mk("f1", 55.0), mk("f2", 48.0)],
         );
-        let composite = build_agentic_composite(&sets, ComparisonMode::ModelCapability, "", CompositeFlavor::Capability);
-        let base = composite.iter().find(|b| benchmark_model_key(&b.slug) == "gpt 5 6 sol").unwrap();
-        let pro = composite.iter().find(|b| benchmark_model_key(&b.slug) == "gpt 5 6 sol pro").unwrap();
+        let composite = build_agentic_composite(
+            &sets,
+            ComparisonMode::ModelCapability,
+            "",
+            CompositeFlavor::Capability,
+        );
+        let base = composite
+            .iter()
+            .find(|b| benchmark_model_key(&b.slug) == "gpt 5 6 sol")
+            .unwrap();
+        let pro = composite
+            .iter()
+            .find(|b| benchmark_model_key(&b.slug) == "gpt 5 6 sol pro")
+            .unwrap();
         // Same weights, same inherited evidence -> identical rating.
         assert!(
             (base.agentic_coding.unwrap() - pro.agentic_coding.unwrap()).abs() < 1e-9,
@@ -898,29 +1107,80 @@ mod tests {
             pro.agentic_coding.unwrap(),
             base.agentic_coding.unwrap()
         );
-        assert!(pro.name.contains("SWE-rebench 62.3"), "pro did not inherit the base row: {}", pro.name);
+        assert!(
+            pro.name.contains("SWE-rebench 62.3"),
+            "pro did not inherit the base row: {}",
+            pro.name
+        );
     }
 
     #[test]
     fn capability_composite_demotes_harness_rows_but_deployment_does_not() {
-        let mk = |name: &str, score: f64| score_benchmark(name, score, None, None, BenchmarkKind::Model);
+        let mk =
+            |name: &str, score: f64| score_benchmark(name, score, None, None, BenchmarkKind::Model);
         let mut sets = HashMap::new();
         // Model-level boards love Alpha, harness boards hate it; Beta mirrors.
         // Alpha tops LiveBench, is mid on Terminal-Bench, and bottoms DeepSWE —
         // enough signal for capability weighting to lift him past neutral while
         // deployment weighting (LiveBench demoted, harness full) sinks him.
-        sets.insert(BenchmarkSource::ArtificialAnalysisSnapshot, vec![mk("Alpha", 90.0), mk("Beta", 40.0)]);
-        sets.insert(BenchmarkSource::LiveBench, vec![mk("Alpha", 88.0), mk("Beta", 42.0)]);
-        sets.insert(BenchmarkSource::TerminalBench3, vec![mk("Alpha", 28.0), mk("Beta", 80.0), mk("f1", 30.0), mk("f2", 15.0)]);
-        sets.insert(BenchmarkSource::DeepSWE11, vec![mk("Alpha", 10.0), mk("Beta", 78.0), mk("f1", 60.0)]);
-        let cap = build_agentic_composite(&sets, ComparisonMode::ModelCapability, "", CompositeFlavor::Capability);
-        let dep = build_agentic_composite(&sets, ComparisonMode::ModelCapability, "", CompositeFlavor::Deployment);
-        let cap_a = cap.iter().find(|b| benchmark_model_key(&b.slug) == "alpha").unwrap().agentic_coding.unwrap();
-        let dep_a = dep.iter().find(|b| benchmark_model_key(&b.slug) == "alpha").unwrap().agentic_coding.unwrap();
+        sets.insert(
+            BenchmarkSource::ArtificialAnalysisSnapshot,
+            vec![mk("Alpha", 90.0), mk("Beta", 40.0)],
+        );
+        sets.insert(
+            BenchmarkSource::LiveBench,
+            vec![mk("Alpha", 88.0), mk("Beta", 42.0)],
+        );
+        sets.insert(
+            BenchmarkSource::TerminalBench3,
+            vec![
+                mk("Alpha", 28.0),
+                mk("Beta", 80.0),
+                mk("f1", 30.0),
+                mk("f2", 15.0),
+            ],
+        );
+        sets.insert(
+            BenchmarkSource::DeepSWE11,
+            vec![mk("Alpha", 10.0), mk("Beta", 78.0), mk("f1", 60.0)],
+        );
+        let cap = build_agentic_composite(
+            &sets,
+            ComparisonMode::ModelCapability,
+            "",
+            CompositeFlavor::Capability,
+        );
+        let dep = build_agentic_composite(
+            &sets,
+            ComparisonMode::ModelCapability,
+            "",
+            CompositeFlavor::Deployment,
+        );
+        let cap_a = cap
+            .iter()
+            .find(|b| benchmark_model_key(&b.slug) == "alpha")
+            .unwrap()
+            .agentic_coding
+            .unwrap();
+        let dep_a = dep
+            .iter()
+            .find(|b| benchmark_model_key(&b.slug) == "alpha")
+            .unwrap()
+            .agentic_coding
+            .unwrap();
         // Capability follows the model-level board; deployment follows harness boards.
-        assert!(cap_a > 50.0, "capability should follow model-level boards, got {cap_a}");
-        assert!(dep_a < 50.0, "deployment should follow harness boards, got {dep_a}");
-        assert!(cap_a > dep_a, "flavors must diverge: cap {cap_a} vs dep {dep_a}");
+        assert!(
+            cap_a > 50.0,
+            "capability should follow model-level boards, got {cap_a}"
+        );
+        assert!(
+            dep_a < 50.0,
+            "deployment should follow harness boards, got {dep_a}"
+        );
+        assert!(
+            cap_a > dep_a,
+            "flavors must diverge: cap {cap_a} vs dep {dep_a}"
+        );
     }
 
     #[test]
@@ -929,65 +1189,119 @@ mod tests {
         // SWE-bench Live) must outrank GLM-5.3 (AA 60, strong only on
         // LiveBench, mid elsewhere). Mirrors the real cohort shape: boards
         // rank against an elite AA-covered set of ~10 current frontier models.
-        let mk = |name: &str, score: f64| score_benchmark(name, score, None, None, BenchmarkKind::Model);
+        let mk =
+            |name: &str, score: f64| score_benchmark(name, score, None, None, BenchmarkKind::Model);
         let mut sets = HashMap::new();
         sets.insert(
             BenchmarkSource::ArtificialAnalysisSnapshot,
-            vec![mk("Claude Opus 5", 63.0), mk("GPT-5.6 Sol", 61.0), mk("Grok 4.6", 61.0),
-                 mk("GLM-5.3", 60.0), mk("Kimi K3", 60.0), mk("Qwen3.8 Max", 58.0),
-                 mk("Claude Sonnet 5", 55.0), mk("GPT-5.5", 55.0), mk("DeepSeek V4 Pro 0813", 53.0),
-                 mk("GLM-5.2", 53.0), mk("MiniMax-M3", 45.0)],
+            vec![
+                mk("Claude Opus 5", 63.0),
+                mk("GPT-5.6 Sol", 61.0),
+                mk("Grok 4.6", 61.0),
+                mk("GLM-5.3", 60.0),
+                mk("Kimi K3", 60.0),
+                mk("Qwen3.8 Max", 58.0),
+                mk("Claude Sonnet 5", 55.0),
+                mk("GPT-5.5", 55.0),
+                mk("DeepSeek V4 Pro 0813", 53.0),
+                mk("GLM-5.2", 53.0),
+                mk("MiniMax-M3", 45.0),
+            ],
         );
         sets.insert(
             BenchmarkSource::SWERebench,
-            vec![mk("GPT-5.6 Sol", 62.3), mk("Grok 4.6", 61.0), mk("Claude Opus 5", 58.0),
-                 mk("GLM-5.3", 56.0), mk("DeepSeek V4 Pro 0813", 55.0), mk("Kimi K3", 52.0),
-                 mk("Claude Sonnet 5", 50.0), mk("GPT-5.5", 48.0), mk("GLM-5.2", 45.0)],
+            vec![
+                mk("GPT-5.6 Sol", 62.3),
+                mk("Grok 4.6", 61.0),
+                mk("Claude Opus 5", 58.0),
+                mk("GLM-5.3", 56.0),
+                mk("DeepSeek V4 Pro 0813", 55.0),
+                mk("Kimi K3", 52.0),
+                mk("Claude Sonnet 5", 50.0),
+                mk("GPT-5.5", 48.0),
+                mk("GLM-5.2", 45.0),
+            ],
         );
         sets.insert(
             BenchmarkSource::TerminalBench3,
-            vec![mk("GPT-5.6 Sol", 34.6), mk("Claude Opus 5", 33.0), mk("Grok 4.6", 30.0),
-                 mk("Kimi K3", 25.0), mk("Claude Sonnet 5", 22.0), mk("Qwen3.8 Max", 20.0), mk("GPT-5.5", 18.0)],
+            vec![
+                mk("GPT-5.6 Sol", 34.6),
+                mk("Claude Opus 5", 33.0),
+                mk("Grok 4.6", 30.0),
+                mk("Kimi K3", 25.0),
+                mk("Claude Sonnet 5", 22.0),
+                mk("Qwen3.8 Max", 20.0),
+                mk("GPT-5.5", 18.0),
+            ],
         );
         sets.insert(
             BenchmarkSource::DeepSWE11,
-            vec![mk("GPT-5.6 Sol", 72.7), mk("GLM-5.3", 66.9), mk("Claude Opus 5", 65.0),
-                 mk("Grok 4.6", 63.0), mk("Kimi K3", 60.0), mk("DeepSeek V4 Pro 0813", 55.0), mk("GLM-5.2", 50.0)],
+            vec![
+                mk("GPT-5.6 Sol", 72.7),
+                mk("GLM-5.3", 66.9),
+                mk("Claude Opus 5", 65.0),
+                mk("Grok 4.6", 63.0),
+                mk("Kimi K3", 60.0),
+                mk("DeepSeek V4 Pro 0813", 55.0),
+                mk("GLM-5.2", 50.0),
+            ],
         );
         sets.insert(
             BenchmarkSource::LiveBench,
-            vec![mk("GLM-5.3", 80.0), mk("Claude Opus 5", 75.0), mk("Kimi K3", 72.0),
-                 mk("GPT-5.6 Sol", 70.0), mk("Grok 4.6", 68.0), mk("Qwen3.8 Max", 65.0),
-                 mk("Claude Sonnet 5", 60.0), mk("GPT-5.5", 58.0)],
+            vec![
+                mk("GLM-5.3", 80.0),
+                mk("Claude Opus 5", 75.0),
+                mk("Kimi K3", 72.0),
+                mk("GPT-5.6 Sol", 70.0),
+                mk("Grok 4.6", 68.0),
+                mk("Qwen3.8 Max", 65.0),
+                mk("Claude Sonnet 5", 60.0),
+                mk("GPT-5.5", 58.0),
+            ],
         );
-        sets.insert(
-            BenchmarkSource::SWEBenchLive,
-            vec![mk("GPT-5.6 Sol", 55.0), mk("Claude Opus 5", 50.0), mk("GLM-5.3", 45.0),
-                 mk("Grok 4.6", 40.0), mk("DeepSeek V4 Pro 0813", 38.0), mk("GLM-5.2", 30.0)],
+        let composite = build_agentic_composite(
+            &sets,
+            ComparisonMode::ModelCapability,
+            "",
+            CompositeFlavor::Capability,
         );
-        let composite = build_agentic_composite(&sets, ComparisonMode::ModelCapability, "", CompositeFlavor::Capability);
-        let sol = composite.iter().find(|b| benchmark_model_key(&b.slug) == "gpt 5 6 sol").unwrap();
-        let glm = composite.iter().find(|b| benchmark_model_key(&b.slug) == "glm 5 3").unwrap();
+        let sol = composite
+            .iter()
+            .find(|b| benchmark_model_key(&b.slug) == "gpt 5 6 sol")
+            .unwrap();
+        let glm = composite
+            .iter()
+            .find(|b| benchmark_model_key(&b.slug) == "glm 5 3")
+            .unwrap();
         let sol_score = sol.agentic_coding.unwrap();
         let glm_score = glm.agentic_coding.unwrap();
         assert!(
             sol_score > glm_score,
             "GPT-5.6 Sol ({sol_score}) must outrank GLM-5.3 ({glm_score})\nSol: {}\nGLM: {}",
-            sol.name, glm.name,
+            sol.name,
+            glm.name,
         );
         // The AA prior must be on the anchored elite scale (well under the
         // ~97th percentile the broad calibration curve would give an AA score
         // of 61), and Sol's higher AA intelligence must keep a higher prior.
         let prior_of = |row: &Benchmark| {
-            row.name.split("prior AA ").nth(1)
+            row.name
+                .split("prior AA ")
+                .nth(1)
                 .and_then(|rest| rest.split('t').next())
                 .and_then(|v| v.parse::<f64>().ok())
                 .unwrap_or(f64::NAN)
         };
         let sol_prior = prior_of(sol);
         let glm_prior = prior_of(glm);
-        assert!(sol_prior < 90.0, "Sol prior {sol_prior} looks like the broad calibration curve, not the anchored scale");
-        assert!(sol_prior > glm_prior, "Sol prior {sol_prior} must exceed GLM prior {glm_prior}");
+        assert!(
+            sol_prior < 90.0,
+            "Sol prior {sol_prior} looks like the broad calibration curve, not the anchored scale"
+        );
+        assert!(
+            sol_prior > glm_prior,
+            "Sol prior {sol_prior} must exceed GLM prior {glm_prior}"
+        );
         assert!(sol.name.contains("strong evidence"), "{}", sol.name);
     }
 
@@ -999,55 +1313,110 @@ mod tests {
         // boards (Sol-shaped). Missing boards add pseudo-evidence at the
         // model's prior, so the narrow leader is pulled back toward its AA
         // percentile while the broad leader keeps its measured standing.
-        let mk = |name: &str, score: f64| score_benchmark(name, score, None, None, BenchmarkKind::Model);
+        let mk =
+            |name: &str, score: f64| score_benchmark(name, score, None, None, BenchmarkKind::Model);
         let mut sets = HashMap::new();
         sets.insert(
             BenchmarkSource::ArtificialAnalysisSnapshot,
-            vec![mk("Claude Opus 5", 63.0), mk("GPT-5.6 Sol", 61.0), mk("Grok 4.6", 61.0),
-                 mk("GLM-5.3", 60.0), mk("Kimi K3", 60.0), mk("Qwen3.8 2.4T A95B", 58.0),
-                 mk("Claude Sonnet 5", 55.0), mk("GPT-5.5", 55.0), mk("DeepSeek V4 Pro 0813", 53.0),
-                 mk("GLM-5.2", 53.0), mk("MiniMax-M3", 45.0)],
+            vec![
+                mk("Claude Opus 5", 63.0),
+                mk("GPT-5.6 Sol", 61.0),
+                mk("Grok 4.6", 61.0),
+                mk("GLM-5.3", 60.0),
+                mk("Kimi K3", 60.0),
+                mk("Qwen3.8 2.4T A95B", 58.0),
+                mk("Claude Sonnet 5", 55.0),
+                mk("GPT-5.5", 55.0),
+                mk("DeepSeek V4 Pro 0813", 53.0),
+                mk("GLM-5.2", 53.0),
+                mk("MiniMax-M3", 45.0),
+            ],
         );
-        let rebench = vec![mk("Qwen3.8 2.4T A95B", 63.0), mk("GPT-5.6 Sol", 62.3), mk("Grok 4.6", 61.0),
-                           mk("Claude Opus 5", 58.0), mk("GLM-5.3", 56.0), mk("DeepSeek V4 Pro 0813", 55.0),
-                           mk("Kimi K3", 52.0), mk("Claude Sonnet 5", 50.0), mk("GPT-5.5", 48.0)];
+        let rebench = vec![
+            mk("Qwen3.8 2.4T A95B", 63.0),
+            mk("GPT-5.6 Sol", 62.3),
+            mk("Grok 4.6", 61.0),
+            mk("Claude Opus 5", 58.0),
+            mk("GLM-5.3", 56.0),
+            mk("DeepSeek V4 Pro 0813", 55.0),
+            mk("Kimi K3", 52.0),
+            mk("Claude Sonnet 5", 50.0),
+            mk("GPT-5.5", 48.0),
+        ];
         sets.insert(BenchmarkSource::SWERebench, rebench);
         sets.insert(
             BenchmarkSource::TerminalBench3,
-            vec![mk("GPT-5.6 Sol", 34.6), mk("Claude Opus 5", 33.0), mk("Grok 4.6", 30.0),
-                 mk("Kimi K3", 25.0), mk("Claude Sonnet 5", 22.0), mk("Qwen3.8 Max", 20.0), mk("GPT-5.5", 18.0)],
+            vec![
+                mk("GPT-5.6 Sol", 34.6),
+                mk("Claude Opus 5", 33.0),
+                mk("Grok 4.6", 30.0),
+                mk("Kimi K3", 25.0),
+                mk("Claude Sonnet 5", 22.0),
+                mk("Qwen3.8 Max", 20.0),
+                mk("GPT-5.5", 18.0),
+            ],
         );
-        let deepswe = vec![mk("Qwen3.8 2.4T A95B", 73.0), mk("GPT-5.6 Sol", 72.7), mk("GLM-5.3", 66.9),
-                           mk("Claude Opus 5", 65.0), mk("Grok 4.6", 63.0), mk("Kimi K3", 60.0),
-                           mk("DeepSeek V4 Pro 0813", 55.0), mk("GLM-5.2", 50.0)];
+        let deepswe = vec![
+            mk("Qwen3.8 2.4T A95B", 73.0),
+            mk("GPT-5.6 Sol", 72.7),
+            mk("GLM-5.3", 66.9),
+            mk("Claude Opus 5", 65.0),
+            mk("Grok 4.6", 63.0),
+            mk("Kimi K3", 60.0),
+            mk("DeepSeek V4 Pro 0813", 55.0),
+            mk("GLM-5.2", 50.0),
+        ];
         sets.insert(BenchmarkSource::DeepSWE11, deepswe);
         sets.insert(
             BenchmarkSource::LiveBench,
-            vec![mk("GLM-5.3", 80.0), mk("Claude Opus 5", 75.0), mk("Kimi K3", 72.0),
-                 mk("GPT-5.6 Sol", 70.0), mk("Grok 4.6", 68.0), mk("Qwen3.8 Max", 65.0),
-                 mk("Claude Sonnet 5", 60.0), mk("GPT-5.5", 58.0)],
-        );
-        sets.insert(
-            BenchmarkSource::SWEBenchLive,
-            vec![mk("GPT-5.6 Sol", 55.0), mk("Claude Opus 5", 50.0), mk("GLM-5.3", 45.0),
-                 mk("Grok 4.6", 40.0), mk("DeepSeek V4 Pro 0813", 38.0), mk("GLM-5.2", 30.0)],
+            vec![
+                mk("GLM-5.3", 80.0),
+                mk("Claude Opus 5", 75.0),
+                mk("Kimi K3", 72.0),
+                mk("GPT-5.6 Sol", 70.0),
+                mk("Grok 4.6", 68.0),
+                mk("Qwen3.8 Max", 65.0),
+                mk("Claude Sonnet 5", 60.0),
+                mk("GPT-5.5", 58.0),
+            ],
         );
         sets.insert(
             BenchmarkSource::ReveloCodeIndex,
-            vec![mk("GPT-5.6 Sol", 51.2), mk("Claude Opus 5", 48.0), mk("Grok 4.6", 40.0),
-                 mk("GLM-5.3", 35.0), mk("Kimi K3", 30.0)],
+            vec![
+                mk("GPT-5.6 Sol", 51.2),
+                mk("Claude Opus 5", 48.0),
+                mk("Grok 4.6", 40.0),
+                mk("GLM-5.3", 35.0),
+                mk("Kimi K3", 30.0),
+            ],
         );
-        let composite = build_agentic_composite(&sets, ComparisonMode::ModelCapability, "", CompositeFlavor::Capability);
-        let sol = composite.iter().find(|b| benchmark_model_key(&b.slug) == "gpt 5 6 sol").unwrap();
-        let qwen = composite.iter().find(|b| benchmark_model_key(&b.slug) == "qwen 3 8 2 4t a95b").unwrap();
+        let composite = build_agentic_composite(
+            &sets,
+            ComparisonMode::ModelCapability,
+            "",
+            CompositeFlavor::Capability,
+        );
+        let sol = composite
+            .iter()
+            .find(|b| benchmark_model_key(&b.slug) == "gpt 5 6 sol")
+            .unwrap();
+        let qwen = composite
+            .iter()
+            .find(|b| benchmark_model_key(&b.slug) == "qwen 3 8 2 4t a95b")
+            .unwrap();
         let sol_score = sol.agentic_coding.unwrap();
         let qwen_score = qwen.agentic_coding.unwrap();
         assert!(
             sol_score > qwen_score,
             "broad top coverage ({sol_score}) must outrank narrow board-topping ({qwen_score})\nSol: {}\nQwen: {}",
-            sol.name, qwen.name,
+            sol.name,
+            qwen.name,
         );
-        assert!(qwen.name.contains("boards pending"), "missing boards must be disclosed: {}", qwen.name);
+        assert!(
+            qwen.name.contains("boards pending"),
+            "missing boards must be disclosed: {}",
+            qwen.name
+        );
     }
 
     #[test]
@@ -1057,39 +1426,84 @@ mod tests {
         // 130 snapshot models incl. legacy) as its whole score, outranking
         // models with real top-tier evidence. It must instead enter at its
         // insertion rank among the board-evaluated elite cohort.
-        let mk = |name: &str, score: f64| score_benchmark(name, score, None, None, BenchmarkKind::Model);
+        let mk =
+            |name: &str, score: f64| score_benchmark(name, score, None, None, BenchmarkKind::Model);
         let mut sets = HashMap::new();
         sets.insert(
             BenchmarkSource::ArtificialAnalysisSnapshot,
-            vec![mk("Claude Opus 5", 63.0), mk("GPT-5.6 Sol", 61.0), mk("Grok 4.6", 61.0),
-                 mk("GLM-5.3", 60.0), mk("Kimi K3", 60.0), mk("Qwen3.8 2.4T A95B", 58.0),
-                 mk("Claude Sonnet 5", 55.0), mk("GPT-5.5", 55.0), mk("DeepSeek V4 Pro 0813", 53.0),
-                 mk("GLM-5.2", 53.0), mk("MiniMax-M3", 45.0), mk("Brand New Model", 58.0)],
+            vec![
+                mk("Claude Opus 5", 63.0),
+                mk("GPT-5.6 Sol", 61.0),
+                mk("Grok 4.6", 61.0),
+                mk("GLM-5.3", 60.0),
+                mk("Kimi K3", 60.0),
+                mk("Qwen3.8 2.4T A95B", 58.0),
+                mk("Claude Sonnet 5", 55.0),
+                mk("GPT-5.5", 55.0),
+                mk("DeepSeek V4 Pro 0813", 53.0),
+                mk("GLM-5.2", 53.0),
+                mk("MiniMax-M3", 45.0),
+                mk("Brand New Model", 58.0),
+            ],
         );
         sets.insert(
             BenchmarkSource::SWERebench,
-            vec![mk("GPT-5.6 Sol", 62.3), mk("Grok 4.6", 61.0), mk("Claude Opus 5", 58.0),
-                 mk("GLM-5.3", 56.0), mk("DeepSeek V4 Pro 0813", 55.0), mk("Kimi K3", 52.0),
-                 mk("Claude Sonnet 5", 50.0), mk("GPT-5.5", 48.0), mk("GLM-5.2", 45.0), mk("MiniMax-M3", 30.0)],
+            vec![
+                mk("GPT-5.6 Sol", 62.3),
+                mk("Grok 4.6", 61.0),
+                mk("Claude Opus 5", 58.0),
+                mk("GLM-5.3", 56.0),
+                mk("DeepSeek V4 Pro 0813", 55.0),
+                mk("Kimi K3", 52.0),
+                mk("Claude Sonnet 5", 50.0),
+                mk("GPT-5.5", 48.0),
+                mk("GLM-5.2", 45.0),
+                mk("MiniMax-M3", 30.0),
+            ],
         );
         sets.insert(
             BenchmarkSource::DeepSWE11,
-            vec![mk("GPT-5.6 Sol", 72.7), mk("GLM-5.3", 66.9), mk("Claude Opus 5", 65.0),
-                 mk("Grok 4.6", 63.0), mk("Kimi K3", 60.0), mk("DeepSeek V4 Pro 0813", 55.0),
-                 mk("GLM-5.2", 50.0), mk("Claude Sonnet 5", 48.0), mk("GPT-5.5", 45.0), mk("MiniMax-M3", 40.0)],
+            vec![
+                mk("GPT-5.6 Sol", 72.7),
+                mk("GLM-5.3", 66.9),
+                mk("Claude Opus 5", 65.0),
+                mk("Grok 4.6", 63.0),
+                mk("Kimi K3", 60.0),
+                mk("DeepSeek V4 Pro 0813", 55.0),
+                mk("GLM-5.2", 50.0),
+                mk("Claude Sonnet 5", 48.0),
+                mk("GPT-5.5", 45.0),
+                mk("MiniMax-M3", 40.0),
+            ],
         );
-        let composite = build_agentic_composite(&sets, ComparisonMode::ModelCapability, "", CompositeFlavor::Capability);
-        let sol = composite.iter().find(|b| benchmark_model_key(&b.slug) == "gpt 5 6 sol").unwrap();
-        let newcomer = composite.iter().find(|b| benchmark_model_key(&b.slug) == "brand new").unwrap();
+        let composite = build_agentic_composite(
+            &sets,
+            ComparisonMode::ModelCapability,
+            "",
+            CompositeFlavor::Capability,
+        );
+        let sol = composite
+            .iter()
+            .find(|b| benchmark_model_key(&b.slug) == "gpt 5 6 sol")
+            .unwrap();
+        let newcomer = composite
+            .iter()
+            .find(|b| benchmark_model_key(&b.slug) == "brand new")
+            .unwrap();
         let sol_score = sol.agentic_coding.unwrap();
         let new_score = newcomer.agentic_coding.unwrap();
         // Insertion rank of AA 58 among the 10-board cohort (between the 60s
         // and the 55s) is mid-pack — nowhere near the calibrated 93rd.
-        assert!(new_score < 75.0, "newcomer {new_score} should enter mid-pack, not near the calibrated 93rd: {}", newcomer.name);
+        assert!(
+            new_score < 75.0,
+            "newcomer {new_score} should enter mid-pack, not near the calibrated 93rd: {}",
+            newcomer.name
+        );
         assert!(
             sol_score > new_score,
             "Sol ({sol_score}) must outrank an unproven same-AA newcomer ({new_score})\nSol: {}\nNew: {}",
-            sol.name, newcomer.name,
+            sol.name,
+            newcomer.name,
         );
         assert!(newcomer.name.contains("prior AA"), "{}", newcomer.name);
     }
@@ -1100,43 +1514,96 @@ mod tests {
         // cover ~10 current frontier models, so AA must be ranked within that
         // cohort (Kimi K3's AA 60 lands mid-pack, ~61st) — not on the broad
         // calibration curve (95.6th against 130 models incl. legacy ones).
-        let mk = |name: &str, score: f64| score_benchmark(name, score, None, None, BenchmarkKind::Model);
+        let mk =
+            |name: &str, score: f64| score_benchmark(name, score, None, None, BenchmarkKind::Model);
         let mut sets = HashMap::new();
         sets.insert(
             BenchmarkSource::ArtificialAnalysisSnapshot,
-            vec![mk("Claude Opus 5", 63.0), mk("GPT-5.6 Sol", 61.0), mk("Grok 4.6", 61.0),
-                 mk("GLM-5.3", 60.0), mk("Kimi K3", 60.0), mk("Qwen3.8 Max", 58.0),
-                 mk("Claude Sonnet 5", 55.0), mk("GPT-5.5", 55.0), mk("DeepSeek V4 Pro 0813", 53.0),
-                 mk("GLM-5.2", 53.0), mk("MiniMax-M3", 45.0)],
+            vec![
+                mk("Claude Opus 5", 63.0),
+                mk("GPT-5.6 Sol", 61.0),
+                mk("Grok 4.6", 61.0),
+                mk("GLM-5.3", 60.0),
+                mk("Kimi K3", 60.0),
+                mk("Qwen3.8 Max", 58.0),
+                mk("Claude Sonnet 5", 55.0),
+                mk("GPT-5.5", 55.0),
+                mk("DeepSeek V4 Pro 0813", 53.0),
+                mk("GLM-5.2", 53.0),
+                mk("MiniMax-M3", 45.0),
+            ],
         );
         sets.insert(
             BenchmarkSource::SWERebench,
-            vec![mk("GPT-5.6 Sol", 62.3), mk("Grok 4.6", 61.0), mk("Claude Opus 5", 58.0),
-                 mk("GLM-5.3", 56.0), mk("DeepSeek V4 Pro 0813", 55.0), mk("Kimi K3", 52.0),
-                 mk("Claude Sonnet 5", 50.0), mk("GPT-5.5", 48.0), mk("GLM-5.2", 45.0)],
+            vec![
+                mk("GPT-5.6 Sol", 62.3),
+                mk("Grok 4.6", 61.0),
+                mk("Claude Opus 5", 58.0),
+                mk("GLM-5.3", 56.0),
+                mk("DeepSeek V4 Pro 0813", 55.0),
+                mk("Kimi K3", 52.0),
+                mk("Claude Sonnet 5", 50.0),
+                mk("GPT-5.5", 48.0),
+                mk("GLM-5.2", 45.0),
+            ],
         );
         sets.insert(
             BenchmarkSource::DeepSWE11,
-            vec![mk("GPT-5.6 Sol", 72.7), mk("GLM-5.3", 66.9), mk("Claude Opus 5", 65.0),
-                 mk("Grok 4.6", 63.0), mk("Kimi K3", 60.0), mk("DeepSeek V4 Pro 0813", 55.0), mk("GLM-5.2", 50.0)],
+            vec![
+                mk("GPT-5.6 Sol", 72.7),
+                mk("GLM-5.3", 66.9),
+                mk("Claude Opus 5", 65.0),
+                mk("Grok 4.6", 63.0),
+                mk("Kimi K3", 60.0),
+                mk("DeepSeek V4 Pro 0813", 55.0),
+                mk("GLM-5.2", 50.0),
+            ],
         );
         sets.insert(
             BenchmarkSource::LiveBench,
-            vec![mk("GLM-5.3", 80.0), mk("Claude Opus 5", 75.0), mk("Kimi K3", 72.0),
-                 mk("GPT-5.6 Sol", 70.0), mk("Grok 4.6", 68.0), mk("Qwen3.8 Max", 65.0),
-                 mk("Claude Sonnet 5", 60.0), mk("GPT-5.5", 58.0)],
+            vec![
+                mk("GLM-5.3", 80.0),
+                mk("Claude Opus 5", 75.0),
+                mk("Kimi K3", 72.0),
+                mk("GPT-5.6 Sol", 70.0),
+                mk("Grok 4.6", 68.0),
+                mk("Qwen3.8 Max", 65.0),
+                mk("Claude Sonnet 5", 60.0),
+                mk("GPT-5.5", 58.0),
+            ],
         );
         let quote = test_quote("kimi-k3", 1.0, true);
-        let consensus = benchmark_consensus_for_quote(&quote, &sets, ComparisonMode::ModelCapability, "").unwrap();
-        let aa = consensus.entries.iter().find(|e| e.source == BenchmarkSource::ArtificialAnalysisSnapshot).unwrap();
+        let consensus =
+            benchmark_consensus_for_quote(&quote, &sets, ComparisonMode::ModelCapability, "")
+                .unwrap();
+        let aa = consensus
+            .entries
+            .iter()
+            .find(|e| e.source == BenchmarkSource::ArtificialAnalysisSnapshot)
+            .unwrap();
         assert!(
             aa.percentile < 90.0,
-            "AA percentile {:.1} looks like the broad calibration scale, not the anchored elite cohort", aa.percentile,
+            "AA percentile {:.1} looks like the broad calibration scale, not the anchored elite cohort",
+            aa.percentile,
         );
-        assert!(aa.percentile > 50.0, "Kimi K3 should sit mid-pack among the elite cohort, got {:.1}", aa.percentile);
+        assert!(
+            aa.percentile > 50.0,
+            "Kimi K3 should sit mid-pack among the elite cohort, got {:.1}",
+            aa.percentile
+        );
         // Boards still report their own anchored percentiles.
-        assert!(consensus.entries.iter().any(|e| e.source == BenchmarkSource::DeepSWE11));
-        assert!(consensus.entries.iter().any(|e| e.source == BenchmarkSource::SWERebench));
+        assert!(
+            consensus
+                .entries
+                .iter()
+                .any(|e| e.source == BenchmarkSource::DeepSWE11)
+        );
+        assert!(
+            consensus
+                .entries
+                .iter()
+                .any(|e| e.source == BenchmarkSource::SWERebench)
+        );
     }
 
     #[test]
@@ -1163,39 +1630,89 @@ mod tests {
         // Same elite-cohort shape as the Sol/GLM regression so the anchored-AA
         // prior path runs; one harness catastrophically disagrees with four
         // boards that agree Sol is top-tier.
-        let mk = |name: &str, score: f64| score_benchmark(name, score, None, None, BenchmarkKind::Model);
+        let mk =
+            |name: &str, score: f64| score_benchmark(name, score, None, None, BenchmarkKind::Model);
         let mut sets = HashMap::new();
         sets.insert(
             BenchmarkSource::ArtificialAnalysisSnapshot,
-            vec![mk("Claude Opus 5", 63.0), mk("GPT-5.6 Sol", 61.0), mk("Grok 4.6", 61.0),
-                 mk("GLM-5.3", 60.0), mk("Kimi K3", 60.0), mk("Qwen3.8 Max", 58.0),
-                 mk("Claude Sonnet 5", 55.0), mk("GPT-5.5", 55.0), mk("DeepSeek V4 Pro 0813", 53.0),
-                 mk("GLM-5.2", 53.0)],
+            vec![
+                mk("Claude Opus 5", 63.0),
+                mk("GPT-5.6 Sol", 61.0),
+                mk("Grok 4.6", 61.0),
+                mk("GLM-5.3", 60.0),
+                mk("Kimi K3", 60.0),
+                mk("Qwen3.8 Max", 58.0),
+                mk("Claude Sonnet 5", 55.0),
+                mk("GPT-5.5", 55.0),
+                mk("DeepSeek V4 Pro 0813", 53.0),
+                mk("GLM-5.2", 53.0),
+            ],
         );
-        let rebench = vec![mk("GPT-5.6 Sol", 62.3), mk("Grok 4.6", 61.0), mk("Claude Opus 5", 58.0),
-                           mk("GLM-5.3", 56.0), mk("DeepSeek V4 Pro 0813", 55.0), mk("Kimi K3", 52.0),
-                           mk("Claude Sonnet 5", 50.0), mk("GPT-5.5", 48.0), mk("GLM-5.2", 45.0)];
+        let rebench = vec![
+            mk("GPT-5.6 Sol", 62.3),
+            mk("Grok 4.6", 61.0),
+            mk("Claude Opus 5", 58.0),
+            mk("GLM-5.3", 56.0),
+            mk("DeepSeek V4 Pro 0813", 55.0),
+            mk("Kimi K3", 52.0),
+            mk("Claude Sonnet 5", 50.0),
+            mk("GPT-5.5", 48.0),
+            mk("GLM-5.2", 45.0),
+        ];
         sets.insert(BenchmarkSource::SWERebench, rebench.clone());
         sets.insert(
             BenchmarkSource::TerminalBench3,
-            vec![mk("GPT-5.6 Sol", 1.0), mk("Claude Opus 5", 33.0), mk("Grok 4.6", 30.0),
-                 mk("Kimi K3", 25.0), mk("Claude Sonnet 5", 22.0), mk("Qwen3.8 Max", 20.0), mk("GPT-5.5", 18.0)],
+            vec![
+                mk("GPT-5.6 Sol", 1.0),
+                mk("Claude Opus 5", 33.0),
+                mk("Grok 4.6", 30.0),
+                mk("Kimi K3", 25.0),
+                mk("Claude Sonnet 5", 22.0),
+                mk("Qwen3.8 Max", 20.0),
+                mk("GPT-5.5", 18.0),
+            ],
         );
         sets.insert(
             BenchmarkSource::DeepSWE11,
-            vec![mk("GPT-5.6 Sol", 72.7), mk("GLM-5.3", 66.9), mk("Claude Opus 5", 65.0),
-                 mk("Grok 4.6", 63.0), mk("Kimi K3", 60.0), mk("DeepSeek V4 Pro 0813", 55.0), mk("GLM-5.2", 50.0)],
+            vec![
+                mk("GPT-5.6 Sol", 72.7),
+                mk("GLM-5.3", 66.9),
+                mk("Claude Opus 5", 65.0),
+                mk("Grok 4.6", 63.0),
+                mk("Kimi K3", 60.0),
+                mk("DeepSeek V4 Pro 0813", 55.0),
+                mk("GLM-5.2", 50.0),
+            ],
         );
         sets.insert(
             BenchmarkSource::LiveBench,
-            vec![mk("GLM-5.3", 80.0), mk("Claude Opus 5", 75.0), mk("Kimi K3", 72.0),
-                 mk("GPT-5.6 Sol", 70.0), mk("Grok 4.6", 68.0), mk("Qwen3.8 Max", 65.0),
-                 mk("Claude Sonnet 5", 60.0), mk("GPT-5.5", 58.0)],
+            vec![
+                mk("GLM-5.3", 80.0),
+                mk("Claude Opus 5", 75.0),
+                mk("Kimi K3", 72.0),
+                mk("GPT-5.6 Sol", 70.0),
+                mk("Grok 4.6", 68.0),
+                mk("Qwen3.8 Max", 65.0),
+                mk("Claude Sonnet 5", 60.0),
+                mk("GPT-5.5", 58.0),
+            ],
         );
         let _ = rebench;
-        let composite = build_agentic_composite(&sets, ComparisonMode::ModelCapability, "", CompositeFlavor::Capability);
-        let sol = composite.iter().find(|b| benchmark_model_key(&b.slug) == "gpt 5 6 sol").unwrap();
-        assert!(sol.name.contains("(downweighted)"), "expected TB3 downweight disclosure: {}", sol.name);
+        let composite = build_agentic_composite(
+            &sets,
+            ComparisonMode::ModelCapability,
+            "",
+            CompositeFlavor::Capability,
+        );
+        let sol = composite
+            .iter()
+            .find(|b| benchmark_model_key(&b.slug) == "gpt 5 6 sol")
+            .unwrap();
+        assert!(
+            sol.name.contains("(downweighted)"),
+            "expected TB3 downweight disclosure: {}",
+            sol.name
+        );
         // The score must stay near the agreeing cluster, not be wrecked by the
         // outlier (LiveBench legitimately ranks Sol mid-pack, which caps the
         // cluster mean in the low-to-mid 70s).
@@ -1219,46 +1736,92 @@ mod tests {
         let mut sets = HashMap::new();
         sets.insert(
             BenchmarkSource::ArtificialAnalysisSnapshot,
-            vec![score_benchmark("DeepSeek V4 Flash 0731", 52.0, None, None, BenchmarkKind::Model)],
+            vec![score_benchmark(
+                "DeepSeek V4 Flash 0731",
+                52.0,
+                None,
+                None,
+                BenchmarkKind::Model,
+            )],
         );
-        let composite = build_agentic_composite(&sets, ComparisonMode::BestAvailableAgent, "mini-SWE-agent", CompositeFlavor::Capability);
+        let composite = build_agentic_composite(
+            &sets,
+            ComparisonMode::BestAvailableAgent,
+            "mini-SWE-agent",
+            CompositeFlavor::Capability,
+        );
         assert_eq!(composite.len(), 1);
-        assert_eq!(benchmark_model_key(&composite[0].slug), "deepseek v4 flash 0731");
+        assert_eq!(
+            benchmark_model_key(&composite[0].slug),
+            "deepseek v4 flash 0731"
+        );
     }
 
     #[test]
     fn field_quality_calibration_prices_elite_fields_above_mixed_fields() {
         // Unit behavior of the position-worth mapping.
-        let mk_map = |pairs: &[(&str, f64)]| pairs.iter().map(|(k, v)| (k.to_string(), *v)).collect();
+        let mk_map =
+            |pairs: &[(&str, f64)]| pairs.iter().map(|(k, v)| (k.to_string(), *v)).collect();
         // Elite field: ten members whose AA standings run 85..99.
         let elite_aa: HashMap<String, f64> = (0..10)
             .map(|i| (format!("e{i}"), 85.0 + i as f64 * (14.0 / 9.0)))
             .collect();
         let elite_p = mk_map(&[
-            ("e0", 100.0), ("e1", 90.0), ("e2", 80.0), ("e3", 70.0), ("e4", 60.0),
-            ("e5", 50.0), ("e6", 40.0), ("e7", 30.0), ("e8", 20.0), ("e9", 10.0),
+            ("e0", 100.0),
+            ("e1", 90.0),
+            ("e2", 80.0),
+            ("e3", 70.0),
+            ("e4", 60.0),
+            ("e5", 50.0),
+            ("e6", 40.0),
+            ("e7", 30.0),
+            ("e8", 20.0),
+            ("e9", 10.0),
         ]);
         // Mixed field: ten members spanning 10..99.
         let mixed_aa: HashMap<String, f64> = (0..10)
             .map(|i| (format!("m{i}"), 10.0 + i as f64 * (89.0 / 9.0)))
             .collect();
         let mixed_p = mk_map(&[
-            ("m0", 100.0), ("m1", 90.0), ("m2", 80.0), ("m3", 70.0), ("m4", 60.0),
-            ("m5", 50.0), ("m6", 40.0), ("m7", 30.0), ("m8", 20.0), ("m9", 10.0),
+            ("m0", 100.0),
+            ("m1", 90.0),
+            ("m2", 80.0),
+            ("m3", 70.0),
+            ("m4", 60.0),
+            ("m5", 50.0),
+            ("m6", 40.0),
+            ("m7", 30.0),
+            ("m8", 20.0),
+            ("m9", 10.0),
         ]);
         let elite = calibrate_percentiles_to_field_quality(&elite_p, Some(&elite_aa));
         let mixed = calibrate_percentiles_to_field_quality(&mixed_p, Some(&mixed_aa));
         // A 60th-percentile standing in the elite field is worth ~93rd on the
         // elite scale; a 60th in a mixed field is worth ~60th.
-        assert!(elite["e4"] > 90.0, "elite field 60th percentile calibrated to {}", elite["e4"]);
-        assert!((mixed["m4"] - 60.0).abs() < 5.0, "mixed field 60th percentile calibrated to {}", mixed["m4"]);
+        assert!(
+            elite["e4"] > 90.0,
+            "elite field 60th percentile calibrated to {}",
+            elite["e4"]
+        );
+        assert!(
+            (mixed["m4"] - 60.0).abs() < 5.0,
+            "mixed field 60th percentile calibrated to {}",
+            mixed["m4"]
+        );
         // Monotone in standing.
         assert!(elite["e0"] > elite["e4"] && elite["e4"] > elite["e9"]);
         // Too few anchored standings: identity.
         let tiny = mk_map(&[("a", 80.0), ("b", 20.0)]);
-        let tiny_aa: HashMap<String, f64> = [("a".to_string(), 90.0), ("b".to_string(), 10.0)].into();
-        assert_eq!(calibrate_percentiles_to_field_quality(&tiny, Some(&tiny_aa))["a"], 80.0);
-        assert_eq!(calibrate_percentiles_to_field_quality(&tiny, None)["b"], 20.0);
+        let tiny_aa: HashMap<String, f64> =
+            [("a".to_string(), 90.0), ("b".to_string(), 10.0)].into();
+        assert_eq!(
+            calibrate_percentiles_to_field_quality(&tiny, Some(&tiny_aa))["a"],
+            80.0
+        );
+        assert_eq!(
+            calibrate_percentiles_to_field_quality(&tiny, None)["b"],
+            20.0
+        );
     }
 
     #[test]
@@ -1275,13 +1838,18 @@ mod tests {
         // (63.5 down to 14), SWE-rebench drawn from the TOP of that cohort,
         // LiveBench spanning all of it, DeepSWE the upper-middle, Code Index
         // upper-middle without GLM.
-        let mk = |name: &str, score: f64| score_benchmark(name, score, None, None, BenchmarkKind::Model);
+        let mk =
+            |name: &str, score: f64| score_benchmark(name, score, None, None, BenchmarkKind::Model);
         let mut sets = HashMap::new();
 
         // AA world: 6 heroes + 44 fillers stepping down to AA 14.
         let mut aa_rows = vec![
-            mk("Claude Fable 5", 63.5), mk("Claude Opus 5", 63.0), mk("GPT-5.6 Sol", 61.0),
-            mk("Grok 4.6", 60.5), mk("GLM-5.3", 60.0), mk("Kimi K3", 60.0),
+            mk("Claude Fable 5", 63.5),
+            mk("Claude Opus 5", 63.0),
+            mk("GPT-5.6 Sol", 61.0),
+            mk("Grok 4.6", 60.5),
+            mk("GLM-5.3", 60.0),
+            mk("Kimi K3", 60.0),
         ];
         for i in 0..44 {
             aa_rows.push(mk(&format!("aa{i}"), 57.0 - i as f64));
@@ -1293,18 +1861,31 @@ mod tests {
         sets.insert(
             BenchmarkSource::SWERebench,
             vec![
-                mk("Claude Fable 5", 70.0), mk("Claude Opus 5", 68.0), mk("Kimi K3", 64.0),
-                mk("aa0", 63.5), mk("GPT-5.6 Sol", 62.3), mk("Grok 4.6", 61.0),
-                mk("aa1", 60.0), mk("aa2", 58.0), mk("aa3", 56.0), mk("aa4", 54.0),
-                mk("aa5", 52.0), mk("aa6", 50.0), mk("aa7", 48.0),
+                mk("Claude Fable 5", 70.0),
+                mk("Claude Opus 5", 68.0),
+                mk("Kimi K3", 64.0),
+                mk("aa0", 63.5),
+                mk("GPT-5.6 Sol", 62.3),
+                mk("Grok 4.6", 61.0),
+                mk("aa1", 60.0),
+                mk("aa2", 58.0),
+                mk("aa3", 56.0),
+                mk("aa4", 54.0),
+                mk("aa5", 52.0),
+                mk("aa6", 50.0),
+                mk("aa7", 48.0),
             ],
         );
 
         // DeepSWE: 26-model upper-middle field; the shared board.
         // Sol #2, GLM #5, K3 #4.
         let mut deepswe = vec![
-            mk("Claude Fable 5", 76.0), mk("GPT-5.6 Sol", 72.7), mk("Claude Opus 5", 71.0),
-            mk("Kimi K3", 69.5), mk("GLM-5.3", 69.0), mk("Grok 4.6", 68.0),
+            mk("Claude Fable 5", 76.0),
+            mk("GPT-5.6 Sol", 72.7),
+            mk("Claude Opus 5", 71.0),
+            mk("Kimi K3", 69.5),
+            mk("GLM-5.3", 69.0),
+            mk("Grok 4.6", 68.0),
         ];
         for i in 0..20 {
             deepswe.push(mk(&format!("aa{}", 10 + i), 66.0 - i as f64));
@@ -1314,10 +1895,21 @@ mod tests {
         // LiveBench: 47-model field spanning the whole cohort. GLM's one win
         // (#8); Sol #15; K3 #5.
         let mut livebench = vec![
-            mk("Claude Fable 5", 70.0), mk("Claude Opus 5", 68.0), mk("Kimi K3", 62.2),
-            mk("aa0", 62.0), mk("aa1", 61.5), mk("Grok 4.6", 61.2), mk("aa2", 61.0),
-            mk("GLM-5.3", 60.9), mk("aa3", 60.5), mk("aa4", 60.0), mk("aa5", 59.5),
-            mk("aa6", 59.0), mk("aa7", 58.5), mk("aa8", 58.2), mk("GPT-5.6 Sol", 56.2),
+            mk("Claude Fable 5", 70.0),
+            mk("Claude Opus 5", 68.0),
+            mk("Kimi K3", 62.2),
+            mk("aa0", 62.0),
+            mk("aa1", 61.5),
+            mk("Grok 4.6", 61.2),
+            mk("aa2", 61.0),
+            mk("GLM-5.3", 60.9),
+            mk("aa3", 60.5),
+            mk("aa4", 60.0),
+            mk("aa5", 59.5),
+            mk("aa6", 59.0),
+            mk("aa7", 58.5),
+            mk("aa8", 58.2),
+            mk("GPT-5.6 Sol", 56.2),
         ];
         for i in 0..32 {
             livebench.push(mk(&format!("aa{}", 9 + i), 55.0 - i as f64));
@@ -1326,8 +1918,11 @@ mod tests {
 
         // Code Index: 17-model upper-middle field, Sol #2, K3 #5. GLM absent.
         let mut code_index = vec![
-            mk("Claude Fable 5", 55.0), mk("GPT-5.6 Sol", 51.2), mk("aa5", 50.0),
-            mk("aa6", 49.5), mk("Kimi K3", 39.6),
+            mk("Claude Fable 5", 55.0),
+            mk("GPT-5.6 Sol", 51.2),
+            mk("aa5", 50.0),
+            mk("aa6", 49.5),
+            mk("Kimi K3", 39.6),
         ];
         for i in 0..12 {
             code_index.push(mk(&format!("aa{}", 7 + i), 48.0 - i as f64));
@@ -1338,34 +1933,45 @@ mod tests {
         // pseudo-evidence for BOTH models (at their own priors).
         sets.insert(
             BenchmarkSource::TerminalBench3,
-            (0..9).map(|i| mk(&format!("aa{}", 10 + i), 40.0 - i as f64))
+            (0..9)
+                .map(|i| mk(&format!("aa{}", 10 + i), 40.0 - i as f64))
                 .chain(std::iter::once(mk("Grok 4.6", 35.0)))
                 .collect(),
         );
-        sets.insert(
-            BenchmarkSource::SWEBenchLive,
-            (0..10).map(|i| mk(&format!("aa{}", 5 + i), 45.0 - i as f64)).collect(),
-        );
-        sets.insert(
-            BenchmarkSource::SWEBenchVerified,
-            (0..15).map(|i| mk(&format!("aa{}", 20 + i), 40.0 - i as f64)).collect(),
-        );
 
-        let composite = build_agentic_composite(&sets, ComparisonMode::ModelCapability, "", CompositeFlavor::Capability);
-        let sol = composite.iter().find(|b| benchmark_model_key(&b.slug) == "gpt 5 6 sol").unwrap();
-        let glm = composite.iter().find(|b| benchmark_model_key(&b.slug) == "glm 5 3").unwrap();
+        let composite = build_agentic_composite(
+            &sets,
+            ComparisonMode::ModelCapability,
+            "",
+            CompositeFlavor::Capability,
+        );
+        let sol = composite
+            .iter()
+            .find(|b| benchmark_model_key(&b.slug) == "gpt 5 6 sol")
+            .unwrap();
+        let glm = composite
+            .iter()
+            .find(|b| benchmark_model_key(&b.slug) == "glm 5 3")
+            .unwrap();
         let sol_score = sol.agentic_coding.unwrap();
         let glm_score = glm.agentic_coding.unwrap();
         assert!(
             sol_score > glm_score,
             "GPT-5.6 Sol ({sol_score}) must outrank a 2-board GLM-5.3 ({glm_score}) that loses AA, loses DeepSWE head-to-head, and wins only LiveBench\nSol: {}\nGLM: {}",
-            sol.name, glm.name,
+            sol.name,
+            glm.name,
         );
-        // The thin-evidence model must carry the sparse tier and pending
-        // boards disclosure.
-        assert!(glm.name.contains("sparse evidence"), "{}", glm.name);
+        // The two-board model must disclose its evidence tier and the boards
+        // it is still waiting on. Two populated boards now cover ~36% of the
+        // smaller post-SWE-bench evidence universe, landing in the moderate
+        // tier (sparse stays for one-board models — see the tests above).
+        assert!(glm.name.contains("moderate evidence"), "{}", glm.name);
         assert!(glm.name.contains("boards pending"), "{}", glm.name);
-        assert!(sol.name.contains("strong evidence") || sol.name.contains("moderate evidence"), "{}", sol.name);
+        assert!(
+            sol.name.contains("strong evidence") || sol.name.contains("moderate evidence"),
+            "{}",
+            sol.name
+        );
     }
 
     #[test]

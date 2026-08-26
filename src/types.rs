@@ -7,7 +7,8 @@ use serde::{Deserialize, Serialize};
 
 pub(crate) const SWE_REBENCH_URL: &str = "https://swe-rebench.com/";
 pub(crate) const REVELO_CODE_INDEX_URL: &str = "https://research.revelo.com/code-index/";
-pub(crate) const ARTIFICIAL_ANALYSIS_URL: &str = "https://artificialanalysis.ai/leaderboards/models";
+pub(crate) const ARTIFICIAL_ANALYSIS_URL: &str =
+    "https://artificialanalysis.ai/leaderboards/models";
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 pub(crate) enum PriceMetric {
@@ -86,7 +87,10 @@ impl AlertMode {
     }
 
     pub(crate) fn benchmark_dependent(self) -> bool {
-        matches!(self, Self::EntersFrontier | Self::LeavesFrontier | Self::CheapestAboveScore)
+        matches!(
+            self,
+            Self::EntersFrontier | Self::LeavesFrontier | Self::CheapestAboveScore
+        )
     }
 }
 
@@ -101,8 +105,6 @@ pub(crate) enum BenchmarkSource {
     DeepSWE11,
     LiveBench,
     ReveloCodeIndex,
-    SWEBenchLive,
-    SWEBenchVerified,
     DesignArena,
 }
 
@@ -133,8 +135,6 @@ impl BenchmarkSource {
             Self::DeepSWE11 => "DeepSWE v1.1",
             Self::LiveBench => "LiveBench",
             Self::ReveloCodeIndex => "Revelo Code Index",
-            Self::SWEBenchLive => "SWE-bench Live",
-            Self::SWEBenchVerified => "SWE-bench Verified [legacy]",
             Self::DesignArena => "Frontend Design Elo (Design Arena)",
         }
     }
@@ -149,8 +149,6 @@ impl BenchmarkSource {
             Self::DeepSWE11 => "DeepSWE",
             Self::LiveBench => "LiveBench",
             Self::ReveloCodeIndex => "Code Index",
-            Self::SWEBenchLive => "SWE-bench Live",
-            Self::SWEBenchVerified => "SWE-bench Verified",
             Self::DesignArena => "Design Elo",
         }
     }
@@ -171,34 +169,31 @@ impl BenchmarkSource {
     /// SWE-rebench is deliberately excluded — its uniform harness makes it an
     /// agentic-capability standard that stays fully weighted in both flavors.
     pub(crate) fn is_model_level(self) -> bool {
-        matches!(self, Self::ArtificialAnalysisSnapshot | Self::LiveBench | Self::DesignArena)
+        matches!(
+            self,
+            Self::ArtificialAnalysisSnapshot | Self::LiveBench | Self::DesignArena
+        )
     }
 
     pub(crate) fn is_harness_specific(self) -> bool {
         matches!(
             self,
-            Self::TerminalBench3
-                | Self::DeepSWE11
-                | Self::ReveloCodeIndex
-                | Self::SWEBenchLive
-                | Self::SWEBenchVerified
+            Self::TerminalBench3 | Self::DeepSWE11 | Self::ReveloCodeIndex
         )
     }
 
-    pub(crate) fn remote_sources() -> [Self; 8] {
+    pub(crate) fn remote_sources() -> [Self; 6] {
         [
             Self::SWERebench,
             Self::TerminalBench3,
             Self::DeepSWE11,
             Self::LiveBench,
             Self::ReveloCodeIndex,
-            Self::SWEBenchLive,
-            Self::SWEBenchVerified,
             Self::DesignArena,
         ]
     }
 
-    pub(crate) fn consensus_sources() -> [Self; 9] {
+    pub(crate) fn consensus_sources() -> [Self; 7] {
         [
             Self::ArtificialAnalysisSnapshot,
             Self::SWERebench,
@@ -206,13 +201,11 @@ impl BenchmarkSource {
             Self::DeepSWE11,
             Self::LiveBench,
             Self::ReveloCodeIndex,
-            Self::SWEBenchLive,
-            Self::SWEBenchVerified,
             Self::DesignArena,
         ]
     }
 
-    pub(crate) fn display_sources() -> [Self; 9] {
+    pub(crate) fn display_sources() -> [Self; 7] {
         Self::consensus_sources()
     }
 
@@ -221,12 +214,12 @@ impl BenchmarkSource {
             Self::CompositeAgentic | Self::CompositeDeployment => "",
             Self::ArtificialAnalysisSnapshot => ARTIFICIAL_ANALYSIS_URL,
             Self::SWERebench => SWE_REBENCH_URL,
-            Self::TerminalBench3 => "https://hub.harborframework.com/datasets/terminal-bench/terminal-bench/latest?tab=leaderboard&leaderboard=3-0-0",
+            Self::TerminalBench3 => {
+                "https://hub.harborframework.com/datasets/terminal-bench/terminal-bench/latest?tab=leaderboard&leaderboard=3-0-0"
+            }
             Self::DeepSWE11 => "https://deepswe.datacurve.ai/",
             Self::LiveBench => "https://livebench.ai/",
             Self::ReveloCodeIndex => REVELO_CODE_INDEX_URL,
-            Self::SWEBenchLive => "https://swe-bench-live.github.io/",
-            Self::SWEBenchVerified => "https://www.swebench.com/",
             Self::DesignArena => "https://designarena.ai/leaderboard",
         }
     }
@@ -320,7 +313,6 @@ impl ModalityFilter {
     }
 }
 
-
 impl LiquidityFilter {
     pub(crate) fn label(self) -> &'static str {
         match self {
@@ -348,21 +340,28 @@ impl LiquidityFilter {
         // Prefer the cheapest *real provider* satisfying the selected market-
         // quality constraint. This avoids dropping a model just because its
         // globally cheapest provider is untrusted when a slightly dearer trusted
-        // provider is available in the same Surplus market row.
+        // provider is available in the same Surplus market row. Within the
+        // qualifying set, zero-priced asks likewise defer to any priced ask.
         let qualifies = |option: &ProviderMarketQuote| match self {
             Self::Any => true,
             Self::Trusted => option.trusted == Some(true),
             Self::Healthy3 => option.healthy_seller_count.unwrap_or(0) >= 3,
             Self::Healthy10 => option.healthy_seller_count.unwrap_or(0) >= 10,
         };
-        if let Some(option) = quote
+        let by_workload = |a: &&ProviderMarketQuote, b: &&ProviderMarketQuote| {
+            a.workload_price(input_weight, cache_read_weight, output_weight)
+                .total_cmp(&b.workload_price(input_weight, cache_read_weight, output_weight))
+        };
+        let qualifying: Vec<&ProviderMarketQuote> = quote
             .market_options
             .iter()
             .filter(|option| qualifies(option))
-            .min_by(|a, b| {
-                a.workload_price(input_weight, cache_read_weight, output_weight)
-                    .total_cmp(&b.workload_price(input_weight, cache_read_weight, output_weight))
-            })
+            .collect();
+        if let Some(option) = qualifying
+            .iter()
+            .filter(|option| !is_free_pair(option.input, option.output))
+            .min_by(|a, b| by_workload(a, b))
+            .or_else(|| qualifying.iter().min_by(|a, b| by_workload(a, b)))
         {
             let mut selected = quote.clone();
             selected.provider = option.provider.clone();
@@ -413,8 +412,12 @@ pub(crate) struct AlertRule {
     pub(crate) score_threshold: f64,
 }
 
-pub(crate) fn default_common_scaffold() -> String { "mini-SWE-agent".into() }
-pub(crate) fn default_score_threshold() -> f64 { 50.0 }
+pub(crate) fn default_common_scaffold() -> String {
+    "mini-SWE-agent".into()
+}
+pub(crate) fn default_score_threshold() -> f64 {
+    50.0
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
@@ -449,7 +452,12 @@ pub(crate) struct ProviderMarketQuote {
 }
 
 impl ProviderMarketQuote {
-    pub(crate) fn workload_price(&self, input_weight: f64, cache_read_weight: f64, output_weight: f64) -> f64 {
+    pub(crate) fn workload_price(
+        &self,
+        input_weight: f64,
+        cache_read_weight: f64,
+        output_weight: f64,
+    ) -> f64 {
         blended_price(
             self.input,
             self.cache_read,
@@ -459,6 +467,13 @@ impl ProviderMarketQuote {
             output_weight,
         )
     }
+}
+
+/// A zero-priced token pair. Surplus markets can carry genuine 100%-off asks
+/// (a seller with a 0x cost multiplier); such an ask is real but should not
+/// own the headline price while any priced ask exists.
+pub(crate) fn is_free_pair(input: f64, output: f64) -> bool {
+    input == 0.0 && output == 0.0
 }
 
 #[derive(Debug, Clone)]
@@ -479,6 +494,10 @@ pub(crate) struct Quote {
     pub(crate) discount_direction: Option<String>,
     pub(crate) market_options: Vec<ProviderMarketQuote>,
     pub(crate) live_market: bool,
+    /// The live market also lists a zero-priced ask. Headline prices exclude
+    /// it whenever a priced ask exists; the UI marks affected rows so the
+    /// published discount never looks cheaper than what money can buy.
+    pub(crate) free_offer_listed: bool,
     /// Model accepts image input alongside text (vision LLM), per the
     /// `/v1/models` architecture metadata. Only meaningful when the catalog
     /// feed supplied modality data; the comparison matrix never sets it.
@@ -524,8 +543,7 @@ pub(crate) fn blended_price(
         return (input + output) / 2.0;
     }
     let cache_price = cache_read.unwrap_or(input);
-    (input * input_weight + cache_price * cache_read_weight + output * output_weight)
-        / total_weight
+    (input * input_weight + cache_price * cache_read_weight + output * output_weight) / total_weight
 }
 
 #[derive(Debug, Clone)]
@@ -573,11 +591,75 @@ mod tests {
     #[test]
     fn liquidity_filters_use_live_market_quality() {
         let q = test_quote("model-a", 1.0, true);
-        assert!(LiquidityFilter::Trusted.apply(&q, 15.0, 80.0, 5.0).is_some());
-        assert!(LiquidityFilter::Healthy3.apply(&q, 15.0, 80.0, 5.0).is_some());
-        assert!(LiquidityFilter::Healthy10.apply(&q, 15.0, 80.0, 5.0).is_none());
+        assert!(
+            LiquidityFilter::Trusted
+                .apply(&q, 15.0, 80.0, 5.0)
+                .is_some()
+        );
+        assert!(
+            LiquidityFilter::Healthy3
+                .apply(&q, 15.0, 80.0, 5.0)
+                .is_some()
+        );
+        assert!(
+            LiquidityFilter::Healthy10
+                .apply(&q, 15.0, 80.0, 5.0)
+                .is_none()
+        );
         let fallback = test_quote("model-a", 1.0, false);
-        assert!(LiquidityFilter::Trusted.apply(&fallback, 15.0, 80.0, 5.0).is_none());
+        assert!(
+            LiquidityFilter::Trusted
+                .apply(&fallback, 15.0, 80.0, 5.0)
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn liquidity_filters_defer_to_priced_providers_over_free_asks() {
+        let mut q = test_quote("model-a", 1.0, true);
+        q.market_options = vec![
+            ProviderMarketQuote {
+                provider: "free".into(),
+                input: 0.0,
+                output: 0.0,
+                cache_read: None,
+                trusted: Some(true),
+                healthy_seller_count: Some(10),
+            },
+            ProviderMarketQuote {
+                provider: "priced".into(),
+                input: 0.6,
+                output: 1.1,
+                cache_read: Some(0.06),
+                trusted: Some(true),
+                healthy_seller_count: Some(5),
+            },
+        ];
+        for filter in [LiquidityFilter::Trusted, LiquidityFilter::Healthy3] {
+            let selected = filter.apply(&q, 15.0, 80.0, 5.0).unwrap();
+            assert_eq!(
+                selected.provider, "priced",
+                "{filter:?} picked the free ask"
+            );
+            assert!((selected.input - 0.6).abs() < 1e-12);
+        }
+    }
+
+    #[test]
+    fn liquidity_filters_keep_all_free_markets_when_no_priced_option_qualifies() {
+        let mut q = test_quote("free-model", 0.0, true);
+        q.market_options = vec![ProviderMarketQuote {
+            provider: "only-free".into(),
+            input: 0.0,
+            output: 0.0,
+            cache_read: None,
+            trusted: Some(true),
+            healthy_seller_count: Some(4),
+        }];
+        let selected = LiquidityFilter::Healthy3
+            .apply(&q, 15.0, 80.0, 5.0)
+            .unwrap();
+        assert_eq!(selected.provider, "only-free");
     }
 
     #[test]
@@ -589,5 +671,4 @@ mod tests {
         assert!(!ModalityFilter::TextOnly.allows(true));
         assert!(ModalityFilter::TextOnly.allows(false));
     }
-
 }

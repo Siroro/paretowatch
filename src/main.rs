@@ -7,7 +7,7 @@ use std::{
     sync::mpsc::{self, Receiver, Sender, TryRecvError},
 };
 
-use anyhow::{anyhow, Context, Result};
+use anyhow::{Context, Result, anyhow};
 use chrono::{DateTime, Utc};
 use directories::ProjectDirs;
 use eframe::egui;
@@ -15,26 +15,26 @@ use egui_plot::{HoverPosition, Line, Plot, PlotPoint, PlotPoints, Points, Text};
 use notify_rust::Notification;
 use serde_json::Value;
 use tray_icon::{
-    menu::{Menu, MenuEvent, MenuItem, PredefinedMenuItem},
     MouseButton, MouseButtonState, TrayIcon, TrayIconBuilder, TrayIconEvent,
+    menu::{Menu, MenuEvent, MenuItem, PredefinedMenuItem},
 };
 
 mod artificial_analysis_snapshot;
-mod history;
-mod types;
 mod bench;
 mod fetch;
+mod history;
 #[cfg(test)]
 mod testfix;
+mod types;
+mod widgets;
 
 use artificial_analysis_snapshot::{
-    artificial_analysis_snapshot, ARTIFICIAL_ANALYSIS_SNAPSHOT_DATE,
-    ARTIFICIAL_ANALYSIS_SNAPSHOT_VERSION,
+    ARTIFICIAL_ANALYSIS_SNAPSHOT_DATE, ARTIFICIAL_ANALYSIS_SNAPSHOT_VERSION,
+    artificial_analysis_snapshot,
 };
-use types::*;
 use bench::*;
 use fetch::*;
-
+use types::*;
 
 const MENU_SHOW: &str = "paretowatch_show";
 const MENU_REFRESH: &str = "paretowatch_refresh";
@@ -104,6 +104,7 @@ struct ParetoWatchApp {
     history: history::HistoryTracker,
     history_ui: history::HistoryUiState,
     recent_changes: VecDeque<PriceChangeEvent>,
+    widgets: widgets::PriceWidgetManager,
     worker_tx: Sender<WorkerCommand>,
     worker_rx: Receiver<WorkerMessage>,
     ui_rx: Receiver<UiCommand>,
@@ -130,7 +131,13 @@ struct ParetoWatchApp {
     data_version: u64,
     scaffold_cache: Option<(u64, Vec<String>)>,
     pareto_cache: Option<ParetoCache>,
-    consensus_cache: Option<(u64, ComparisonMode, String, String, Option<BenchmarkConsensus>)>,
+    consensus_cache: Option<(
+        u64,
+        ComparisonMode,
+        String,
+        String,
+        Option<BenchmarkConsensus>,
+    )>,
     status: String,
     last_price_error: Option<String>,
     is_visible: bool,
@@ -158,13 +165,17 @@ impl ParetoWatchApp {
             price_snapshot: None,
             benchmark_sets: {
                 let mut sets = HashMap::new();
-                sets.insert(BenchmarkSource::ArtificialAnalysisSnapshot, artificial_analysis_snapshot());
+                sets.insert(
+                    BenchmarkSource::ArtificialAnalysisSnapshot,
+                    artificial_analysis_snapshot(),
+                );
                 sets
             },
             benchmark_errors: HashMap::new(),
             history: history::HistoryTracker::open(&history::history_log_path()),
             history_ui: history::HistoryUiState::default(),
             recent_changes: VecDeque::new(),
+            widgets: widgets::PriceWidgetManager::default(),
             worker_tx,
             worker_rx,
             ui_rx,
@@ -247,7 +258,11 @@ impl ParetoWatchApp {
                         }
                     }
                     self.status = if snapshot.market_overlay_count > 0 {
-                        format!("{} priced models · {} live market quotes", snapshot.quotes.len(), snapshot.market_overlay_count)
+                        format!(
+                            "{} priced models · {} live market quotes",
+                            snapshot.quotes.len(),
+                            snapshot.market_overlay_count
+                        )
                     } else {
                         format!("{} priced models · comparison feed", snapshot.quotes.len())
                     };
@@ -277,7 +292,12 @@ impl ParetoWatchApp {
         // recorded state. Writes only when something actually changed.
         if data_dirty {
             if let Some(snapshot) = &self.price_snapshot {
-                self.history.record(snapshot, &self.benchmark_sets, self.data_version, Utc::now());
+                self.history.record(
+                    snapshot,
+                    &self.benchmark_sets,
+                    self.data_version,
+                    Utc::now(),
+                );
             }
         }
     }
@@ -407,7 +427,9 @@ impl ParetoWatchApp {
     }
 
     fn evaluate_semantic_alerts(&mut self) {
-        let Some(snapshot) = self.price_snapshot.clone() else { return };
+        let Some(snapshot) = self.price_snapshot.clone() else {
+            return;
+        };
         let alerts = self.settings.alerts.clone();
         for alert in alerts {
             if !alert.enabled || !alert.mode.benchmark_dependent() {
@@ -420,7 +442,9 @@ impl ParetoWatchApp {
                 alert.comparison_mode,
                 &alert.common_scaffold,
             );
-            if benchmarks.is_empty() { continue; }
+            if benchmarks.is_empty() {
+                continue;
+            }
             let benchmark_metric = if alert.benchmark_source == BenchmarkSource::LiveBench {
                 alert.benchmark_metric
             } else {
@@ -448,7 +472,9 @@ impl ParetoWatchApp {
                 self.settings.cache_read_weight,
                 self.settings.output_weight,
             );
-            let Some(target) = joined.iter().find(|point| point.model_id == alert.model) else { continue };
+            let Some(target) = joined.iter().find(|point| point.model_id == alert.model) else {
+                continue;
+            };
             let frontier = pareto_frontier(&joined);
             let on_frontier = frontier.iter().any(|point| point.model_id == alert.model);
             let condition = match alert.mode {
@@ -496,7 +522,10 @@ impl ParetoWatchApp {
                         ),
                     ),
                     AlertMode::CheapestAboveScore => (
-                        format!("★ {} is now cheapest above {:.1}", target.model, alert.score_threshold),
+                        format!(
+                            "★ {} is now cheapest above {:.1}",
+                            target.model, alert.score_threshold
+                        ),
                         format!(
                             "{} score {:.1} · {} ${:.4}{}\n{} · {}",
                             alert.benchmark_source.short_label(),
@@ -532,8 +561,14 @@ impl ParetoWatchApp {
         } else {
             self.status = "Settings saved".into();
         }
-        let valid_ids = self.settings.alerts.iter().map(|a| a.id).collect::<std::collections::HashSet<_>>();
-        self.semantic_alert_state.retain(|id, _| valid_ids.contains(id));
+        let valid_ids = self
+            .settings
+            .alerts
+            .iter()
+            .map(|a| a.id)
+            .collect::<std::collections::HashSet<_>>();
+        self.semantic_alert_state
+            .retain(|id, _| valid_ids.contains(id));
         let _ = self
             .worker_tx
             .send(WorkerCommand::UpdateSettings(self.settings.clone()));
@@ -576,8 +611,15 @@ impl ParetoWatchApp {
             egui::ComboBox::from_id_salt("price_metric")
                 .selected_text(self.price_metric.label())
                 .show_ui(ui, |ui| {
-                    for metric in [PriceMetric::Blended, PriceMetric::Input, PriceMetric::Output] {
-                        if ui.selectable_value(&mut self.price_metric, metric, metric.label()).changed() {
+                    for metric in [
+                        PriceMetric::Blended,
+                        PriceMetric::Input,
+                        PriceMetric::Output,
+                    ] {
+                        if ui
+                            .selectable_value(&mut self.price_metric, metric, metric.label())
+                            .changed()
+                        {
                             if self.price_metric != PriceMetric::Blended {
                                 self.cost_basis = CostBasis::PerMillion;
                             }
@@ -593,7 +635,10 @@ impl ParetoWatchApp {
                     .selected_text(self.cost_basis.label())
                     .show_ui(ui, |ui| {
                         for basis in [CostBasis::PerMillion, CostBasis::EstimatedPerTask] {
-                            if ui.selectable_value(&mut self.cost_basis, basis, basis.label()).changed() {
+                            if ui
+                                .selectable_value(&mut self.cost_basis, basis, basis.label())
+                                .changed()
+                            {
                                 chart_axes_changed = true;
                                 self.selected_pareto_model = None;
                             }
@@ -609,16 +654,14 @@ impl ParetoWatchApp {
                     for source in [
                         BenchmarkSource::CompositeAgentic,
                         BenchmarkSource::CompositeDeployment,
-                        BenchmarkSource::ArtificialAnalysisSnapshot,
-                        BenchmarkSource::SWERebench,
-                        BenchmarkSource::TerminalBench3,
-                        BenchmarkSource::DeepSWE11,
-                        BenchmarkSource::LiveBench,
-                        BenchmarkSource::ReveloCodeIndex,
-                        BenchmarkSource::SWEBenchLive,
-                        BenchmarkSource::SWEBenchVerified,
-                    ] {
-                        if ui.selectable_value(&mut self.benchmark_source, source, source.label()).changed() {
+                    ]
+                    .into_iter()
+                    .chain(BenchmarkSource::display_sources())
+                    {
+                        if ui
+                            .selectable_value(&mut self.benchmark_source, source, source.label())
+                            .changed()
+                        {
                             chart_axes_changed = true;
                             self.selected_pareto_model = None;
                         }
@@ -631,8 +674,19 @@ impl ParetoWatchApp {
                 egui::ComboBox::from_id_salt("benchmark_metric")
                     .selected_text(self.benchmark_metric.label())
                     .show_ui(ui, |ui| {
-                        for metric in [BenchmarkMetric::Overall, BenchmarkMetric::Coding, BenchmarkMetric::AgenticCoding] {
-                            if ui.selectable_value(&mut self.benchmark_metric, metric, metric.label()).changed() {
+                        for metric in [
+                            BenchmarkMetric::Overall,
+                            BenchmarkMetric::Coding,
+                            BenchmarkMetric::AgenticCoding,
+                        ] {
+                            if ui
+                                .selectable_value(
+                                    &mut self.benchmark_metric,
+                                    metric,
+                                    metric.label(),
+                                )
+                                .changed()
+                            {
                                 chart_axes_changed = true;
                             }
                         }
@@ -641,13 +695,14 @@ impl ParetoWatchApp {
                 // Composite row names already disclose their method; a separate
                 // metric note would just repeat it in the toolbar.
                 ui.label(match self.benchmark_source {
-                    BenchmarkSource::ArtificialAnalysisSnapshot => "Metric: Intelligence Index snapshot",
+                    BenchmarkSource::ArtificialAnalysisSnapshot => {
+                        "Metric: Intelligence Index snapshot"
+                    }
                     BenchmarkSource::SWERebench => "Metric: Result@1",
                     BenchmarkSource::TerminalBench3 => "Metric: accuracy",
                     BenchmarkSource::DeepSWE11 => "Metric: pass@1",
                     BenchmarkSource::ReveloCodeIndex => "Metric: Code Index",
-                    BenchmarkSource::SWEBenchLive => "Metric: resolved %",
-                    BenchmarkSource::SWEBenchVerified => "Metric: resolved % (legacy)",
+                    BenchmarkSource::DesignArena => "Metric: Design Elo (blinded votes)",
                     _ => unreachable!(),
                 });
             }
@@ -655,15 +710,36 @@ impl ParetoWatchApp {
             if self.price_metric == PriceMetric::Blended {
                 ui.separator();
                 ui.label("Fresh input");
-                if ui.add(egui::DragValue::new(&mut self.settings.input_weight).speed(0.1).range(0.0..=100.0)).changed() {
+                if ui
+                    .add(
+                        egui::DragValue::new(&mut self.settings.input_weight)
+                            .speed(0.1)
+                            .range(0.0..=100.0),
+                    )
+                    .changed()
+                {
                     self.settings_dirty = true;
                 }
                 ui.label("Cache read");
-                if ui.add(egui::DragValue::new(&mut self.settings.cache_read_weight).speed(0.1).range(0.0..=100.0)).changed() {
+                if ui
+                    .add(
+                        egui::DragValue::new(&mut self.settings.cache_read_weight)
+                            .speed(0.1)
+                            .range(0.0..=100.0),
+                    )
+                    .changed()
+                {
                     self.settings_dirty = true;
                 }
                 ui.label("Output");
-                if ui.add(egui::DragValue::new(&mut self.settings.output_weight).speed(0.1).range(0.0..=100.0)).changed() {
+                if ui
+                    .add(
+                        egui::DragValue::new(&mut self.settings.output_weight)
+                            .speed(0.1)
+                            .range(0.0..=100.0),
+                    )
+                    .changed()
+                {
                     self.settings_dirty = true;
                 }
                 if self.settings_dirty && ui.button("Apply weights").clicked() {
@@ -683,8 +759,15 @@ impl ParetoWatchApp {
             egui::ComboBox::from_id_salt("comparison_mode")
                 .selected_text(self.comparison_mode.label())
                 .show_ui(ui, |ui| {
-                    for mode in [ComparisonMode::ModelCapability, ComparisonMode::BestAvailableAgent, ComparisonMode::CommonScaffold] {
-                        if ui.selectable_value(&mut self.comparison_mode, mode, mode.label()).changed() {
+                    for mode in [
+                        ComparisonMode::ModelCapability,
+                        ComparisonMode::BestAvailableAgent,
+                        ComparisonMode::CommonScaffold,
+                    ] {
+                        if ui
+                            .selectable_value(&mut self.comparison_mode, mode, mode.label())
+                            .changed()
+                        {
                             chart_axes_changed = true;
                             self.selected_pareto_model = None;
                         }
@@ -697,7 +780,14 @@ impl ParetoWatchApp {
                     .selected_text(&self.common_scaffold)
                     .show_ui(ui, |ui| {
                         for scaffold in &scaffold_options {
-                            if ui.selectable_value(&mut self.common_scaffold, scaffold.clone(), scaffold).changed() {
+                            if ui
+                                .selectable_value(
+                                    &mut self.common_scaffold,
+                                    scaffold.clone(),
+                                    scaffold,
+                                )
+                                .changed()
+                            {
                                 chart_axes_changed = true;
                                 self.selected_pareto_model = None;
                             }
@@ -709,8 +799,16 @@ impl ParetoWatchApp {
             egui::ComboBox::from_id_salt("liquidity_filter")
                 .selected_text(self.liquidity_filter.label())
                 .show_ui(ui, |ui| {
-                    for filter in [LiquidityFilter::Any, LiquidityFilter::Trusted, LiquidityFilter::Healthy3, LiquidityFilter::Healthy10] {
-                        if ui.selectable_value(&mut self.liquidity_filter, filter, filter.label()).changed() {
+                    for filter in [
+                        LiquidityFilter::Any,
+                        LiquidityFilter::Trusted,
+                        LiquidityFilter::Healthy3,
+                        LiquidityFilter::Healthy10,
+                    ] {
+                        if ui
+                            .selectable_value(&mut self.liquidity_filter, filter, filter.label())
+                            .changed()
+                        {
                             chart_axes_changed = true;
                             self.selected_pareto_model = None;
                         }
@@ -727,8 +825,15 @@ impl ParetoWatchApp {
             egui::ComboBox::from_id_salt("modality_filter")
                 .selected_text(self.modality_filter.label())
                 .show_ui(ui, |ui| {
-                    for filter in [ModalityFilter::All, ModalityFilter::Vision, ModalityFilter::TextOnly] {
-                        if ui.selectable_value(&mut self.modality_filter, filter, filter.label()).changed() {
+                    for filter in [
+                        ModalityFilter::All,
+                        ModalityFilter::Vision,
+                        ModalityFilter::TextOnly,
+                    ] {
+                        if ui
+                            .selectable_value(&mut self.modality_filter, filter, filter.label())
+                            .changed()
+                        {
                             chart_axes_changed = true;
                             reset_zoom = true;
                             self.selected_pareto_model = None;
@@ -749,15 +854,19 @@ impl ParetoWatchApp {
             if ui.small_button("Reset zoom").clicked() {
                 reset_zoom = true;
             }
-            if ui.checkbox(&mut self.log_price_axis, "Log price axis").changed() {
+            if ui
+                .checkbox(&mut self.log_price_axis, "Log price axis")
+                .changed()
+            {
                 reset_zoom = true;
             }
-            if self.selected_pareto_model.is_some() && ui.small_button("Clear selection").clicked() {
+            if self.selected_pareto_model.is_some() && ui.small_button("Clear selection").clicked()
+            {
                 self.selected_pareto_model = None;
             }
         });
         ui.add_space(2.0);
-        ui.small("Wheel: zoom · middle-drag: pan · right-drag: box zoom · double-click: reset · click an orb: inspect");
+        ui.small("Wheel: zoom · middle-drag: pan · right-drag: box zoom · double-click: reset · click an orb: inspect · right-click an orb: add to price window");
 
         // The whole chart body scrolls as one page so the detail card and
         // frontier table can never be pushed out of the viewport.
@@ -871,6 +980,13 @@ impl ParetoWatchApp {
 
         let log_price_axis = self.log_price_axis;
         let cost_basis = self.cost_basis;
+        // The selection/search halos are separate series that share the data
+        // point, so the formatter can receive their internal name; map ids
+        // back to display names.
+        let display_names: HashMap<String, String> = joined
+            .iter()
+            .map(|p| (p.model_id.clone(), p.model.clone()))
+            .collect();
         let x_axis_label = match (self.cost_basis, log_price_axis) {
             (CostBasis::PerMillion, true) => format!("{} price ($ / 1M, log scale)", self.price_metric.label()),
             (CostBasis::PerMillion, false) => format!("{} price ($ / 1M)", self.price_metric.label()),
@@ -886,8 +1002,6 @@ impl ParetoWatchApp {
             BenchmarkSource::DeepSWE11 => "DeepSWE v1.1 pass@1".to_owned(),
             BenchmarkSource::LiveBench => format!("LiveBench {} score", self.benchmark_metric.label()),
             BenchmarkSource::ReveloCodeIndex => "Revelo Code Index".to_owned(),
-            BenchmarkSource::SWEBenchLive => "SWE-bench Live resolved %".to_owned(),
-            BenchmarkSource::SWEBenchVerified => "SWE-bench Verified resolved % (legacy)".to_owned(),
             BenchmarkSource::DesignArena => "Design Arena Elo".to_owned(),
         };
 
@@ -905,7 +1019,7 @@ impl ParetoWatchApp {
             style.text_styles.insert(egui::TextStyle::Small, egui::FontId::proportional(12.5));
             style.visuals.override_text_color = Some(egui::Color32::from_rgb(226, 232, 240));
         }
-        let clicked_model = Plot::new("pareto_plot")
+        let (clicked_model, right_clicked_model) = Plot::new("pareto_plot")
             .height(plot_height)
             .x_axis_label(x_axis_label)
             .x_axis_formatter(move |mark, _range| {
@@ -924,8 +1038,13 @@ impl ParetoWatchApp {
             .set_margin_fraction(egui::vec2(0.04, 0.06))
             .label_formatter(move |pos| match pos {
                 HoverPosition::NearDataPoint { plot_name, position, .. } if !plot_name.is_empty() => {
+                    let name = plot_name
+                        .strip_prefix("sel_ring_")
+                        .or_else(|| plot_name.strip_prefix("search_ring_"))
+                        .and_then(|id| display_names.get(id).map(String::as_str))
+                        .unwrap_or(plot_name);
                     let price = price_from_plot_x(position.x, log_price_axis);
-                    Some(format!("{plot_name}\n${:.6} {} · score {:.1}", price, cost_basis.unit(), position.y))
+                    Some(format!("{name}\n${:.6} {} · score {:.1}", price, cost_basis.unit(), position.y))
                 }
                 _ => None,
             })
@@ -1029,27 +1148,45 @@ impl ParetoWatchApp {
                     );
                 }
 
-                if plot_ui.response().clicked() {
-                    if let Some(click_pos) = plot_ui.response().interact_pointer_pos() {
-                        return joined
-                            .iter()
-                            .filter_map(|p| {
-                                let plot_x = price_to_plot_x(p.cost, log_price_axis);
-                                let screen_pos = plot_ui.screen_from_plot(PlotPoint::new(plot_x, p.score));
-                                let distance = (screen_pos - click_pos).length();
-                                (distance <= 16.0).then_some((distance, p.model_id.clone()))
-                            })
-                            .min_by(|a, b| a.0.total_cmp(&b.0))
-                            .map(|(_, model_id)| model_id);
+                let nearest_orb = |click_pos: egui::Pos2| {
+                    joined
+                        .iter()
+                        .filter_map(|p| {
+                            let plot_x = price_to_plot_x(p.cost, log_price_axis);
+                            let screen_pos = plot_ui.screen_from_plot(PlotPoint::new(plot_x, p.score));
+                            let distance = (screen_pos - click_pos).length();
+                            (distance <= 16.0).then_some((distance, p.model_id.clone()))
+                        })
+                        .min_by(|a, b| a.0.total_cmp(&b.0))
+                        .map(|(_, model_id)| model_id)
+                };
+                let response = plot_ui.response();
+                if response.clicked() {
+                    if let Some(click_pos) = response.interact_pointer_pos() {
+                        (nearest_orb(click_pos), None)
+                    } else {
+                        (None, None)
                     }
+                } else if response.secondary_clicked() {
+                    // A right-click without drag is not a box zoom; near an
+                    // orb it pins a floating price widget.
+                    if let Some(click_pos) = response.interact_pointer_pos() {
+                        (None, nearest_orb(click_pos).map(|model_id| (model_id, click_pos)))
+                    } else {
+                        (None, None)
+                    }
+                } else {
+                    (None, None)
                 }
-                None
             })
             .inner;
         *ui.style_mut() = (*saved_style).clone();
 
         if let Some(model_id) = clicked_model {
             self.selected_pareto_model = Some(model_id);
+        }
+        if let Some((model_id, at)) = right_clicked_model {
+            self.widgets.spawn(ui.ctx(), self.price_snapshot.as_ref(), &self.settings, &model_id, at);
         }
 
         let selected_id = self.selected_pareto_model.clone();
@@ -1110,6 +1247,9 @@ impl ParetoWatchApp {
                 }
                 if p.live_market {
                     ui.strong("live market");
+                    if p.free_offer_listed {
+                        free_offer_badge(ui);
+                    }
                 } else {
                     ui.label("comparison/catalog price");
                 }
@@ -1205,9 +1345,18 @@ impl ParetoWatchApp {
                             if let Some(discount) = quote.discount_pct {
                                 ui.separator();
                                 let direction = quote.discount_direction.as_deref().unwrap_or("stable");
-                                ui.label(format!("{discount:.1}% discount \u{00b7} {direction}"));
+                                ui.colored_label(
+                                    discount_color(discount),
+                                    format!("{discount:.1}% discount \u{00b7} {direction}"),
+                                );
                             }
                         });
+                        if quote.free_offer_listed {
+                            ui.small(
+                                "* A seller is listing this model free (100% off). Shown prices are the \
+                                 cheapest ask that actually costs money; the published market best is $0.",
+                            );
+                        }
                     } else {
                         ui.label("market metadata unavailable on comparison/catalog quote");
                     }
@@ -1338,25 +1487,53 @@ impl ParetoWatchApp {
     }
 
     fn frontier_table(&mut self, ui: &mut egui::Ui, frontier: &[JoinedPoint]) {
-        egui::Grid::new("frontier_table").striped(true).show(ui, |ui| {
-            ui.strong("Model");
-            ui.strong(if self.cost_basis == CostBasis::EstimatedPerTask { "Est. $/task" } else { "Price" });
-            ui.strong("Score");
-            ui.strong("Source");
-            ui.end_row();
-            for p in frontier {
-                ui.horizontal(|ui| {
-                    ui.label(egui::RichText::new("●").color(creator_color(&p.creator)).size(11.0));
-                    if ui.selectable_label(self.selected_pareto_model.as_deref() == Some(p.model_id.as_str()), &p.model).clicked() {
-                        self.selected_pareto_model = Some(p.model_id.clone());
-                    }
+        egui::Grid::new("frontier_table")
+            .striped(true)
+            .show(ui, |ui| {
+                ui.strong("Model");
+                ui.strong(if self.cost_basis == CostBasis::EstimatedPerTask {
+                    "Est. $/task"
+                } else {
+                    "Price"
                 });
-                ui.label(format!("${:.4}", p.cost));
-                ui.label(format!("{:.1}", p.score));
-                ui.label(if p.live_market { "Surplus market" } else { "Surplus comparison/catalog" });
+                ui.strong("Score");
+                ui.strong("Source");
                 ui.end_row();
-            }
-        });
+                for p in frontier {
+                    ui.horizontal(|ui| {
+                        ui.label(
+                            egui::RichText::new("●")
+                                .color(creator_color(&p.creator))
+                                .size(11.0),
+                        );
+                        let label = if p.free_offer_listed {
+                            format!("{}*", p.model)
+                        } else {
+                            p.model.clone()
+                        };
+                        if ui
+                            .selectable_label(
+                                self.selected_pareto_model.as_deref() == Some(p.model_id.as_str()),
+                                &label,
+                            )
+                            .clicked()
+                        {
+                            self.selected_pareto_model = Some(p.model_id.clone());
+                        }
+                        if p.free_offer_listed {
+                            free_offer_badge(ui);
+                        }
+                    });
+                    ui.label(format!("${:.4}", p.cost));
+                    ui.label(format!("{:.1}", p.score));
+                    ui.label(if p.live_market {
+                        "Surplus market"
+                    } else {
+                        "Surplus comparison/catalog"
+                    });
+                    ui.end_row();
+                }
+            });
     }
 
     fn history_tab(&mut self, ui: &mut egui::Ui) {
@@ -1370,7 +1547,11 @@ impl ParetoWatchApp {
     }
 
     fn alerts_tab(&mut self, ui: &mut egui::Ui) {
-        let quotes = self.price_snapshot.as_ref().map(|s| s.quotes.clone()).unwrap_or_default();
+        let quotes = self
+            .price_snapshot
+            .as_ref()
+            .map(|s| s.quotes.clone())
+            .unwrap_or_default();
         let scaffold_options = self.cached_scaffolds();
 
         ui.group(|ui| {
@@ -1379,12 +1560,19 @@ impl ParetoWatchApp {
                 egui::ComboBox::from_id_salt("alert_model")
                     .width(260.0)
                     .selected_text(
-                        quotes.iter().find(|q| q.model == self.alert_model)
-                            .map(|q| q.display_name.as_str()).unwrap_or("Select model"),
+                        quotes
+                            .iter()
+                            .find(|q| q.model == self.alert_model)
+                            .map(|q| q.display_name.as_str())
+                            .unwrap_or("Select model"),
                     )
                     .show_ui(ui, |ui| {
                         for q in &quotes {
-                            ui.selectable_value(&mut self.alert_model, q.model.clone(), &q.display_name);
+                            ui.selectable_value(
+                                &mut self.alert_model,
+                                q.model.clone(),
+                                &q.display_name,
+                            );
                         }
                     });
 
@@ -1406,18 +1594,34 @@ impl ParetoWatchApp {
                     egui::ComboBox::from_id_salt("alert_metric")
                         .selected_text(self.alert_metric.label())
                         .show_ui(ui, |ui| {
-                            for metric in [PriceMetric::Blended, PriceMetric::Input, PriceMetric::Output] {
+                            for metric in [
+                                PriceMetric::Blended,
+                                PriceMetric::Input,
+                                PriceMetric::Output,
+                            ] {
                                 ui.selectable_value(&mut self.alert_metric, metric, metric.label());
                             }
                         });
                     egui::ComboBox::from_id_salt("alert_direction")
                         .selected_text(self.alert_direction.label())
                         .show_ui(ui, |ui| {
-                            ui.selectable_value(&mut self.alert_direction, AlertDirection::BelowOrEqual, "at or below");
-                            ui.selectable_value(&mut self.alert_direction, AlertDirection::AboveOrEqual, "at or above");
+                            ui.selectable_value(
+                                &mut self.alert_direction,
+                                AlertDirection::BelowOrEqual,
+                                "at or below",
+                            );
+                            ui.selectable_value(
+                                &mut self.alert_direction,
+                                AlertDirection::AboveOrEqual,
+                                "at or above",
+                            );
                         });
                     ui.label("$");
-                    ui.add(egui::DragValue::new(&mut self.alert_threshold).speed(0.05).range(0.0..=100_000.0));
+                    ui.add(
+                        egui::DragValue::new(&mut self.alert_threshold)
+                            .speed(0.05)
+                            .range(0.0..=100_000.0),
+                    );
                     ui.label("/ 1M");
                 } else if self.alert_mode == AlertMode::AnyChange {
                     ui.label("Notify whenever input, output, or blended price changes.");
@@ -1433,24 +1637,31 @@ impl ParetoWatchApp {
                             for source in [
                                 BenchmarkSource::CompositeAgentic,
                                 BenchmarkSource::CompositeDeployment,
-                                BenchmarkSource::ArtificialAnalysisSnapshot,
-                                BenchmarkSource::SWERebench,
-                                BenchmarkSource::TerminalBench3,
-                                BenchmarkSource::DeepSWE11,
-                                BenchmarkSource::LiveBench,
-                                BenchmarkSource::ReveloCodeIndex,
-                                BenchmarkSource::SWEBenchLive,
-                                BenchmarkSource::SWEBenchVerified,
-                            ] {
-                                ui.selectable_value(&mut self.benchmark_source, source, source.label());
+                            ]
+                            .into_iter()
+                            .chain(BenchmarkSource::display_sources())
+                            {
+                                ui.selectable_value(
+                                    &mut self.benchmark_source,
+                                    source,
+                                    source.label(),
+                                );
                             }
                         });
                     if self.benchmark_source == BenchmarkSource::LiveBench {
                         egui::ComboBox::from_id_salt("alert_benchmark_metric")
                             .selected_text(self.benchmark_metric.label())
                             .show_ui(ui, |ui| {
-                                for metric in [BenchmarkMetric::Overall, BenchmarkMetric::Coding, BenchmarkMetric::AgenticCoding] {
-                                    ui.selectable_value(&mut self.benchmark_metric, metric, metric.label());
+                                for metric in [
+                                    BenchmarkMetric::Overall,
+                                    BenchmarkMetric::Coding,
+                                    BenchmarkMetric::AgenticCoding,
+                                ] {
+                                    ui.selectable_value(
+                                        &mut self.benchmark_metric,
+                                        metric,
+                                        metric.label(),
+                                    );
                                 }
                             });
                     }
@@ -1458,7 +1669,11 @@ impl ParetoWatchApp {
                     egui::ComboBox::from_id_salt("alert_comparison_mode")
                         .selected_text(self.comparison_mode.label())
                         .show_ui(ui, |ui| {
-                            for mode in [ComparisonMode::ModelCapability, ComparisonMode::BestAvailableAgent, ComparisonMode::CommonScaffold] {
+                            for mode in [
+                                ComparisonMode::ModelCapability,
+                                ComparisonMode::BestAvailableAgent,
+                                ComparisonMode::CommonScaffold,
+                            ] {
                                 ui.selectable_value(&mut self.comparison_mode, mode, mode.label());
                             }
                         });
@@ -1468,7 +1683,11 @@ impl ParetoWatchApp {
                             .selected_text(&self.common_scaffold)
                             .show_ui(ui, |ui| {
                                 for scaffold in &scaffold_options {
-                                    ui.selectable_value(&mut self.common_scaffold, scaffold.clone(), scaffold);
+                                    ui.selectable_value(
+                                        &mut self.common_scaffold,
+                                        scaffold.clone(),
+                                        scaffold,
+                                    );
                                 }
                             });
                     }
@@ -1476,8 +1695,17 @@ impl ParetoWatchApp {
                     egui::ComboBox::from_id_salt("alert_liquidity_filter")
                         .selected_text(self.liquidity_filter.label())
                         .show_ui(ui, |ui| {
-                            for filter in [LiquidityFilter::Any, LiquidityFilter::Trusted, LiquidityFilter::Healthy3, LiquidityFilter::Healthy10] {
-                                ui.selectable_value(&mut self.liquidity_filter, filter, filter.label());
+                            for filter in [
+                                LiquidityFilter::Any,
+                                LiquidityFilter::Trusted,
+                                LiquidityFilter::Healthy3,
+                                LiquidityFilter::Healthy10,
+                            ] {
+                                ui.selectable_value(
+                                    &mut self.liquidity_filter,
+                                    filter,
+                                    filter.label(),
+                                );
                             }
                         });
                     ui.separator();
@@ -1485,8 +1713,18 @@ impl ParetoWatchApp {
                     egui::ComboBox::from_id_salt("semantic_alert_price_metric")
                         .selected_text(self.alert_metric.label())
                         .show_ui(ui, |ui| {
-                            for metric in [PriceMetric::Blended, PriceMetric::Input, PriceMetric::Output] {
-                                if ui.selectable_value(&mut self.alert_metric, metric, metric.label()).changed()
+                            for metric in [
+                                PriceMetric::Blended,
+                                PriceMetric::Input,
+                                PriceMetric::Output,
+                            ] {
+                                if ui
+                                    .selectable_value(
+                                        &mut self.alert_metric,
+                                        metric,
+                                        metric.label(),
+                                    )
+                                    .changed()
                                     && self.alert_metric != PriceMetric::Blended
                                 {
                                     self.alert_cost_basis = CostBasis::PerMillion;
@@ -1499,25 +1737,40 @@ impl ParetoWatchApp {
                             .selected_text(self.alert_cost_basis.label())
                             .show_ui(ui, |ui| {
                                 for basis in [CostBasis::PerMillion, CostBasis::EstimatedPerTask] {
-                                    ui.selectable_value(&mut self.alert_cost_basis, basis, basis.label());
+                                    ui.selectable_value(
+                                        &mut self.alert_cost_basis,
+                                        basis,
+                                        basis.label(),
+                                    );
                                 }
                             });
                     }
                     if self.alert_mode == AlertMode::CheapestAboveScore {
                         ui.separator();
                         ui.label("Minimum score");
-                        ui.add(egui::DragValue::new(&mut self.alert_score_threshold).speed(1.0).range(0.0..=100.0));
+                        ui.add(
+                            egui::DragValue::new(&mut self.alert_score_threshold)
+                                .speed(1.0)
+                                .range(0.0..=100.0),
+                        );
                     }
                 });
             }
 
-            if ui.add_enabled(!self.alert_model.is_empty(), egui::Button::new("Add alert")).clicked() {
+            if ui
+                .add_enabled(!self.alert_model.is_empty(), egui::Button::new("Add alert"))
+                .clicked()
+            {
                 self.settings.alerts.push(AlertRule {
                     id: next_alert_id(&self.settings.alerts),
                     model: self.alert_model.clone(),
                     mode: self.alert_mode,
                     metric: self.alert_metric,
-                    cost_basis: if self.alert_mode.benchmark_dependent() { self.alert_cost_basis } else { CostBasis::PerMillion },
+                    cost_basis: if self.alert_mode.benchmark_dependent() {
+                        self.alert_cost_basis
+                    } else {
+                        CostBasis::PerMillion
+                    },
                     direction: self.alert_direction,
                     threshold: self.alert_threshold,
                     enabled: true,
@@ -1552,15 +1805,38 @@ impl ParetoWatchApp {
                 if ui.checkbox(&mut alert.enabled, "").changed() {
                     changed = true;
                 }
-                let name = quotes.iter().find(|q| q.model == alert.model)
-                    .map(|q| q.display_name.as_str()).unwrap_or(&alert.model);
+                let name = quotes
+                    .iter()
+                    .find(|q| q.model == alert.model)
+                    .map(|q| q.display_name.as_str())
+                    .unwrap_or(&alert.model);
                 ui.label(name);
                 let rule_text = match alert.mode {
-                    AlertMode::Threshold => format!("{} {} ${:.4}", alert.metric.label(), alert.direction.label(), alert.threshold),
+                    AlertMode::Threshold => format!(
+                        "{} {} ${:.4}",
+                        alert.metric.label(),
+                        alert.direction.label(),
+                        alert.threshold
+                    ),
                     AlertMode::AnyChange => "Any price change".into(),
-                    AlertMode::EntersFrontier => format!("Enters frontier · {} · {} · {}", alert.benchmark_source.short_label(), alert.comparison_mode.label(), alert.cost_basis.label()),
-                    AlertMode::LeavesFrontier => format!("Leaves frontier · {} · {} · {}", alert.benchmark_source.short_label(), alert.comparison_mode.label(), alert.cost_basis.label()),
-                    AlertMode::CheapestAboveScore => format!("Cheapest ≥ {:.1} · {} · {}", alert.score_threshold, alert.benchmark_source.short_label(), alert.cost_basis.label()),
+                    AlertMode::EntersFrontier => format!(
+                        "Enters frontier · {} · {} · {}",
+                        alert.benchmark_source.short_label(),
+                        alert.comparison_mode.label(),
+                        alert.cost_basis.label()
+                    ),
+                    AlertMode::LeavesFrontier => format!(
+                        "Leaves frontier · {} · {} · {}",
+                        alert.benchmark_source.short_label(),
+                        alert.comparison_mode.label(),
+                        alert.cost_basis.label()
+                    ),
+                    AlertMode::CheapestAboveScore => format!(
+                        "Cheapest ≥ {:.1} · {} · {}",
+                        alert.score_threshold,
+                        alert.benchmark_source.short_label(),
+                        alert.cost_basis.label()
+                    ),
                 };
                 ui.label(rule_text);
 
@@ -1574,23 +1850,37 @@ impl ParetoWatchApp {
                         output_weight,
                     )
                 } else if alert.mode == AlertMode::AnyChange {
-                    quotes.iter().find(|q| q.model == alert.model).map(|q| {
-                        format!("${:.4} blend", q.price(
-                            PriceMetric::Blended,
-                            input_weight,
-                            cache_read_weight,
-                            output_weight,
-                        ))
-                    }).unwrap_or_else(|| "—".into())
+                    quotes
+                        .iter()
+                        .find(|q| q.model == alert.model)
+                        .map(|q| {
+                            format!(
+                                "${:.4} blend",
+                                q.price(
+                                    PriceMetric::Blended,
+                                    input_weight,
+                                    cache_read_weight,
+                                    output_weight,
+                                )
+                            )
+                        })
+                        .unwrap_or_else(|| "—".into())
                 } else {
-                    quotes.iter().find(|q| q.model == alert.model).map(|q| {
-                        format!("${:.4}", q.price(
-                            alert.metric,
-                            input_weight,
-                            cache_read_weight,
-                            output_weight,
-                        ))
-                    }).unwrap_or_else(|| "—".into())
+                    quotes
+                        .iter()
+                        .find(|q| q.model == alert.model)
+                        .map(|q| {
+                            format!(
+                                "${:.4}",
+                                q.price(
+                                    alert.metric,
+                                    input_weight,
+                                    cache_read_weight,
+                                    output_weight,
+                                )
+                            )
+                        })
+                        .unwrap_or_else(|| "—".into())
                 };
                 ui.label(current_text);
                 if ui.small_button("Delete").clicked() {
@@ -1616,41 +1906,55 @@ impl ParetoWatchApp {
         if self.recent_changes.is_empty() {
             ui.label("No price changes observed since the app started.");
         } else {
-            egui::ScrollArea::vertical().max_height(260.0).show(ui, |ui| {
-                for change in self.recent_changes.iter().take(40) {
-                    let delta = change.delta();
-                    let (arrow, color) = if delta < 0.0 {
-                        ("↓", egui::Color32::from_rgb(54, 179, 126))
-                    } else if delta > 0.0 {
-                        ("↑", egui::Color32::from_rgb(224, 86, 86))
-                    } else {
-                        ("↔", ui.visuals().text_color())
-                    };
-                    egui::Frame::group(ui.style()).show(ui, |ui| {
-                        ui.horizontal_wrapped(|ui| {
-                            ui.colored_label(color, egui::RichText::new(arrow).size(22.0).strong());
-                            ui.strong(&change.display_name);
-                            if let Some(pct) = change.percent_delta() {
-                                ui.colored_label(color, format!("{pct:+.2}% blended"));
-                            } else {
-                                ui.colored_label(color, "price changed");
-                            }
-                            ui.separator();
-                            ui.small(change.at.format("%H:%M:%S UTC").to_string());
-                            ui.separator();
-                            ui.small(change.source);
+            egui::ScrollArea::vertical()
+                .max_height(260.0)
+                .show(ui, |ui| {
+                    for change in self.recent_changes.iter().take(40) {
+                        let delta = change.delta();
+                        let (arrow, color) = if delta < 0.0 {
+                            ("↓", egui::Color32::from_rgb(54, 179, 126))
+                        } else if delta > 0.0 {
+                            ("↑", egui::Color32::from_rgb(224, 86, 86))
+                        } else {
+                            ("↔", ui.visuals().text_color())
+                        };
+                        egui::Frame::group(ui.style()).show(ui, |ui| {
+                            ui.horizontal_wrapped(|ui| {
+                                ui.colored_label(
+                                    color,
+                                    egui::RichText::new(arrow).size(22.0).strong(),
+                                );
+                                ui.strong(&change.display_name);
+                                if let Some(pct) = change.percent_delta() {
+                                    ui.colored_label(color, format!("{pct:+.2}% blended"));
+                                } else {
+                                    ui.colored_label(color, "price changed");
+                                }
+                                ui.separator();
+                                ui.small(change.at.format("%H:%M:%S UTC").to_string());
+                                ui.separator();
+                                ui.small(change.source);
+                            });
+                            ui.horizontal_wrapped(|ui| {
+                                ui.label(format!(
+                                    "Blended ${:.6} → ${:.6}",
+                                    change.old_blended, change.new_blended
+                                ));
+                                ui.separator();
+                                ui.label(format!(
+                                    "Input ${:.6} → ${:.6}",
+                                    change.old_input, change.new_input
+                                ));
+                                ui.separator();
+                                ui.label(format!(
+                                    "Output ${:.6} → ${:.6}",
+                                    change.old_output, change.new_output
+                                ));
+                            });
                         });
-                        ui.horizontal_wrapped(|ui| {
-                            ui.label(format!("Blended ${:.6} → ${:.6}", change.old_blended, change.new_blended));
-                            ui.separator();
-                            ui.label(format!("Input ${:.6} → ${:.6}", change.old_input, change.new_input));
-                            ui.separator();
-                            ui.label(format!("Output ${:.6} → ${:.6}", change.old_output, change.new_output));
-                        });
-                    });
-                    ui.add_space(4.0);
-                }
-            });
+                        ui.add_space(4.0);
+                    }
+                });
         }
     }
 
@@ -1658,7 +1962,14 @@ impl ParetoWatchApp {
         ui.heading("Polling");
         ui.horizontal(|ui| {
             ui.label("Refresh every");
-            if ui.add(egui::DragValue::new(&mut self.settings.poll_seconds).speed(10).range(30..=3600)).changed() {
+            if ui
+                .add(
+                    egui::DragValue::new(&mut self.settings.poll_seconds)
+                        .speed(10)
+                        .range(30..=3600),
+                )
+                .changed()
+            {
                 self.settings_dirty = true;
             }
             ui.label("seconds");
@@ -1669,7 +1980,7 @@ impl ParetoWatchApp {
         ui.heading("Benchmarks");
         ui.label("All remote benchmark feeds are public and require no API key. Each remote feed refreshes independently every six hours.");
         ui.label(format!("Artificial Analysis is bundled as a static {} snapshot from {}; it never requires an API key and stays in the composite until we manually bump it.", ARTIFICIAL_ANALYSIS_SNAPSHOT_VERSION, ARTIFICIAL_ANALYSIS_SNAPSHOT_DATE));
-        ui.label("Default composite is a robust precision-weighted posterior. Board weights: 20% SWE-rebench + 15% Terminal-Bench 3.0 + 15% DeepSWE + 10% LiveBench Agentic + 7.5% SWE-bench Live + 5% Revelo Code Index + 2.5% SWE-bench Verified (deployment flavor demotes model-level boards, capability flavor demotes harness-specific ones). Each board's weight is scaled by n/(n+2) over its anchored population — percentiles from tiny boards barely count. A small AA prior (10%) enters on the same anchored scale, ranked within the models the boards actually evaluate. Two Huber passes symmetrically downweight boards far from the consensus instead of trimming the lowest. Boards that have evaluated other models but not this one add 25%-weight pseudo-evidence at the model's prior, so a model topping two boards cannot outrank broad top-tier coverage; models no board has evaluated yet enter at 75% of their AA standing. Execution-mode SKUs (e.g. GPT-5.6 Sol Pro) inherit their base variant's rows.");
+        ui.label("Default composite is a robust precision-weighted posterior. Board weights: 20% SWE-rebench + 15% Terminal-Bench 3.0 + 15% DeepSWE + 10% LiveBench Agentic + 5% Revelo Code Index (deployment flavor demotes model-level boards, capability flavor demotes harness-specific ones). Each board's weight is scaled by n/(n+2) over its anchored population — percentiles from tiny boards barely count. A small AA prior (10%) enters on the same anchored scale, ranked within the models the boards actually evaluate. Two Huber passes symmetrically downweight boards far from the consensus instead of trimming the lowest. Boards that have evaluated other models but not this one add 25%-weight pseudo-evidence at the model's prior, so a model topping two boards cannot outrank broad top-tier coverage; models no board has evaluated yet enter at 75% of their AA standing. Execution-mode SKUs (e.g. GPT-5.6 Sol Pro) inherit their base variant's rows.");
         ui.label("Comparison modes: Model capability prefers model-only rows, but automatically falls back to the best model+harness row for agent-only leaderboards; Best available agent always picks the strongest observed model+harness row per source; Same/common scaffold keeps only rows matching the selected harness.");
         for source in BenchmarkSource::display_sources() {
             let mapped_models = self.price_snapshot.as_ref().map(|snapshot| {
@@ -1679,7 +1990,9 @@ impl ParetoWatchApp {
                     self.comparison_mode,
                     &self.common_scaffold,
                 );
-                snapshot.quotes.iter()
+                snapshot
+                    .quotes
+                    .iter()
                     .filter(|quote| best_benchmark_match(quote, &active).is_some())
                     .count()
             });
@@ -1702,10 +2015,17 @@ impl ParetoWatchApp {
         ui.add_space(14.0);
         ui.heading("Pricing diagnostics");
         if let Some(snapshot) = &self.price_snapshot {
-            ui.label(format!("Base feed: {} · {} priced text-output models", snapshot.base_source, snapshot.quotes.len()));
+            ui.label(format!(
+                "Base feed: {} · {} priced text-output models",
+                snapshot.base_source,
+                snapshot.quotes.len()
+            ));
             ui.small("Model universe is gated by /v1/models architecture metadata: multimodal input is allowed, but output must be text-only. Image/video/audio/embedding/rerank products are excluded.");
             if snapshot.market_overlay_count > 0 {
-                ui.label(format!("Live marketplace overlay: {} quotes", snapshot.market_overlay_count));
+                ui.label(format!(
+                    "Live marketplace overlay: {} quotes",
+                    snapshot.market_overlay_count
+                ));
             } else if let Some(err) = &snapshot.market_error {
                 ui.collapsing("Live marketplace overlay unavailable", |ui| {
                     ui.label(err);
@@ -1718,7 +2038,10 @@ impl ParetoWatchApp {
             ui.label("Waiting for pricing data…");
         }
         if let Some(err) = &self.last_price_error {
-            ui.colored_label(ui.visuals().error_fg_color, format!("Last base pricing error: {err}"));
+            ui.colored_label(
+                ui.visuals().error_fg_color,
+                format!("Last base pricing error: {err}"),
+            );
         }
 
         ui.add_space(14.0);
@@ -1746,15 +2069,36 @@ impl ParetoWatchApp {
         });
         ui.horizontal(|ui| {
             ui.label("Fresh input");
-            if ui.add(egui::DragValue::new(&mut self.settings.input_weight).speed(0.1).range(0.0..=100.0)).changed() {
+            if ui
+                .add(
+                    egui::DragValue::new(&mut self.settings.input_weight)
+                        .speed(0.1)
+                        .range(0.0..=100.0),
+                )
+                .changed()
+            {
                 self.settings_dirty = true;
             }
             ui.label("Cache read");
-            if ui.add(egui::DragValue::new(&mut self.settings.cache_read_weight).speed(0.1).range(0.0..=100.0)).changed() {
+            if ui
+                .add(
+                    egui::DragValue::new(&mut self.settings.cache_read_weight)
+                        .speed(0.1)
+                        .range(0.0..=100.0),
+                )
+                .changed()
+            {
                 self.settings_dirty = true;
             }
             ui.label("Output");
-            if ui.add(egui::DragValue::new(&mut self.settings.output_weight).speed(0.1).range(0.0..=100.0)).changed() {
+            if ui
+                .add(
+                    egui::DragValue::new(&mut self.settings.output_weight)
+                        .speed(0.1)
+                        .range(0.0..=100.0),
+                )
+                .changed()
+            {
                 self.settings_dirty = true;
             }
         });
@@ -1772,7 +2116,10 @@ impl ParetoWatchApp {
         ui.small("If a model/source does not publish cache-read pricing, ParetoWatch conservatively prices cache-read tokens at the normal input rate.");
 
         ui.add_space(14.0);
-        if ui.add_enabled(self.settings_dirty, egui::Button::new("Save settings")).clicked() {
+        if ui
+            .add_enabled(self.settings_dirty, egui::Button::new("Save settings"))
+            .clicked()
+        {
             self.save_and_push_settings();
             let _ = self.worker_tx.send(WorkerCommand::Refresh);
         }
@@ -1784,6 +2131,15 @@ impl eframe::App for ParetoWatchApp {
     fn logic(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         self.handle_ui_commands(ctx);
         self.handle_worker_messages();
+        // Runs here (not in ui) so floating price widgets keep updating while
+        // the main window is hidden in the tray.
+        if self
+            .widgets
+            .refresh(self.price_snapshot.as_ref(), &self.settings)
+        {
+            self.widgets.request_repaints(ctx);
+        }
+        self.widgets.prune_closed();
     }
 
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
@@ -1796,19 +2152,28 @@ impl eframe::App for ParetoWatchApp {
             self.set_visible(&ctx, false);
         }
 
+        // Deferred widget viewports must be re-registered every root pass.
+        self.widgets.show(&ctx);
+
         // Pin the data-source footer to the bottom of the window so tall tab
         // bodies (chart + detail card + table) can never push it off-screen.
         egui::Panel::bottom("app_footer")
             .frame(
-                egui::Frame::central_panel(ui.style())
-                    .inner_margin(egui::Margin::symmetric(8, 2)),
+                egui::Frame::central_panel(ui.style()).inner_margin(egui::Margin::symmetric(8, 2)),
             )
             .show(ui, |ui| {
                 ui.separator();
                 ui.horizontal(|ui| {
                     ui.small("Pricing:");
-                    ui.hyperlink_to("Surplus Intelligence", "https://www.surplusintelligence.ai/");
-                    if let Some(updated) = self.price_snapshot.as_ref().and_then(|s| s.comparison_updated_at.as_deref()) {
+                    ui.hyperlink_to(
+                        "Surplus Intelligence",
+                        "https://www.surplusintelligence.ai/",
+                    );
+                    if let Some(updated) = self
+                        .price_snapshot
+                        .as_ref()
+                        .and_then(|s| s.comparison_updated_at.as_deref())
+                    {
                         ui.separator();
                         ui.small(format!("Market data updated {updated}"));
                     }
@@ -1827,6 +2192,13 @@ impl eframe::App for ParetoWatchApp {
                 Tab::Settings => self.settings_tab(ui),
             }
         });
+    }
+
+    fn clear_color(&self, _visuals: &egui::Visuals) -> [f32; 4] {
+        // Transparent clear lets the floating price widgets be semi-transparent.
+        // Every root-window surface is repainted opaquely by its panels each
+        // frame, so this is invisible on the main window.
+        egui::Color32::TRANSPARENT.to_normalized_gamma_f32()
     }
 }
 
@@ -1851,6 +2223,7 @@ struct JoinedPoint {
     token_profile: Option<String>,
     score: f64,
     live_market: bool,
+    free_offer_listed: bool,
     vision: bool,
 }
 
@@ -1931,7 +2304,6 @@ fn format_price_tick(price: f64) -> String {
     }
 }
 
-
 fn format_compact_number(value: f64) -> String {
     let abs = value.abs();
     if abs >= 1_000_000_000.0 {
@@ -1944,8 +2316,6 @@ fn format_compact_number(value: f64) -> String {
         format!("{value:.0}")
     }
 }
-
-
 
 fn joined_points(
     quotes: &[Quote],
@@ -1961,20 +2331,23 @@ fn joined_points(
     for q in quotes {
         if let Some(b) = best_benchmark_match(q, benchmarks) {
             if let Some(score) = benchmark_metric.value(b) {
-                let per_million = q.price(
-                    price_metric,
-                    input_weight,
-                    cache_read_weight,
-                    output_weight,
-                );
+                let per_million =
+                    q.price(price_metric, input_weight, cache_read_weight, output_weight);
                 let cost = match cost_basis {
                     CostBasis::PerMillion => per_million,
                     CostBasis::EstimatedPerTask => {
                         // Cost/task is intentionally only available for the blended
                         // rate. The benchmark contributes observed token volume; all
                         // dollar pricing comes from the current Surplus quote.
-                        if price_metric != PriceMetric::Blended { continue; }
-                        let Some(tokens) = b.tokens_per_task.filter(|tokens| tokens.is_finite() && *tokens > 0.0) else { continue };
+                        if price_metric != PriceMetric::Blended {
+                            continue;
+                        }
+                        let Some(tokens) = b
+                            .tokens_per_task
+                            .filter(|tokens| tokens.is_finite() && *tokens > 0.0)
+                        else {
+                            continue;
+                        };
                         per_million * tokens / 1_000_000.0
                     }
                 };
@@ -1993,6 +2366,7 @@ fn joined_points(
                         token_profile: b.token_profile.clone(),
                         score,
                         live_market: q.live_market,
+                        free_offer_listed: q.free_offer_listed,
                         vision: q.vision,
                     });
                 }
@@ -2005,7 +2379,11 @@ fn joined_points(
 
 fn pareto_frontier(points: &[JoinedPoint]) -> Vec<JoinedPoint> {
     let mut sorted = points.to_vec();
-    sorted.sort_by(|a, b| a.cost.total_cmp(&b.cost).then_with(|| b.score.total_cmp(&a.score)));
+    sorted.sort_by(|a, b| {
+        a.cost
+            .total_cmp(&b.cost)
+            .then_with(|| b.score.total_cmp(&a.score))
+    });
     let mut best_score = f64::NEG_INFINITY;
     let mut frontier = vec![];
     for p in sorted {
@@ -2024,20 +2402,39 @@ fn infer_creator(model: &str) -> String {
         || n.starts_with("sonnet ")
         || n.starts_with("haiku ")
         || n.starts_with("fable ")
-    { "Anthropic".into() }
-    else if n.starts_with("gpt ") || n.starts_with("o1 ") || n.starts_with("o3 ") || n.starts_with("o4 ") { "OpenAI".into() }
-    else if n.starts_with("gemini ") { "Google".into() }
-    else if n.starts_with("grok ") { "xAI".into() }
-    else if n.starts_with("deepseek ") { "DeepSeek".into() }
-    else if n.starts_with("qwen") { "Alibaba".into() }
-    else if n.starts_with("kimi ") { "Moonshot".into() }
-    else if n.starts_with("glm ") { "Z.AI".into() }
-    else if n.starts_with("minimax ") { "MiniMax".into() }
-    else if n.starts_with("mimo ") { "Xiaomi".into() }
-    else if n.starts_with("nemotron ") || n.starts_with("nvidia ") { "NVIDIA".into() }
-    else if n.starts_with("mistral ") { "Mistral AI".into() }
-    else if n.starts_with("arcee ") || n.starts_with("trinity ") { "Arcee AI".into() }
-    else { String::new() }
+    {
+        "Anthropic".into()
+    } else if n.starts_with("gpt ")
+        || n.starts_with("o1 ")
+        || n.starts_with("o3 ")
+        || n.starts_with("o4 ")
+    {
+        "OpenAI".into()
+    } else if n.starts_with("gemini ") {
+        "Google".into()
+    } else if n.starts_with("grok ") {
+        "xAI".into()
+    } else if n.starts_with("deepseek ") {
+        "DeepSeek".into()
+    } else if n.starts_with("qwen") {
+        "Alibaba".into()
+    } else if n.starts_with("kimi ") {
+        "Moonshot".into()
+    } else if n.starts_with("glm ") {
+        "Z.AI".into()
+    } else if n.starts_with("minimax ") {
+        "MiniMax".into()
+    } else if n.starts_with("mimo ") {
+        "Xiaomi".into()
+    } else if n.starts_with("nemotron ") || n.starts_with("nvidia ") {
+        "NVIDIA".into()
+    } else if n.starts_with("mistral ") {
+        "Mistral AI".into()
+    } else if n.starts_with("arcee ") || n.starts_with("trinity ") {
+        "Arcee AI".into()
+    } else {
+        String::new()
+    }
 }
 
 /// Brand-ish colors for the major labs so model groups read at a glance on
@@ -2100,7 +2497,32 @@ fn hsl_to_rgb(h: f32, s: f32, l: f32) -> (u8, u8, u8) {
 }
 
 fn group_label(creator: &str) -> &str {
-    if creator.is_empty() { "Unknown" } else { creator }
+    if creator.is_empty() {
+        "Unknown"
+    } else {
+        creator
+    }
+}
+
+/// Market-discount label color by magnitude: deep discounts are green,
+/// mid-range ones orange, shallow ones red.
+fn discount_color(discount: f64) -> egui::Color32 {
+    if discount >= 80.0 {
+        egui::Color32::from_rgb(54, 179, 126)
+    } else if discount >= 50.0 {
+        egui::Color32::from_rgb(240, 160, 60)
+    } else {
+        egui::Color32::from_rgb(224, 86, 86)
+    }
+}
+
+/// The `*` marking a market that also lists a zero-priced ask. Priced rows
+/// keep their real prices; the tooltip explains what was excluded.
+fn free_offer_badge(ui: &mut egui::Ui) {
+    ui.label(egui::RichText::new("*").strong()).on_hover_text(
+        "This market also has a free (100% off) offer. Prices shown exclude it \
+             and are the cheapest ask that actually costs money.",
+    );
 }
 
 /// Case-insensitive, whitespace-insensitive substring match used by the chart
@@ -2149,14 +2571,12 @@ fn semantic_alert_status(
     } else {
         BenchmarkMetric::AgenticCoding
     };
-    let filtered = quotes.iter()
+    let filtered = quotes
+        .iter()
         .filter_map(|quote| {
-            alert.liquidity_filter.apply(
-                quote,
-                input_weight,
-                cache_read_weight,
-                output_weight,
-            )
+            alert
+                .liquidity_filter
+                .apply(quote, input_weight, cache_read_weight, output_weight)
         })
         .collect::<Vec<_>>();
     let joined = joined_points(
@@ -2174,16 +2594,30 @@ fn semantic_alert_status(
     };
     match alert.mode {
         AlertMode::EntersFrontier | AlertMode::LeavesFrontier => {
-            let on_frontier = pareto_frontier(&joined).iter().any(|point| point.model_id == alert.model);
-            if on_frontier { format!("on frontier · {:.1}", target.score) } else { format!("off frontier · {:.1}", target.score) }
+            let on_frontier = pareto_frontier(&joined)
+                .iter()
+                .any(|point| point.model_id == alert.model);
+            if on_frontier {
+                format!("on frontier · {:.1}", target.score)
+            } else {
+                format!("off frontier · {:.1}", target.score)
+            }
         }
         AlertMode::CheapestAboveScore => {
-            let cheapest = joined.iter()
+            let cheapest = joined
+                .iter()
                 .filter(|point| point.score >= alert.score_threshold)
                 .min_by(|a, b| a.cost.total_cmp(&b.cost));
             match cheapest {
-                Some(best) if best.model_id == alert.model => format!("cheapest · ${:.4}{}", best.cost, alert.cost_basis.unit()),
-                Some(best) => format!("leader: {} · ${:.4}{}", best.model, best.cost, alert.cost_basis.unit()),
+                Some(best) if best.model_id == alert.model => {
+                    format!("cheapest · ${:.4}{}", best.cost, alert.cost_basis.unit())
+                }
+                Some(best) => format!(
+                    "leader: {} · ${:.4}{}",
+                    best.model,
+                    best.cost,
+                    alert.cost_basis.unit()
+                ),
                 None => "no model clears score".into(),
             }
         }
@@ -2217,7 +2651,9 @@ fn evaluate_alerts(
             // A live-feed outage/recovery can swap a model between the marketplace
             // quote and the slower fallback feed. Do not misreport that source
             // transition as a market price move.
-            if previous.live_market != quote.live_market || !quote_has_price_change(previous, quote, settings) {
+            if previous.live_market != quote.live_market
+                || !quote_has_price_change(previous, quote, settings)
+            {
                 continue;
             }
 
@@ -2241,11 +2677,18 @@ fn evaluate_alerts(
                 ("↔", "components changed")
             };
             let pct = if old_blended.abs() > f64::EPSILON {
-                format!(" ({:+.2}%)", (new_blended - old_blended) / old_blended * 100.0)
+                format!(
+                    " ({:+.2}%)",
+                    (new_blended - old_blended) / old_blended * 100.0
+                )
             } else {
                 String::new()
             };
-            let source = if quote.live_market { "live market" } else { "price matrix fallback" };
+            let source = if quote.live_market {
+                "live market"
+            } else {
+                "price matrix fallback"
+            };
             let _ = Notification::new()
                 .summary(&format!("{arrow} {} price {direction}", quote.display_name))
                 .body(&format!(
@@ -2275,7 +2718,11 @@ fn evaluate_alerts(
         };
         let previous = state.get(&alert.id).copied().unwrap_or(false);
         if condition && !previous {
-            let source = if quote.live_market { "live market" } else { "price matrix fallback" };
+            let source = if quote.live_market {
+                "live market"
+            } else {
+                "price matrix fallback"
+            };
             let _ = Notification::new()
                 .summary("ParetoWatch price alert")
                 .body(&format!(
@@ -2328,7 +2775,9 @@ fn detect_price_changes(
         .collect::<HashMap<_, _>>();
     let mut changes = Vec::new();
     for new in &current.quotes {
-        let Some(old) = old_by_model.get(new.model.as_str()).copied() else { continue };
+        let Some(old) = old_by_model.get(new.model.as_str()).copied() else {
+            continue;
+        };
         if old.live_market != new.live_market || !quote_has_price_change(old, new, settings) {
             continue;
         }
@@ -2351,7 +2800,11 @@ fn detect_price_changes(
             new_input: new.input,
             old_output: old.output,
             new_output: new.output,
-            source: if new.live_market { "live market" } else { "comparison/catalog" },
+            source: if new.live_market {
+                "live market"
+            } else {
+                "comparison/catalog"
+            },
         });
     }
     changes.sort_by(|a, b| b.delta().abs().total_cmp(&a.delta().abs()));
@@ -2359,11 +2812,15 @@ fn detect_price_changes(
 }
 
 fn first_number_path(value: &Value, paths: &[&[&str]]) -> Option<f64> {
-    paths.iter().find_map(|p| value_at_path(value, p).and_then(value_as_f64))
+    paths
+        .iter()
+        .find_map(|p| value_at_path(value, p).and_then(value_as_f64))
 }
 
 fn value_as_f64(value: &Value) -> Option<f64> {
-    value.as_f64().or_else(|| value.as_str()?.trim().parse::<f64>().ok())
+    value
+        .as_f64()
+        .or_else(|| value.as_str()?.trim().parse::<f64>().ok())
 }
 
 fn first_string_path(value: &Value, paths: &[&[&str]]) -> Option<String> {
@@ -2386,7 +2843,6 @@ fn string_at(value: &Value, keys: &[&str]) -> Option<String> {
         .find_map(|k| value.get(*k).and_then(Value::as_str).map(str::to_owned))
 }
 
-
 fn next_alert_id(alerts: &[AlertRule]) -> u64 {
     alerts.iter().map(|a| a.id).max().unwrap_or(0) + 1
 }
@@ -2405,15 +2861,30 @@ fn load_settings() -> Result<Settings> {
         return Ok(Settings::default());
     }
     let bytes = fs::read(&path).with_context(|| format!("read {}", path.display()))?;
-    let raw: Value = serde_json::from_slice(&bytes).with_context(|| format!("parse {}", path.display()))?;
+    let mut raw: Value =
+        serde_json::from_slice(&bytes).with_context(|| format!("parse {}", path.display()))?;
     let had_cache_weight = raw.get("cache_read_weight").is_some();
-    let mut settings: Settings = serde_json::from_value(raw).with_context(|| format!("parse {}", path.display()))?;
+    // SWE-bench Verified and SWE-bench Live were removed as stale boards.
+    // Drop alerts that still point at them before deserializing, so one dead
+    // variant cannot fail the whole file and reset every alert and weight to
+    // defaults.
+    if let Some(alerts) = raw.get_mut("alerts").and_then(Value::as_array_mut) {
+        alerts.retain(|alert| {
+            !matches!(
+                alert.get("benchmark_source").and_then(Value::as_str),
+                Some("SWEBenchVerified") | Some("SWEBenchLive"),
+            )
+        });
+    }
+    let mut settings: Settings =
+        serde_json::from_value(raw).with_context(|| format!("parse {}", path.display()))?;
 
     if !had_cache_weight {
         // v0.3 had a two-leg, unnormalized 1:3 input/output default. That is
         // backwards for agentic coding. Migrate only that exact old default to
         // the new agentic preset; preserve custom old mixes as no-cache weights.
-        if (settings.input_weight - 1.0).abs() < 1e-9 && (settings.output_weight - 3.0).abs() < 1e-9 {
+        if (settings.input_weight - 1.0).abs() < 1e-9 && (settings.output_weight - 3.0).abs() < 1e-9
+        {
             settings.input_weight = 15.0;
             settings.cache_read_weight = 80.0;
             settings.output_weight = 5.0;
@@ -2436,22 +2907,20 @@ fn save_settings(settings: &Settings) -> Result<()> {
 fn install_tray_event_handlers(ctx: egui::Context, ui_tx: Sender<UiCommand>) {
     let tx = ui_tx.clone();
     let repaint = ctx.clone();
-    TrayIconEvent::set_event_handler(Some(move |event| {
-        match event {
-            TrayIconEvent::Click {
-                button: MouseButton::Left,
-                button_state: MouseButtonState::Up,
-                ..
-            }
-            | TrayIconEvent::DoubleClick {
-                button: MouseButton::Left,
-                ..
-            } => {
-                let _ = tx.send(UiCommand::Toggle);
-                repaint.request_repaint();
-            }
-            _ => {}
+    TrayIconEvent::set_event_handler(Some(move |event| match event {
+        TrayIconEvent::Click {
+            button: MouseButton::Left,
+            button_state: MouseButtonState::Up,
+            ..
         }
+        | TrayIconEvent::DoubleClick {
+            button: MouseButton::Left,
+            ..
+        } => {
+            let _ = tx.send(UiCommand::Toggle);
+            repaint.request_repaint();
+        }
+        _ => {}
     }));
 
     MenuEvent::set_event_handler(Some(move |event: MenuEvent| {
@@ -2574,40 +3043,102 @@ mod tests {
                 Err(err) => println!("{}: ERROR {err:#}", source.short_label()),
             }
         }
-        sets.insert(BenchmarkSource::ArtificialAnalysisSnapshot, artificial_analysis_snapshot());
-        let composite = build_agentic_composite(&sets, ComparisonMode::ModelCapability, "", CompositeFlavor::Capability);
+        sets.insert(
+            BenchmarkSource::ArtificialAnalysisSnapshot,
+            artificial_analysis_snapshot(),
+        );
+        let composite = build_agentic_composite(
+            &sets,
+            ComparisonMode::ModelCapability,
+            "",
+            CompositeFlavor::Capability,
+        );
         println!("--- top 20 composite ---");
         for row in composite.iter().take(20) {
-            println!("{:.1}  {}", row.agentic_coding.unwrap(), clean_benchmark_display_name(&row.name));
+            println!(
+                "{:.1}  {}",
+                row.agentic_coding.unwrap(),
+                clean_benchmark_display_name(&row.name)
+            );
             println!("       {}", row.name);
         }
-        let deployment = build_agentic_composite(&sets, ComparisonMode::ModelCapability, "", CompositeFlavor::Deployment);
+        let deployment = build_agentic_composite(
+            &sets,
+            ComparisonMode::ModelCapability,
+            "",
+            CompositeFlavor::Deployment,
+        );
         println!("--- key models: capability vs deployment ---");
-        for name in ["gpt 5 6 sol", "glm 5 3", "kimi k3", "qwen 3 8 2 4t a95b", "opus 5", "grok 4 6"] {
-            let cap = composite.iter().find(|b| benchmark_model_key(&b.slug) == name).map(|b| b.agentic_coding.unwrap());
-            let dep = deployment.iter().find(|b| benchmark_model_key(&b.slug) == name).map(|b| b.agentic_coding.unwrap());
+        for name in [
+            "gpt 5 6 sol",
+            "glm 5 3",
+            "kimi k3",
+            "qwen 3 8 2 4t a95b",
+            "opus 5",
+            "grok 4 6",
+        ] {
+            let cap = composite
+                .iter()
+                .find(|b| benchmark_model_key(&b.slug) == name)
+                .map(|b| b.agentic_coding.unwrap());
+            let dep = deployment
+                .iter()
+                .find(|b| benchmark_model_key(&b.slug) == name)
+                .map(|b| b.agentic_coding.unwrap());
             println!("{name}: capability {cap:?} · deployment {dep:?}");
         }
         println!("--- evidence breakdown ---");
-        for name in ["gpt 5 6 sol", "glm 5 3", "kimi k3", "claude fable 5", "opus 5"] {
-            if let Some(b) = composite.iter().find(|b| benchmark_model_key(&b.slug) == name) {
+        for name in [
+            "gpt 5 6 sol",
+            "glm 5 3",
+            "kimi k3",
+            "claude fable 5",
+            "opus 5",
+        ] {
+            if let Some(b) = composite
+                .iter()
+                .find(|b| benchmark_model_key(&b.slug) == name)
+            {
                 println!("{name} [{}]", b.name);
             }
             // Raw per-source standings: rank/total and raw score on each board.
             for source in BenchmarkSource::consensus_sources() {
-                if source.is_composite() { continue; }
-                let rows = benchmarks_for_source(source, &sets, ComparisonMode::ModelCapability, "");
-                if rows.is_empty() { continue; }
+                if source.is_composite() {
+                    continue;
+                }
+                let rows =
+                    benchmarks_for_source(source, &sets, ComparisonMode::ModelCapability, "");
+                if rows.is_empty() {
+                    continue;
+                }
                 let with_scores: Vec<(String, f64)> = rows
                     .iter()
-                    .filter_map(|r| r.agentic_coding.filter(|s| s.is_finite()).map(|s| (benchmark_model_key(&r.slug), s)))
+                    .filter_map(|r| {
+                        r.agentic_coding
+                            .filter(|s| s.is_finite())
+                            .map(|s| (benchmark_model_key(&r.slug), s))
+                    })
                     .collect();
-                let Some(key) = with_scores.iter().find(|(k, _)| *k == name).map(|(k, _)| k.clone()) else { continue };
+                let Some(key) = with_scores
+                    .iter()
+                    .find(|(k, _)| *k == name)
+                    .map(|(k, _)| k.clone())
+                else {
+                    continue;
+                };
                 let mut sorted: Vec<(String, f64)> = with_scores.clone();
                 sorted.sort_by(|a, b| b.1.total_cmp(&a.1));
-                let rank = sorted.iter().position(|(k, _)| *k == key).unwrap_or(usize::MAX) + 1;
+                let rank = sorted
+                    .iter()
+                    .position(|(k, _)| *k == key)
+                    .unwrap_or(usize::MAX)
+                    + 1;
                 let score = sorted.iter().find(|(k, _)| *k == key).unwrap().1;
-                println!("    {:<22} {score:5.1}  #{rank}/{}", source.short_label(), sorted.len());
+                println!(
+                    "    {:<22} {score:5.1}  #{rank}/{}",
+                    source.short_label(),
+                    sorted.len()
+                );
             }
         }
         println!("--- board field AA coverage ---");
@@ -2615,26 +3146,55 @@ mod tests {
         let mut board_union: std::collections::HashSet<String> = std::collections::HashSet::new();
         for source in BenchmarkSource::remote_sources() {
             if crate::bench::scoring::prior_cohort_source(source) {
-                for row in benchmarks_for_source(source, &sets, ComparisonMode::ModelCapability, "") {
+                for row in benchmarks_for_source(source, &sets, ComparisonMode::ModelCapability, "")
+                {
                     board_union.insert(benchmark_model_key(&row.slug));
                 }
             }
         }
-        let aa_rows = benchmarks_for_source(BenchmarkSource::ArtificialAnalysisSnapshot, &sets, ComparisonMode::ModelCapability, "");
-        let aa_keys: std::collections::HashSet<String> = aa_rows.iter().map(|r| benchmark_model_key(&r.slug)).collect();
-        let mut aa_scores: Vec<(String, f64)> = aa_rows.iter()
-            .filter_map(|r| r.agentic_coding.filter(|s| s.is_finite()).map(|s| (benchmark_model_key(&r.slug), s)))
+        let aa_rows = benchmarks_for_source(
+            BenchmarkSource::ArtificialAnalysisSnapshot,
+            &sets,
+            ComparisonMode::ModelCapability,
+            "",
+        );
+        let mut aa_scores: Vec<(String, f64)> = aa_rows
+            .iter()
+            .filter_map(|r| {
+                r.agentic_coding
+                    .filter(|s| s.is_finite())
+                    .map(|s| (benchmark_model_key(&r.slug), s))
+            })
             .collect();
         aa_scores.retain(|(k, _)| board_union.contains(k));
-        let (aa_map, _) = crate::bench::scoring::anchored_aa_percentiles(aa_rows.iter().filter_map(|r| r.agentic_coding.filter(|s| s.is_finite()).map(|s| (benchmark_model_key(&r.slug), s))), &board_union).unwrap_or((HashMap::new(), 0));
+        let (aa_map, _) = crate::bench::scoring::anchored_aa_percentiles(
+            aa_rows.iter().filter_map(|r| {
+                r.agentic_coding
+                    .filter(|s| s.is_finite())
+                    .map(|s| (benchmark_model_key(&r.slug), s))
+            }),
+            &board_union,
+        )
+        .unwrap_or((HashMap::new(), 0));
         for source in BenchmarkSource::remote_sources() {
             let rows = benchmarks_for_source(source, &sets, ComparisonMode::ModelCapability, "");
-            if rows.is_empty() { continue; }
+            if rows.is_empty() {
+                continue;
+            }
             let keys: Vec<String> = rows.iter().map(|r| benchmark_model_key(&r.slug)).collect();
-            let covered = keys.iter().filter(|k| anchor.as_ref().is_some_and(|a| a.contains(*k))).count();
-            let mut field_q: Vec<f64> = keys.iter().filter_map(|k| aa_map.get(k).copied()).collect();
+            let covered = keys
+                .iter()
+                .filter(|k| anchor.as_ref().is_some_and(|a| a.contains(*k)))
+                .count();
+            let mut field_q: Vec<f64> =
+                keys.iter().filter_map(|k| aa_map.get(k).copied()).collect();
             field_q.sort_by(|a, b| a.total_cmp(b));
-            let q_desc: Vec<String> = field_q.iter().rev().take(8).map(|q| format!("{q:.0}")).collect();
+            let q_desc: Vec<String> = field_q
+                .iter()
+                .rev()
+                .take(8)
+                .map(|q| format!("{q:.0}"))
+                .collect();
             println!(
                 "{:<22} rows {:>3} · AA-covered {:>3} · calibrates={} · top field q: {}",
                 source.short_label(),
@@ -2662,19 +3222,28 @@ mod tests {
         let settings = Settings::default();
         let old = PriceSnapshot {
             quotes: vec![test_quote("model-a", 1.0, true)],
-            fetched_at: Utc::now(), comparison_updated_at: None,
-            market_overlay_count: 1, market_error: None, base_source: "test".into(),
+            fetched_at: Utc::now(),
+            comparison_updated_at: None,
+            market_overlay_count: 1,
+            market_error: None,
+            base_source: "test".into(),
         };
         let changed = PriceSnapshot {
             quotes: vec![test_quote("model-a", 0.9, true)],
-            fetched_at: Utc::now(), comparison_updated_at: None,
-            market_overlay_count: 1, market_error: None, base_source: "test".into(),
+            fetched_at: Utc::now(),
+            comparison_updated_at: None,
+            market_overlay_count: 1,
+            market_error: None,
+            base_source: "test".into(),
         };
         assert_eq!(detect_price_changes(&old, &changed, &settings).len(), 1);
         let fallback = PriceSnapshot {
             quotes: vec![test_quote("model-a", 0.8, false)],
-            fetched_at: Utc::now(), comparison_updated_at: None,
-            market_overlay_count: 0, market_error: Some("test".into()), base_source: "test".into(),
+            fetched_at: Utc::now(),
+            comparison_updated_at: None,
+            market_overlay_count: 0,
+            market_error: Some("test".into()),
+            base_source: "test".into(),
         };
         assert!(detect_price_changes(&changed, &fallback, &settings).is_empty());
     }
@@ -2682,7 +3251,13 @@ mod tests {
     #[test]
     fn estimated_task_cost_uses_current_surplus_blend_and_benchmark_volume() {
         let q = test_quote("gpt-5.6-sol", 2.0, true);
-        let mut b = score_benchmark("gpt-5.6-sol", 72.7, Some("mini-SWE-agent".into()), Some("max".into()), BenchmarkKind::Model);
+        let mut b = score_benchmark(
+            "gpt-5.6-sol",
+            72.7,
+            Some("mini-SWE-agent".into()),
+            Some("max".into()),
+            BenchmarkKind::Model,
+        );
         b.tokens_per_task = Some(2_000_000.0);
         b.token_profile = Some("test profile".into());
         let points = joined_points(
@@ -2709,9 +3284,16 @@ mod tests {
             creator: "Anthropic".into(),
             provider: "surplus".into(),
             benchmark_name: "row".into(),
-            input: 1.0, output: 2.0, cache_read: None, cost: 1.5,
-            tokens_per_task: None, token_profile: None,
-            score: 80.0, live_market: true, vision: true,
+            input: 1.0,
+            output: 2.0,
+            cache_read: None,
+            cost: 1.5,
+            tokens_per_task: None,
+            token_profile: None,
+            score: 80.0,
+            live_market: true,
+            free_offer_listed: false,
+            vision: true,
         };
         assert!(pareto_search_matches("opus", &p));
         assert!(pareto_search_matches("CLAUDE OPUS", &p));
@@ -2732,14 +3314,31 @@ mod tests {
     }
 
     #[test]
+    fn discount_colors_bucket_by_magnitude() {
+        assert_eq!(discount_color(95.0), discount_color(80.0));
+        assert_eq!(discount_color(79.9), discount_color(50.0));
+        assert_eq!(discount_color(49.9), discount_color(0.0));
+        assert_ne!(discount_color(80.0), discount_color(79.9));
+        assert_ne!(discount_color(50.0), discount_color(49.9));
+    }
+
+    #[test]
     fn aa_snapshot_covers_current_deepseek_and_glm_models() {
         let rows = artificial_analysis_snapshot();
-        let deepseek_release = rows.iter().find(|b| benchmark_model_key(&b.slug) == "deepseek v4 flash 0731").unwrap();
-        let deepseek_base = rows.iter().find(|b| benchmark_model_key(&b.slug) == "deepseek v4 flash").unwrap();
-        let glm = rows.iter().find(|b| benchmark_model_key(&b.slug) == "glm 5 3").unwrap();
+        let deepseek_release = rows
+            .iter()
+            .find(|b| benchmark_model_key(&b.slug) == "deepseek v4 flash 0731")
+            .unwrap();
+        let deepseek_base = rows
+            .iter()
+            .find(|b| benchmark_model_key(&b.slug) == "deepseek v4 flash")
+            .unwrap();
+        let glm = rows
+            .iter()
+            .find(|b| benchmark_model_key(&b.slug) == "glm 5 3")
+            .unwrap();
         assert_eq!(deepseek_release.agentic_coding, Some(52.0));
         assert_eq!(deepseek_base.agentic_coding, Some(42.0));
         assert_eq!(glm.agentic_coding, Some(60.0));
     }
-
 }

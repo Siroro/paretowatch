@@ -16,8 +16,8 @@ use std::collections::HashMap;
 use std::path::Path;
 
 use super::store::{
-    EventKind, EventStore, Frame, PriceField, dequantize_price, dequantize_score,
-    quantize_price, quantize_score,
+    EventKind, EventStore, Frame, PriceField, dequantize_price, dequantize_score, quantize_price,
+    quantize_score,
 };
 use crate::{Benchmark, BenchmarkSource, PriceSnapshot, Quote};
 
@@ -34,23 +34,6 @@ pub(crate) struct ModelSeries {
     pub deployment: Vec<(f64, f64)>,
     /// (ts, requests_24h, volume_24h in dollars), once per UTC day.
     pub telemetry: Vec<(f64, u64, f64)>,
-}
-
-impl ModelSeries {
-    pub(crate) fn last_activity(&self) -> f64 {
-        [
-            self.input.last(),
-            self.output.last(),
-            self.cache_read.last(),
-            self.capability.last(),
-            self.deployment.last(),
-            self.telemetry.last().map(|(ts, _, _)| (*ts, 0.0)).as_ref(),
-        ]
-        .iter()
-        .flatten()
-        .map(|(ts, _)| *ts)
-        .fold(self.added_ts, f64::max)
-    }
 }
 
 #[derive(Debug, Default)]
@@ -88,7 +71,13 @@ impl HistoryTracker {
         for (ts, frame) in replay.frames {
             tracker.apply_event(ts, frame);
         }
-        tracker.next_id = tracker.ids.values().copied().max().map(|m| m + 1).unwrap_or(0);
+        tracker.next_id = tracker
+            .ids
+            .values()
+            .copied()
+            .max()
+            .map(|m| m + 1)
+            .unwrap_or(0);
         tracker
     }
 
@@ -115,15 +104,27 @@ impl HistoryTracker {
             let scaffold = crate::default_common_scaffold();
             let mode = crate::ComparisonMode::BestAvailableAgent;
             (
-                crate::build_agentic_composite(sets, mode, &scaffold, crate::CompositeFlavor::Capability),
-                crate::build_agentic_composite(sets, mode, &scaffold, crate::CompositeFlavor::Deployment),
+                crate::build_agentic_composite(
+                    sets,
+                    mode,
+                    &scaffold,
+                    crate::CompositeFlavor::Capability,
+                ),
+                crate::build_agentic_composite(
+                    sets,
+                    mode,
+                    &scaffold,
+                    crate::CompositeFlavor::Deployment,
+                ),
             )
         } else {
             (Vec::new(), Vec::new())
         };
 
         for q in &snapshot.quotes {
-            let Some(id) = self.ensure_added(&mut events, q, ts) else { continue };
+            let Some(id) = self.ensure_added(&mut events, q, ts) else {
+                continue;
+            };
             self.diff_price(&mut events, id, ts, PriceField::Input, q.input);
             self.diff_price(&mut events, id, ts, PriceField::Output, q.output);
             if let Some(cache_read) = q.cache_read {
@@ -180,7 +181,9 @@ impl HistoryTracker {
         value: f64,
     ) {
         let new_q = quantize_price(value);
-        let Some(st) = self.current.get(&id) else { return };
+        let Some(st) = self.current.get(&id) else {
+            return;
+        };
         let old_q = match field {
             PriceField::Input => st.input_q,
             PriceField::Output => st.output_q,
@@ -192,7 +195,10 @@ impl HistoryTracker {
         let frame = Frame {
             id,
             dt: 0,
-            kind: EventKind::Price { field, delta: new_q - old_q },
+            kind: EventKind::Price {
+                field,
+                delta: new_q - old_q,
+            },
         };
         self.apply_event(ts, frame.clone());
         events.push((ts, frame));
@@ -203,7 +209,9 @@ impl HistoryTracker {
             return;
         }
         let day = (ts / 86_400) as u32;
-        let Some(st) = self.current.get(&id) else { return };
+        let Some(st) = self.current.get(&id) else {
+            return;
+        };
         if st.telemetry_day == day {
             return;
         }
@@ -212,7 +220,10 @@ impl HistoryTracker {
             dt: 0,
             kind: EventKind::Telemetry {
                 requests: q.requests_24h.unwrap_or(0),
-                volume_cents: q.volume_24h.map(|v| (v * 100.0).round() as u64).unwrap_or(0),
+                volume_cents: q
+                    .volume_24h
+                    .map(|v| (v * 100.0).round() as u64)
+                    .unwrap_or(0),
             },
         };
         self.apply_event(ts, frame.clone());
@@ -229,16 +240,25 @@ impl HistoryTracker {
     ) {
         let cap_q = capability.map(quantize_score);
         let dep_q = deployment.map(quantize_score);
-        let Some(st) = self.current.get(&id) else { return };
-        let cap_delta = cap_q.map(|q| q - st.capability_q.unwrap_or(0)).filter(|d| *d != 0);
-        let dep_delta = dep_q.map(|q| q - st.deployment_q.unwrap_or(0)).filter(|d| *d != 0);
+        let Some(st) = self.current.get(&id) else {
+            return;
+        };
+        let cap_delta = cap_q
+            .map(|q| q - st.capability_q.unwrap_or(0))
+            .filter(|d| *d != 0);
+        let dep_delta = dep_q
+            .map(|q| q - st.deployment_q.unwrap_or(0))
+            .filter(|d| *d != 0);
         if cap_delta.is_none() && dep_delta.is_none() {
             return;
         }
         let frame = Frame {
             id,
             dt: 0,
-            kind: EventKind::Composite { capability: cap_delta, deployment: dep_delta },
+            kind: EventKind::Composite {
+                capability: cap_delta,
+                deployment: dep_delta,
+            },
         };
         self.apply_event(ts, frame.clone());
         events.push((ts, frame));
@@ -250,7 +270,11 @@ impl HistoryTracker {
     fn apply_event(&mut self, ts: i64, frame: Frame) {
         let id = frame.id;
         match frame.kind {
-            EventKind::Added { slug, display, creator } => {
+            EventKind::Added {
+                slug,
+                display,
+                creator,
+            } => {
                 self.ids.insert(slug.clone(), id);
                 self.series.insert(
                     id,
@@ -265,7 +289,9 @@ impl HistoryTracker {
                 self.current.entry(id).or_default();
             }
             EventKind::Price { field, delta } => {
-                let Some(st) = self.current.get_mut(&id) else { return };
+                let Some(st) = self.current.get_mut(&id) else {
+                    return;
+                };
                 let new_q = match field {
                     PriceField::Input => {
                         st.input_q += delta;
@@ -290,7 +316,10 @@ impl HistoryTracker {
                     }
                 }
             }
-            EventKind::Composite { capability, deployment } => {
+            EventKind::Composite {
+                capability,
+                deployment,
+            } => {
                 if let Some(delta) = capability {
                     if let Some(st) = self.current.get_mut(&id) {
                         let new_q = st.capability_q.unwrap_or(0) + delta;
@@ -310,13 +339,18 @@ impl HistoryTracker {
                     }
                 }
             }
-            EventKind::Telemetry { requests, volume_cents } => {
+            EventKind::Telemetry {
+                requests,
+                volume_cents,
+            } => {
                 let day = (ts / 86_400) as u32;
                 if let Some(st) = self.current.get_mut(&id) {
                     st.telemetry_day = day;
                 }
                 if let Some(series) = self.series.get_mut(&id) {
-                    series.telemetry.push((ts as f64, requests, volume_cents as f64 / 100.0));
+                    series
+                        .telemetry
+                        .push((ts as f64, requests, volume_cents as f64 / 100.0));
                 }
             }
         }
@@ -355,11 +389,23 @@ pub(crate) fn blended_series(
     let mut times: Vec<f64> = Vec::new();
     if series.input.first().map(|(ts, _)| *ts).unwrap_or(f64::MAX) == series.added_ts
         || series.output.first().map(|(ts, _)| *ts).unwrap_or(f64::MAX) == series.added_ts
-        || series.cache_read.first().map(|(ts, _)| *ts).unwrap_or(f64::MAX) == series.added_ts
+        || series
+            .cache_read
+            .first()
+            .map(|(ts, _)| *ts)
+            .unwrap_or(f64::MAX)
+            == series.added_ts
     {
         times.push(series.added_ts);
     }
-    times.extend(series.input.iter().chain(&series.output).chain(&series.cache_read).map(|(ts, _)| *ts));
+    times.extend(
+        series
+            .input
+            .iter()
+            .chain(&series.output)
+            .chain(&series.cache_read)
+            .map(|(ts, _)| *ts),
+    );
     times.sort_by(|a, b| a.total_cmp(b));
     times.dedup();
 
@@ -368,14 +414,23 @@ pub(crate) fn blended_series(
         // Blending needs both cash legs; cache alone falling back to input
         // matches `blended_price`, but input/output gaps just mean the
         // series has not started yet at that timestamp.
-        let (Some(input), Some(output)) = (carry_forward(&series.input, ts), carry_forward(&series.output, ts))
-        else {
+        let (Some(input), Some(output)) = (
+            carry_forward(&series.input, ts),
+            carry_forward(&series.output, ts),
+        ) else {
             continue;
         };
         let cache = carry_forward(&series.cache_read, ts);
         out.push((
             ts,
-            crate::blended_price(input, cache, output, input_weight, cache_read_weight, output_weight),
+            crate::blended_price(
+                input,
+                cache,
+                output,
+                input_weight,
+                cache_read_weight,
+                output_weight,
+            ),
         ));
     }
     out
@@ -442,6 +497,7 @@ mod tests {
             volume_24h: Some(12.34),
             discount_pct: None,
             discount_direction: None,
+            free_offer_listed: false,
             market_options: Vec::new(),
             live_market: false,
             vision: false,
@@ -470,8 +526,18 @@ mod tests {
         let base = Utc::now();
         {
             let mut t = HistoryTracker::open(&path);
-            t.record(&snapshot(vec![quote("openai/gpt-x", 2.5, 10.0)]), &HashMap::new(), 1, base);
-            t.record(&snapshot(vec![quote("openai/gpt-x", 2.0, 10.0)]), &HashMap::new(), 1, base + chrono::Duration::seconds(3600));
+            t.record(
+                &snapshot(vec![quote("openai/gpt-x", 2.5, 10.0)]),
+                &HashMap::new(),
+                1,
+                base,
+            );
+            t.record(
+                &snapshot(vec![quote("openai/gpt-x", 2.0, 10.0)]),
+                &HashMap::new(),
+                1,
+                base + chrono::Duration::seconds(3600),
+            );
         }
         let t = HistoryTracker::open(&path);
         let s = t.series("openai/gpt-x").expect("model survived restart");
@@ -502,10 +568,20 @@ mod tests {
         let path = temp_path("epsilon");
         let _ = fs::remove_file(&path);
         let mut t = HistoryTracker::open(&path);
-        t.record(&snapshot(vec![quote("a/b", 1.0, 4.0)]), &HashMap::new(), 1, now_plus(0));
+        t.record(
+            &snapshot(vec![quote("a/b", 1.0, 4.0)]),
+            &HashMap::new(),
+            1,
+            now_plus(0),
+        );
         let (_, frames) = t.store_stats();
         // 0.0004 < PRICE_QUANT/2 wiggle quantizes identically.
-        t.record(&snapshot(vec![quote("a/b", 1.0004, 4.0)]), &HashMap::new(), 1, now_plus(60));
+        t.record(
+            &snapshot(vec![quote("a/b", 1.0004, 4.0)]),
+            &HashMap::new(),
+            1,
+            now_plus(60),
+        );
         let (_, frames2) = t.store_stats();
         assert_eq!(frames, frames2);
         let _ = fs::remove_file(&path);
@@ -536,22 +612,28 @@ mod tests {
         assert!(t.series("openai/gpt-x").unwrap().capability.is_empty());
 
         let mut sets: HashMap<BenchmarkSource, Vec<Benchmark>> = HashMap::new();
-        sets.insert(BenchmarkSource::SWERebench, vec![Benchmark {
-            slug: "gpt-x".into(),
-            name: "GPT-X".into(),
-            creator: "openai".into(),
-            overall: None,
-            coding: None,
-            agentic_coding: Some(60.0),
-            agent: None,
-            reasoning_effort: None,
-            kind: crate::BenchmarkKind::Model,
-            tokens_per_task: None,
-            token_profile: None,
-        }]);
+        sets.insert(
+            BenchmarkSource::SWERebench,
+            vec![Benchmark {
+                slug: "gpt-x".into(),
+                name: "GPT-X".into(),
+                creator: "openai".into(),
+                overall: None,
+                coding: None,
+                agentic_coding: Some(60.0),
+                agent: None,
+                reasoning_effort: None,
+                kind: crate::BenchmarkKind::Model,
+                tokens_per_task: None,
+                token_profile: None,
+            }],
+        );
         t.record(&snap, &sets, 2, now_plus(60));
         let s = t.series("openai/gpt-x").unwrap();
-        assert!(!s.capability.is_empty(), "composite recorded once boards load");
+        assert!(
+            !s.capability.is_empty(),
+            "composite recorded once boards load"
+        );
 
         // Same version again: no duplicate events.
         let (_, frames) = t.store_stats();
@@ -585,7 +667,17 @@ mod tests {
     #[test]
     fn step_points_duplicate_x_at_changes_and_extend() {
         let pts = step_points(&[(0.0, 1.0), (10.0, 2.0), (20.0, 3.0)], 35.0);
-        assert_eq!(pts, vec![[0.0, 1.0], [10.0, 1.0], [10.0, 2.0], [20.0, 2.0], [20.0, 3.0], [35.0, 3.0]]);
+        assert_eq!(
+            pts,
+            vec![
+                [0.0, 1.0],
+                [10.0, 1.0],
+                [10.0, 2.0],
+                [20.0, 2.0],
+                [20.0, 3.0],
+                [35.0, 3.0]
+            ]
+        );
         assert_eq!(step_points(&[], 35.0), Vec::<[f64; 2]>::new());
     }
 
@@ -594,8 +686,18 @@ mod tests {
         let path = temp_path("deltas");
         let _ = fs::remove_file(&path);
         let mut t = HistoryTracker::open(&path);
-        t.record(&snapshot(vec![quote("a/b", 3.0, 12.0)]), &HashMap::new(), 1, now_plus(0));
-        t.record(&snapshot(vec![quote("a/b", 1.5, 12.0)]), &HashMap::new(), 1, now_plus(60));
+        t.record(
+            &snapshot(vec![quote("a/b", 3.0, 12.0)]),
+            &HashMap::new(),
+            1,
+            now_plus(0),
+        );
+        t.record(
+            &snapshot(vec![quote("a/b", 1.5, 12.0)]),
+            &HashMap::new(),
+            1,
+            now_plus(60),
+        );
         let s = t.series("a/b").unwrap();
         assert_eq!(s.input.len(), 2);
         assert_eq!(s.input[1].1, 1.5);
@@ -619,7 +721,12 @@ mod tests {
         let path = crate::history::history_log_path();
         let t = HistoryTracker::open(&path);
         let (bytes, frames) = t.store_stats();
-        println!("{} models · {} frames · {} bytes", t.model_count(), frames, bytes);
+        println!(
+            "{} models · {} frames · {} bytes",
+            t.model_count(),
+            frames,
+            bytes
+        );
         let shown = t
             .model_slugs()
             .into_iter()

@@ -11,7 +11,11 @@ use crate::types::{Benchmark, BenchmarkKind};
 pub(crate) fn fetch_revelo_code_index(client: &Client) -> Result<Vec<Benchmark>> {
     let html = fetch_text(client, REVELO_CODE_INDEX_URL, "Revelo Code Index")?;
     let rows = parse_revelo_code_index_html(&html);
-    if rows.len() >= 3 { Ok(rows) } else { Ok(revelo_code_index_fallback()) }
+    if rows.len() >= 3 {
+        Ok(rows)
+    } else {
+        Ok(revelo_code_index_fallback())
+    }
 }
 
 pub(crate) fn parse_revelo_code_index_html(html: &str) -> Vec<Benchmark> {
@@ -21,14 +25,30 @@ pub(crate) fn parse_revelo_code_index_html(html: &str) -> Vec<Benchmark> {
     ).expect("valid Revelo regex");
     let mut out = Vec::new();
     for caps in re.captures_iter(&text) {
-        let Some(model) = caps.get(1).map(|m| m.as_str().to_owned()) else { continue };
-        let Some(agent) = caps.get(2).map(|m| m.as_str().to_owned()) else { continue };
-        let Some(score) = caps.get(3).and_then(|m| m.as_str().parse::<f64>().ok()) else { continue };
-        let mut b = score_benchmark(model.clone(), score, Some(agent.clone()), None, BenchmarkKind::ModelAgent);
+        let Some(model) = caps.get(1).map(|m| m.as_str().to_owned()) else {
+            continue;
+        };
+        let Some(agent) = caps.get(2).map(|m| m.as_str().to_owned()) else {
+            continue;
+        };
+        let Some(score) = caps.get(3).and_then(|m| m.as_str().parse::<f64>().ok()) else {
+            continue;
+        };
+        let mut b = score_benchmark(
+            model.clone(),
+            score,
+            Some(agent.clone()),
+            None,
+            BenchmarkKind::ModelAgent,
+        );
         b.name = format!("{model} [{agent}]");
         out.push(b);
     }
-    out.sort_by(|a, b| b.agentic_coding.unwrap_or_default().total_cmp(&a.agentic_coding.unwrap_or_default()));
+    out.sort_by(|a, b| {
+        b.agentic_coding
+            .unwrap_or_default()
+            .total_cmp(&a.agentic_coding.unwrap_or_default())
+    });
     out
 }
 
@@ -54,13 +74,18 @@ pub(crate) fn revelo_code_index_fallback() -> Vec<Benchmark> {
     ]
     .into_iter()
     .map(|(model, agent, score)| {
-        let mut b = score_benchmark(model, score, Some(agent.into()), None, BenchmarkKind::ModelAgent);
+        let mut b = score_benchmark(
+            model,
+            score,
+            Some(agent.into()),
+            None,
+            BenchmarkKind::ModelAgent,
+        );
         b.name = format!("{model} [{agent}]");
         b
     })
     .collect()
 }
-
 
 #[cfg(test)]
 mod tests {
@@ -71,7 +96,9 @@ mod tests {
         let html = r#"<div>claude-opus-5 claude-code 1.35B / 22.3M $1.5k 57.1</div><div>gpt-5.6-sol codex 469.2M / 6.1M $492.7 51.2</div><div>glm-5.2 terminus-2 727.8M / 24.0M $446.0 30.8</div>"#;
         let rows = parse_revelo_code_index_html(html);
         assert_eq!(rows.len(), 3);
-        assert!(rows.iter().any(|row| row.slug == "gpt-5.6-sol" && row.agent.as_deref() == Some("codex")));
+        assert!(
+            rows.iter()
+                .any(|row| row.slug == "gpt-5.6-sol" && row.agent.as_deref() == Some("codex"))
+        );
     }
-
 }

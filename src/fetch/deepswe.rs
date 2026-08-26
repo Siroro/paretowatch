@@ -2,16 +2,17 @@
 
 use std::collections::HashMap;
 
-use anyhow::{anyhow, Result};
+use anyhow::{Result, anyhow};
 use reqwest::blocking::Client;
 use serde_json::Value;
 
 use super::{fetch_json, number_value, score_benchmark};
-use crate::{format_compact_number, json_shape};
 use crate::bench::matching::{model_core, normalize};
 use crate::types::{Benchmark, BenchmarkKind};
+use crate::{format_compact_number, json_shape};
 
-pub(crate) const DEEPSWE_LEADERBOARD_URL: &str = "https://deepswe.datacurve.ai/artifacts/v1.1/leaderboard-live.json";
+pub(crate) const DEEPSWE_LEADERBOARD_URL: &str =
+    "https://deepswe.datacurve.ai/artifacts/v1.1/leaderboard-live.json";
 
 pub(crate) fn fetch_deepswe(client: &Client) -> Result<Vec<Benchmark>> {
     let value = fetch_json(client, DEEPSWE_LEADERBOARD_URL, "DeepSWE v1.1 leaderboard")?;
@@ -23,27 +24,62 @@ pub(crate) fn fetch_deepswe(client: &Client) -> Result<Vec<Benchmark>> {
 }
 
 pub(crate) fn parse_deepswe_json(root: &Value) -> Result<Vec<Benchmark>> {
-    let rows = root.get("rows").and_then(Value::as_array)
-        .ok_or_else(|| anyhow!("DeepSWE JSON has no rows array; shape: {}", json_shape(root)))?;
+    let rows = root.get("rows").and_then(Value::as_array).ok_or_else(|| {
+        anyhow!(
+            "DeepSWE JSON has no rows array; shape: {}",
+            json_shape(root)
+        )
+    })?;
     let mut best: HashMap<String, (i32, Benchmark)> = HashMap::new();
     for row in rows {
-        let Some(model) = row.get("model").and_then(Value::as_str).map(str::trim).filter(|s| !s.is_empty()) else { continue };
-        let harness = row.get("harness").and_then(Value::as_str).unwrap_or("mini-SWE-agent").trim();
+        let Some(model) = row
+            .get("model")
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+        else {
+            continue;
+        };
+        let harness = row
+            .get("harness")
+            .and_then(Value::as_str)
+            .unwrap_or("mini-SWE-agent")
+            .trim();
         if !harness.is_empty() && !normalize(harness).contains("mini swe agent") {
             continue;
         }
-        let Some(raw_score) = row.get("pass_at_1").and_then(number_value)
-            .or_else(|| row.get("pass_rate").and_then(number_value)) else { continue };
-        let score = if raw_score <= 1.0 { raw_score * 100.0 } else { raw_score };
-        if !score.is_finite() { continue; }
-        let effort = row.get("reasoning_effort").and_then(Value::as_str).unwrap_or("default");
+        let Some(raw_score) = row
+            .get("pass_at_1")
+            .and_then(number_value)
+            .or_else(|| row.get("pass_rate").and_then(number_value))
+        else {
+            continue;
+        };
+        let score = if raw_score <= 1.0 {
+            raw_score * 100.0
+        } else {
+            raw_score
+        };
+        if !score.is_finite() {
+            continue;
+        }
+        let effort = row
+            .get("reasoning_effort")
+            .and_then(Value::as_str)
+            .unwrap_or("default");
         let rank = reasoning_effort_rank(effort);
         let key = model_core(model);
-        if key.is_empty() { continue; }
+        if key.is_empty() {
+            continue;
+        }
         let mut b = score_benchmark(
             model,
             score,
-            Some(if harness.is_empty() { "mini-SWE-agent".into() } else { harness.to_owned() }),
+            Some(if harness.is_empty() {
+                "mini-SWE-agent".into()
+            } else {
+                harness.to_owned()
+            }),
             Some(effort.to_owned()),
             BenchmarkKind::Model,
         );
@@ -63,12 +99,21 @@ pub(crate) fn parse_deepswe_json(root: &Value) -> Result<Vec<Benchmark>> {
         }
         let replace = best
             .get(&key)
-            .and_then(|(old_rank, old)| old.agentic_coding.map(|old_score| rank > *old_rank || (rank == *old_rank && score > old_score)))
+            .and_then(|(old_rank, old)| {
+                old.agentic_coding
+                    .map(|old_score| rank > *old_rank || (rank == *old_rank && score > old_score))
+            })
             .unwrap_or(true);
-        if replace { best.insert(key, (rank, b)); }
+        if replace {
+            best.insert(key, (rank, b));
+        }
     }
     let mut out = best.into_values().map(|(_, b)| b).collect::<Vec<_>>();
-    out.sort_by(|a, b| b.agentic_coding.unwrap_or_default().total_cmp(&a.agentic_coding.unwrap_or_default()));
+    out.sort_by(|a, b| {
+        b.agentic_coding
+            .unwrap_or_default()
+            .total_cmp(&a.agentic_coding.unwrap_or_default())
+    });
     Ok(out)
 }
 
@@ -85,7 +130,6 @@ pub(crate) fn reasoning_effort_rank(effort: &str) -> i32 {
         _ => 25,
     }
 }
-
 
 #[cfg(test)]
 mod tests {
@@ -106,5 +150,4 @@ mod tests {
         assert!(rows[0].agent.as_deref().unwrap().contains("mini"));
         assert_eq!(rows[0].tokens_per_task, Some(7_967_666.0));
     }
-
 }

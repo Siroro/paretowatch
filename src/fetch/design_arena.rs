@@ -5,7 +5,7 @@
 
 use anyhow::Result;
 use reqwest::blocking::Client;
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 
 use super::fetch_json_post;
 use crate::infer_creator;
@@ -22,7 +22,12 @@ pub(crate) fn fetch_design_arena(client: &Client) -> Result<Vec<Benchmark>> {
         "category": "allcategories",
         "variationName": "public",
     });
-    let value = fetch_json_post(client, DESIGN_ARENA_LEADERBOARD_URL, &body, "Design Arena leaderboard")?;
+    let value = fetch_json_post(
+        client,
+        DESIGN_ARENA_LEADERBOARD_URL,
+        &body,
+        "Design Arena leaderboard",
+    )?;
     Ok(parse_design_arena_elo(&value))
 }
 

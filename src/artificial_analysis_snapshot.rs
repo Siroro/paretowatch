@@ -34,7 +34,7 @@
 //! prior for the missing evidence instead of renormalizing it away, so absent
 //! rows cost coverage confidence but never invent capability.
 
-use crate::{score_benchmark, Benchmark, BenchmarkKind};
+use crate::{Benchmark, BenchmarkKind, score_benchmark};
 
 pub(crate) const ARTIFICIAL_ANALYSIS_SNAPSHOT_DATE: &str = "2026-08-26";
 pub(crate) const ARTIFICIAL_ANALYSIS_SNAPSHOT_VERSION: &str = "v4.1.2";
@@ -49,6 +49,9 @@ pub(crate) const SNAPSHOT_ROWS: &[(&str, f64)] = &[
     ("Grok 4.6", 61.0),
     ("Kimi K3", 60.0),
     ("GLM-5.3", 60.0),
+    // Released just after the v4.1.2 snapshot was read; AA has since
+    // published its Intelligence Index score for it.
+    ("GLM-5.3-Flash", 57.0),
     ("Qwen3.8 Max", 58.0),
     ("Qwen3.8 2.4T A95B", 58.0),
     ("GPT-5.6 Terra", 57.0),
@@ -145,7 +148,7 @@ pub(crate) const SNAPSHOT_ROWS: &[(&str, f64)] = &[
     ("GPT-5 Nano", 20.0),
     ("GPT-5.2 Codex", 41.0),
     ("GPT-5.3 Codex", 46.0),
-    ("GPT-5.6 Sol Pro", 61.0),   // same weights as GPT-5.6 Sol; see INHERITED_EXECUTION_MODE_NOTES
+    ("GPT-5.6 Sol Pro", 61.0), // same weights as GPT-5.6 Sol; see INHERITED_EXECUTION_MODE_NOTES
     ("GPT-5.6 Terra Pro", 57.0), // same weights as GPT-5.6 Terra; see INHERITED_EXECUTION_MODE_NOTES
     ("GPT-5.6 Luna Pro", 52.0),  // same weights as GPT-5.6 Luna; see INHERITED_EXECUTION_MODE_NOTES
     // Google
@@ -303,8 +306,14 @@ mod tests {
             SNAPSHOT_ROWS.iter().map(|(model, _)| *model).collect();
         assert!(!INHERITED_EXECUTION_MODES.is_empty());
         for (mode, base) in INHERITED_EXECUTION_MODES {
-            assert!(names.contains(mode), "pair references unknown mode SKU `{mode}`");
-            assert!(names.contains(base), "pair references unknown base variant `{base}`");
+            assert!(
+                names.contains(mode),
+                "pair references unknown mode SKU `{mode}`"
+            );
+            assert!(
+                names.contains(base),
+                "pair references unknown base variant `{base}`"
+            );
             assert_ne!(
                 benchmark_model_key(mode),
                 benchmark_model_key(base),
@@ -313,7 +322,8 @@ mod tests {
         }
         let rows = artificial_analysis_snapshot();
         for (mode, base) in INHERITED_EXECUTION_MODES {
-            let row = rows.iter()
+            let row = rows
+                .iter()
                 .find(|row| benchmark_model_key(&row.slug) == benchmark_model_key(mode))
                 .unwrap();
             assert!(

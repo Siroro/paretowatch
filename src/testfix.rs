@@ -19,6 +19,7 @@ pub(crate) fn test_quote(model: &str, input: f64, live_market: bool) -> Quote {
         volume_24h: Some(5000.0),
         discount_pct: Some(25.0),
         discount_direction: Some("stable".into()),
+        free_offer_listed: false,
         market_options: vec![ProviderMarketQuote {
             provider: "test-provider".into(),
             input,

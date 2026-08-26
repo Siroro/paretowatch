@@ -6,8 +6,8 @@ use chrono::{DateTime, Utc};
 use eframe::egui;
 use egui_plot::{Legend, Line, Plot, PlotPoints, Points, VLine};
 
-use super::track::{ModelSeries, blended_series};
 use super::HistoryTracker;
+use super::track::{ModelSeries, blended_series};
 use crate::Settings;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -35,7 +35,10 @@ impl HistoryMetric {
     }
 
     fn is_price(self) -> bool {
-        matches!(self, Self::Blended | Self::Input | Self::Output | Self::CacheRead)
+        matches!(
+            self,
+            Self::Blended | Self::Input | Self::Output | Self::CacheRead
+        )
     }
 
     fn y_label(self) -> String {
@@ -49,7 +52,9 @@ impl HistoryMetric {
 
     fn format_value(self, v: f64) -> String {
         match self {
-            Self::Blended | Self::Input | Self::Output | Self::CacheRead => crate::format_price_tick(v),
+            Self::Blended | Self::Input | Self::Output | Self::CacheRead => {
+                crate::format_price_tick(v)
+            }
             Self::Capability | Self::Deployment => format!("{v:.1}"),
             Self::VolumeDaily => crate::format_compact_number(v),
         }
@@ -176,7 +181,9 @@ pub(crate) fn show(
     if state.selected.is_empty() {
         state.selected.push(models[0].0.clone());
     }
-    state.selected.retain(|slug| models.iter().any(|(m, _)| m == slug));
+    state
+        .selected
+        .retain(|slug| models.iter().any(|(m, _)| m == slug));
 
     let selected_before_controls = state.selected.clone();
     controls(ui, &models, state);
@@ -195,8 +202,12 @@ pub(crate) fn show(
 
     let mut prepared: Vec<PreparedSeries> = Vec::new();
     for (i, slug) in state.selected.iter().enumerate() {
-        let Some(series) = tracker.series(slug) else { continue };
-        let Some(mut points) = raw_metric_series(series, state.metric, settings) else { continue };
+        let Some(series) = tracker.series(slug) else {
+            continue;
+        };
+        let Some(mut points) = raw_metric_series(series, state.metric, settings) else {
+            continue;
+        };
         points = window(&points, state.range, now);
         if points.is_empty() {
             continue;
@@ -224,7 +235,10 @@ pub(crate) fn show(
     }
 
     if prepared.is_empty() {
-        ui.label(format!("No {} history for this model yet.", state.metric.label()));
+        ui.label(format!(
+            "No {} history for this model yet.",
+            state.metric.label()
+        ));
         footer(ui, tracker);
         return;
     }
@@ -235,11 +249,7 @@ pub(crate) fn show(
     footer(ui, tracker);
 }
 
-fn controls(
-    ui: &mut egui::Ui,
-    models: &[(String, String)],
-    state: &mut HistoryUiState,
-) {
+fn controls(ui: &mut egui::Ui, models: &[(String, String)], state: &mut HistoryUiState) {
     ui.horizontal_wrapped(|ui| {
         let selected_label = models
             .iter()
@@ -321,7 +331,12 @@ fn controls(
 
     ui.horizontal_wrapped(|ui| {
         ui.label("Range:");
-        for range in [HistoryRange::Day1, HistoryRange::Day7, HistoryRange::Day30, HistoryRange::All] {
+        for range in [
+            HistoryRange::Day1,
+            HistoryRange::Day7,
+            HistoryRange::Day30,
+            HistoryRange::All,
+        ] {
             if ui
                 .selectable_label(state.range == range, range.label())
                 .clicked()
@@ -360,7 +375,11 @@ fn raw_metric_series(
         ),
         HistoryMetric::Capability => series.capability.clone(),
         HistoryMetric::Deployment => series.deployment.clone(),
-        HistoryMetric::VolumeDaily => series.telemetry.iter().map(|(ts, _, vol)| (*ts, *vol)).collect(),
+        HistoryMetric::VolumeDaily => series
+            .telemetry
+            .iter()
+            .map(|(ts, _, vol)| (*ts, *vol))
+            .collect(),
     };
     (!out.is_empty()).then_some(out)
 }
@@ -372,17 +391,28 @@ fn window(points: &[(f64, f64)], range: HistoryRange, now: DateTime<Utc>) -> Vec
         return points.to_vec();
     };
     let since = (now.timestamp() as f64) - secs as f64;
-    let start = points.partition_point(|(ts, _)| *ts < since).saturating_sub(1);
+    let start = points
+        .partition_point(|(ts, _)| *ts < since)
+        .saturating_sub(1);
     points[start..].to_vec()
 }
 
-fn chart(ui: &mut egui::Ui, prepared: &[PreparedSeries], state: &mut HistoryUiState, now: DateTime<Utc>) {
+fn chart(
+    ui: &mut egui::Ui,
+    prepared: &[PreparedSeries],
+    state: &mut HistoryUiState,
+    now: DateTime<Utc>,
+) {
     let plot_height = (ui.available_height() * 0.62).max(320.0);
     let saved_style = ui.style().clone();
     {
         let style = ui.style_mut();
-        style.text_styles.insert(egui::TextStyle::Body, egui::FontId::proportional(15.0));
-        style.text_styles.insert(egui::TextStyle::Small, egui::FontId::proportional(12.5));
+        style
+            .text_styles
+            .insert(egui::TextStyle::Body, egui::FontId::proportional(15.0));
+        style
+            .text_styles
+            .insert(egui::TextStyle::Small, egui::FontId::proportional(12.5));
         style.visuals.override_text_color = Some(egui::Color32::from_rgb(226, 232, 240));
     }
 
@@ -405,7 +435,11 @@ fn chart(ui: &mut egui::Ui, prepared: &[PreparedSeries], state: &mut HistoryUiSt
                 metric.format_value(mark.value)
             }
         })
-        .y_axis_label(if normalize { "% of window start".into() } else { metric.y_label() })
+        .y_axis_label(if normalize {
+            "% of window start".into()
+        } else {
+            metric.y_label()
+        })
         .x_axis_label("time (UTC)")
         .allow_zoom(true)
         .allow_scroll(true)
@@ -417,7 +451,11 @@ fn chart(ui: &mut egui::Ui, prepared: &[PreparedSeries], state: &mut HistoryUiSt
         .label_formatter(|_| None)
         .show(ui, |plot_ui| {
             if state.reset_zoom {
-                plot_ui.set_auto_bounds(true);
+                // Compute and SET explicit bounds for both axes. Do not leave
+                // either axis on auto bounds here: the flag is sticky across
+                // frames and then every frame refits content, including the
+                // transient cursor shapes below, so drifting the pointer past
+                // an edge stretched the view sideways.
                 // A flat or single-point series has a degenerate (zero-height)
                 // y span, and auto bounds then fall back to an enormous
                 // default window ($0.35 reads on a $0-100 axis). Override with
@@ -434,19 +472,36 @@ fn chart(ui: &mut egui::Ui, prepared: &[PreparedSeries], state: &mut HistoryUiSt
                         y_max = y_max.max(*y);
                     }
                 }
-                if let Some((lo, hi)) = padded_y_bounds(metric, y_min, y_max) {
-                    plot_ui.set_plot_bounds_y(lo..=hi);
-                }
-                if x_max - x_min < MIN_X_SPAN_SECS {
-                    let mid = (x_min + x_max) / 2.0;
-                    plot_ui.set_plot_bounds_x((mid - MIN_X_SPAN_SECS / 2.0)..=(mid + MIN_X_SPAN_SECS / 2.0));
-                }
+                let mid = (x_min + x_max) / 2.0;
+                let (x_lo, x_hi) = if x_max - x_min < MIN_X_SPAN_SECS {
+                    (mid - MIN_X_SPAN_SECS / 2.0, mid + MIN_X_SPAN_SECS / 2.0)
+                } else {
+                    // Mirror the 3% relative margin auto bounds used to add.
+                    let pad = (x_max - x_min) * 0.03;
+                    (x_min - pad, x_max + pad)
+                };
+                plot_ui.set_plot_bounds_x(x_lo..=x_hi);
+                let (y_lo, y_hi) = padded_y_bounds(metric, y_min, y_max).unwrap_or_else(|| {
+                    // Meaningful spread: match the 5% y margin from
+                    // set_margin_fraction, not a hard clip to the data.
+                    let pad = (y_max - y_min) * 0.05;
+                    (y_min - pad, y_max + pad)
+                });
+                plot_ui.set_plot_bounds_y(y_lo..=y_hi);
             }
-            hover_x = plot_ui.pointer_coordinate().map(|c| c.x);
+            // The pointer coordinate maps anywhere on screen through the last
+            // transform, so clamp to the visible x range: past the left/right
+            // edge it would otherwise draw the crosshair outside the data and,
+            // under auto bounds, expand those bounds toward the cursor.
+            hover_x = plot_ui.pointer_coordinate().map(|c| c.x).filter(|&x| {
+                let range = plot_ui.plot_bounds().range_x();
+                x >= *range.start() && x <= *range.end()
+            });
 
             if let Some(x) = hover_x {
                 plot_ui.vline(
-                    VLine::new("crosshair", x)
+                    // Unnamed shapes stay out of the legend.
+                    VLine::new("", x)
                         .color(egui::Color32::from_rgba_unmultiplied(160, 174, 192, 110))
                         .width(1.0),
                 );
@@ -460,7 +515,7 @@ fn chart(ui: &mut egui::Ui, prepared: &[PreparedSeries], state: &mut HistoryUiSt
                 if let Some(x) = hover_x {
                     if let Some((_, v)) = nearest_at_or_before(&s.points, x) {
                         plot_ui.points(
-                            Points::new(format!("hover_{}", s.name), PlotPoints::from(vec![[x, *v]]))
+                            Points::new("", PlotPoints::from(vec![[x, *v]]))
                                 .radius(3.5)
                                 .color(egui::Color32::WHITE),
                         );
@@ -478,10 +533,13 @@ fn chart(ui: &mut egui::Ui, prepared: &[PreparedSeries], state: &mut HistoryUiSt
                     for s in prepared {
                         match nearest_at_or_before(&s.points, x) {
                             Some((ts, v)) => {
-                                let prev = nearest_strictly_before(&s.points, *ts).map(|(_, pv)| *pv);
+                                let prev =
+                                    nearest_strictly_before(&s.points, *ts).map(|(_, pv)| *pv);
                                 ui.horizontal(|ui| {
                                     ui.colored_label(s.color, "●");
-                                    ui.label(series_tooltip_row(s, *ts, *v, prev, metric, normalize));
+                                    ui.label(series_tooltip_row(
+                                        s, *ts, *v, prev, metric, normalize,
+                                    ));
                                 });
                             }
                             None => {
@@ -517,7 +575,11 @@ fn series_tooltip_row(
         if normalize {
             format!("  Δ{:+.1}pt", v - p)
         } else if p.abs() > f64::EPSILON {
-            format!("  {} ({:+.1}%)", metric.format_value(v - p), (v - p) / p * 100.0)
+            format!(
+                "  {} ({:+.1}%)",
+                metric.format_value(v - p),
+                (v - p) / p * 100.0
+            )
         } else {
             String::new()
         }
@@ -532,14 +594,19 @@ fn series_tooltip_row(
 }
 
 fn event_log(ui: &mut egui::Ui, prepared: &[PreparedSeries], state: &HistoryUiState) {
-    let Some(primary) = prepared.first() else { return };
+    let Some(primary) = prepared.first() else {
+        return;
+    };
     let rows: Vec<String> = primary
         .points
         .iter()
         .enumerate()
         .rev()
         .map(|(i, (ts, v))| {
-            let prev = i.checked_sub(1).and_then(|j| primary.points.get(j)).map(|(_, pv)| *pv);
+            let prev = i
+                .checked_sub(1)
+                .and_then(|j| primary.points.get(j))
+                .map(|(_, pv)| *pv);
             match prev {
                 Some(p) if p.abs() > f64::EPSILON => format!(
                     "{}  {} → {}  ({:+.1}%)",
@@ -548,7 +615,11 @@ fn event_log(ui: &mut egui::Ui, prepared: &[PreparedSeries], state: &HistoryUiSt
                     state.metric.format_value(*v),
                     (v - p) / p * 100.0
                 ),
-                Some(_) => format!("{}  {}", format_time_utc(*ts), state.metric.format_value(*v)),
+                Some(_) => format!(
+                    "{}  {}",
+                    format_time_utc(*ts),
+                    state.metric.format_value(*v)
+                ),
                 None => format!(
                     "{}  first record: {}",
                     format_time_utc(*ts),
@@ -691,7 +762,9 @@ mod tests {
     #[test]
     fn window_keeps_pre_window_anchor() {
         let now = DateTime::from_timestamp(9_000_000, 0).unwrap();
-        let pts: Vec<(f64, f64)> = (0..10).map(|i| (i as f64 * 1_000_000.0, i as f64)).collect();
+        let pts: Vec<(f64, f64)> = (0..10)
+            .map(|i| (i as f64 * 1_000_000.0, i as f64))
+            .collect();
         // "All" keeps everything.
         assert_eq!(window(&pts, HistoryRange::All, now).len(), 10);
         let w = window(&pts, HistoryRange::Day30, now);
@@ -718,9 +791,15 @@ mod tests {
     fn axis_formatting_adapts_to_span() {
         let ts = 1_750_000_000.0;
         let hour = format_ts_axis(ts, 3600.0);
-        assert!(hour.len() == 5 && hour.contains(':'), "HH:MM for short spans: {hour}");
+        assert!(
+            hour.len() == 5 && hour.contains(':'),
+            "HH:MM for short spans: {hour}"
+        );
         let month = format_ts_axis(ts, 900.0 * 86_400.0);
-        assert!(!month.contains(':'), "month-level labels for long spans: {month}");
+        assert!(
+            !month.contains(':'),
+            "month-level labels for long spans: {month}"
+        );
     }
 
     #[test]
@@ -739,13 +818,18 @@ mod tests {
             .join("history-ui.json");
         let _ = std::fs::remove_file(&path);
         save_selection_to(&path, &["openai/gpt-x".into(), "zai/glm-5-3".into()]);
-        assert_eq!(load_selection_from(&path), vec!["openai/gpt-x", "zai/glm-5-3"]);
+        assert_eq!(
+            load_selection_from(&path),
+            vec!["openai/gpt-x", "zai/glm-5-3"]
+        );
         let _ = std::fs::remove_file(&path);
     }
 
     #[test]
     fn selection_load_survives_missing_file_garbage_and_dupes() {
-        let dir = std::env::temp_dir().join("paretowatch-history-tests").join(format!("uiselbad-{}", std::process::id()));
+        let dir = std::env::temp_dir()
+            .join("paretowatch-history-tests")
+            .join(format!("uiselbad-{}", std::process::id()));
         let _ = std::fs::create_dir_all(&dir);
         // Missing file.
         assert!(load_selection_from(&dir.join("none.json")).is_empty());
@@ -763,15 +847,25 @@ mod tests {
     #[test]
     fn single_point_price_gets_tight_readable_window() {
         // $0.35 model, one sample: must NOT sit on a $0-100 default axis.
-        let (lo, hi) = padded_y_bounds(HistoryMetric::Blended, 0.35, 0.35).expect("degenerate y padded");
-        assert!(lo > 0.2 && hi < 0.55, "tight window around $0.35, got {lo}..{hi}");
+        let (lo, hi) =
+            padded_y_bounds(HistoryMetric::Blended, 0.35, 0.35).expect("degenerate y padded");
+        assert!(
+            lo > 0.2 && hi < 0.55,
+            "tight window around $0.35, got {lo}..{hi}"
+        );
         // A meaningful span is left alone.
         assert_eq!(padded_y_bounds(HistoryMetric::Blended, 1.0, 20.0), None);
         // Scores use a fixed floor so a flat 77.x line does not span 0-100.
         let (lo, hi) = padded_y_bounds(HistoryMetric::Capability, 77.7, 77.7).unwrap();
-        assert!(lo > 65.0 && hi < 90.0, "score window around 77.7, got {lo}..{hi}");
+        assert!(
+            lo > 65.0 && hi < 90.0,
+            "score window around 77.7, got {lo}..{hi}"
+        );
         // Zero stays representable (free model).
         let (lo, hi) = padded_y_bounds(HistoryMetric::Blended, 0.0, 0.0).unwrap();
-        assert!(lo < 0.0 && hi > 0.0 && hi <= 0.05, "tiny window around $0, got {lo}..{hi}");
+        assert!(
+            lo < 0.0 && hi > 0.0 && hi <= 0.05,
+            "tiny window around $0, got {lo}..{hi}"
+        );
     }
 }

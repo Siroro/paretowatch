@@ -7,7 +7,6 @@ pub(crate) mod design_arena;
 pub(crate) mod livebench;
 pub(crate) mod prices;
 pub(crate) mod revelo;
-pub(crate) mod swebench;
 pub(crate) mod swe_rebench;
 pub(crate) mod terminal_bench;
 
@@ -16,7 +15,6 @@ pub(crate) use design_arena::*;
 pub(crate) use livebench::*;
 pub(crate) use prices::*;
 pub(crate) use revelo::*;
-pub(crate) use swebench::*;
 pub(crate) use swe_rebench::*;
 pub(crate) use terminal_bench::*;
 
@@ -25,7 +23,7 @@ use std::sync::mpsc::{self, Receiver, Sender};
 use std::thread;
 use std::time::{Duration, Instant};
 
-use anyhow::{anyhow, Context, Result};
+use anyhow::{Context, Result, anyhow};
 use eframe::egui;
 use regex::Regex;
 use reqwest::blocking::Client;
@@ -34,11 +32,14 @@ use serde_json::Value;
 use crate::artificial_analysis_snapshot::artificial_analysis_snapshot;
 use crate::infer_creator;
 use crate::types::{Benchmark, BenchmarkKind, BenchmarkSource, Quote, Settings};
-use crate::{evaluate_alerts, WorkerCommand, WorkerMessage};
+use crate::{WorkerCommand, WorkerMessage, evaluate_alerts};
 
 pub(crate) const BENCHMARK_REFRESH_SECS: u64 = 6 * 60 * 60;
 
-pub(crate) fn start_worker(ctx: egui::Context, initial_settings: Settings) -> (Sender<WorkerCommand>, Receiver<WorkerMessage>) {
+pub(crate) fn start_worker(
+    ctx: egui::Context,
+    initial_settings: Settings,
+) -> (Sender<WorkerCommand>, Receiver<WorkerMessage>) {
     let (cmd_tx, cmd_rx) = mpsc::channel::<WorkerCommand>();
     let (msg_tx, msg_rx) = mpsc::channel::<WorkerMessage>();
 
@@ -64,7 +65,9 @@ pub(crate) fn start_worker(ctx: egui::Context, initial_settings: Settings) -> (S
                     .map(|q| (q.model.clone(), q))
                     .collect();
             }
-            let _ = msg_tx.send(WorkerMessage::Prices(price_result.map_err(|e| format!("{e:#}"))));
+            let _ = msg_tx.send(WorkerMessage::Prices(
+                price_result.map_err(|e| format!("{e:#}")),
+            ));
             ctx.request_repaint();
 
             let should_fetch_benchmarks = last_benchmark_fetch
@@ -105,7 +108,9 @@ pub(crate) fn start_worker(ctx: egui::Context, initial_settings: Settings) -> (S
 }
 
 pub(crate) fn fetch_json(client: &Client, url: &str, label: &str) -> Result<Value> {
-    client.get(url).send()
+    client
+        .get(url)
+        .send()
         .with_context(|| format!("{label} request failed ({url})"))?
         .error_for_status()
         .with_context(|| format!("{label} returned an HTTP error ({url})"))?
@@ -114,7 +119,9 @@ pub(crate) fn fetch_json(client: &Client, url: &str, label: &str) -> Result<Valu
 }
 
 pub(crate) fn fetch_text(client: &Client, url: &str, label: &str) -> Result<String> {
-    client.get(url).send()
+    client
+        .get(url)
+        .send()
         .with_context(|| format!("{label} request failed ({url})"))?
         .error_for_status()
         .with_context(|| format!("{label} returned an HTTP error ({url})"))?
@@ -122,8 +129,16 @@ pub(crate) fn fetch_text(client: &Client, url: &str, label: &str) -> Result<Stri
         .with_context(|| format!("Could not read {label} response ({url})"))
 }
 
-pub(crate) fn fetch_json_post(client: &Client, url: &str, body: &Value, label: &str) -> Result<Value> {
-    client.post(url).json(body).send()
+pub(crate) fn fetch_json_post(
+    client: &Client,
+    url: &str,
+    body: &Value,
+    label: &str,
+) -> Result<Value> {
+    client
+        .post(url)
+        .json(body)
+        .send()
         .with_context(|| format!("{label} request failed ({url})"))?
         .error_for_status()
         .with_context(|| format!("{label} returned an HTTP error ({url})"))?
@@ -131,7 +146,10 @@ pub(crate) fn fetch_json_post(client: &Client, url: &str, body: &Value, label: &
         .with_context(|| format!("{label} returned invalid JSON ({url})"))
 }
 
-pub(crate) fn fetch_benchmark_source(client: &Client, source: BenchmarkSource) -> Result<Vec<Benchmark>> {
+pub(crate) fn fetch_benchmark_source(
+    client: &Client,
+    source: BenchmarkSource,
+) -> Result<Vec<Benchmark>> {
     match source {
         BenchmarkSource::ArtificialAnalysisSnapshot => Ok(artificial_analysis_snapshot()),
         BenchmarkSource::SWERebench => fetch_swe_rebench(client),
@@ -139,8 +157,6 @@ pub(crate) fn fetch_benchmark_source(client: &Client, source: BenchmarkSource) -
         BenchmarkSource::DeepSWE11 => fetch_deepswe(client),
         BenchmarkSource::LiveBench => fetch_livebench(client),
         BenchmarkSource::ReveloCodeIndex => fetch_revelo_code_index(client),
-        BenchmarkSource::SWEBenchLive => fetch_swebench_live(client),
-        BenchmarkSource::SWEBenchVerified => fetch_swebench_verified(client),
         BenchmarkSource::DesignArena => fetch_design_arena(client),
         BenchmarkSource::CompositeAgentic | BenchmarkSource::CompositeDeployment => {
             Err(anyhow!("Composite is derived locally and is not fetched"))
@@ -186,6 +202,7 @@ pub(crate) fn collapse_whitespace(text: &str) -> String {
 }
 
 pub(crate) fn number_value(value: &Value) -> Option<f64> {
-    value.as_f64().or_else(|| value.as_str()?.trim().parse::<f64>().ok())
+    value
+        .as_f64()
+        .or_else(|| value.as_str()?.trim().parse::<f64>().ok())
 }
-

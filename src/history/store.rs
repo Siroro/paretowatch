@@ -20,7 +20,7 @@
 use serde::{Deserialize, Serialize};
 use std::fs::{self, File, OpenOptions};
 use std::io::{self, Write};
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
 const MAGIC: [u8; 4] = *b"PWH1";
 const FORMAT_VERSION: u8 = 1;
@@ -58,12 +58,19 @@ pub(crate) enum PriceField {
 pub(crate) enum EventKind {
     /// First time a model is ever seen. Owns the identity strings so every
     /// later frame only pays a u16 id.
-    Added { slug: String, display: String, creator: String },
+    Added {
+        slug: String,
+        display: String,
+        creator: String,
+    },
     /// Zigzag delta (postcard varint) of the quantized price.
     Price { field: PriceField, delta: i32 },
     /// Composite scores. `None` fields are unchanged; boards usually move
     /// both flavors at once, so one frame covers it.
-    Composite { capability: Option<i32>, deployment: Option<i32> },
+    Composite {
+        capability: Option<i32>,
+        deployment: Option<i32>,
+    },
     /// Once-per-UTC-day summary of market telemetry.
     Telemetry { requests: u64, volume_cents: u64 },
 }
@@ -79,13 +86,11 @@ pub(crate) struct Frame {
 pub(crate) struct Replay {
     /// Decoded frames with absolute unix timestamps (seconds).
     pub frames: Vec<(i64, Frame)>,
-    pub tail_bytes_discarded: usize,
     pub file_bytes: u64,
 }
 
 pub(crate) struct EventStore {
     file: Option<File>,
-    path: PathBuf,
     /// Unix seconds of the last written frame; used to compute `dt`.
     last_ts: i64,
     pub file_bytes: u64,
@@ -101,14 +106,16 @@ impl EventStore {
         let (mut replay, note) = match Self::read_all(path) {
             Ok(r) => (r, None),
             Err(why) => (
-                Replay { frames: Vec::new(), tail_bytes_discarded: 0, file_bytes: 0 },
+                Replay {
+                    frames: Vec::new(),
+                    file_bytes: 0,
+                },
                 Some(why),
             ),
         };
         replay.frames.shrink_to_fit();
         let mut store = EventStore {
             file: None,
-            path: path.to_path_buf(),
             last_ts: replay.frames.last().map(|(ts, _)| *ts).unwrap_or(0),
             file_bytes: replay.file_bytes,
             frame_count: replay.frames.len() as u64,
@@ -126,9 +133,13 @@ impl EventStore {
             Ok(b) => b,
             Err(err) if err.kind() == io::ErrorKind::NotFound => {
                 let mut file = File::create(path).map_err(|e| e.to_string())?;
-                file.write_all(&MAGIC).and_then(|_| file.write_all(&[FORMAT_VERSION]))
+                file.write_all(&MAGIC)
+                    .and_then(|_| file.write_all(&[FORMAT_VERSION]))
                     .map_err(|e| e.to_string())?;
-                return Ok(Replay { frames: Vec::new(), tail_bytes_discarded: 0, file_bytes: 5 });
+                return Ok(Replay {
+                    frames: Vec::new(),
+                    file_bytes: 5,
+                });
             }
             Err(err) => return Err(err.to_string()),
         };
@@ -136,9 +147,13 @@ impl EventStore {
             let aside = path.with_extension("bin.old");
             let _ = fs::rename(path, &aside);
             let mut file = File::create(path).map_err(|e| e.to_string())?;
-            file.write_all(&MAGIC).and_then(|_| file.write_all(&[FORMAT_VERSION]))
+            file.write_all(&MAGIC)
+                .and_then(|_| file.write_all(&[FORMAT_VERSION]))
                 .map_err(|e| e.to_string())?;
-            return Ok(Replay { frames: Vec::new(), tail_bytes_discarded: 0, file_bytes: 5 });
+            return Ok(Replay {
+                frames: Vec::new(),
+                file_bytes: 5,
+            });
         }
 
         let mut frames = Vec::new();
@@ -172,14 +187,16 @@ impl EventStore {
                 let _ = file.set_len(good as u64);
             }
         }
-        Ok(Replay { frames, tail_bytes_discarded: discarded, file_bytes })
+        Ok(Replay { frames, file_bytes })
     }
 
     /// Appends frames (absolute timestamps), flushing once. Returns bytes
     /// written; a write failure switches the store to degraded mode rather
     /// than aborting the poll.
     pub fn append(&mut self, events: &[(i64, Frame)]) -> usize {
-        let Some(file) = self.file.as_mut() else { return 0 };
+        let Some(file) = self.file.as_mut() else {
+            return 0;
+        };
         if events.is_empty() {
             return 0;
         }
@@ -187,8 +204,11 @@ impl EventStore {
         let mut last = self.last_ts;
         for (ts, frame) in events {
             let dt = (*ts - last).clamp(0, u32::MAX as i64) as u32;
-            let mut encoded = postcard::to_allocvec(&Frame { dt, ..frame.clone() })
-                .expect("history frame serialization cannot fail");
+            let mut encoded = postcard::to_allocvec(&Frame {
+                dt,
+                ..frame.clone()
+            })
+            .expect("history frame serialization cannot fail");
             buf.append(&mut encoded);
             last = *ts;
         }
@@ -214,6 +234,7 @@ impl EventStore {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::path::PathBuf;
 
     fn temp_path(tag: &str) -> PathBuf {
         let dir = std::env::temp_dir()
@@ -245,8 +266,28 @@ mod tests {
             assert!(store.degraded_reason().is_none());
             store.append(&[
                 (base, added_frame(0, "openai/gpt-x")),
-                (base + 60, Frame { id: 0, dt: 0, kind: EventKind::Price { field: PriceField::Input, delta: quantize_price(2.5) } }),
-                (base + 120, Frame { id: 0, dt: 0, kind: EventKind::Composite { capability: Some(quantize_score(77.7)), deployment: None } }),
+                (
+                    base + 60,
+                    Frame {
+                        id: 0,
+                        dt: 0,
+                        kind: EventKind::Price {
+                            field: PriceField::Input,
+                            delta: quantize_price(2.5),
+                        },
+                    },
+                ),
+                (
+                    base + 120,
+                    Frame {
+                        id: 0,
+                        dt: 0,
+                        kind: EventKind::Composite {
+                            capability: Some(quantize_score(77.7)),
+                            deployment: None,
+                        },
+                    },
+                ),
             ]);
         }
         {
@@ -254,7 +295,13 @@ mod tests {
             assert_eq!(replay.frames.len(), 3);
             assert_eq!(replay.frames[0].0, base);
             assert_eq!(replay.frames[2].0, base + 120);
-            assert_eq!(replay.frames[1].1.kind, EventKind::Price { field: PriceField::Input, delta: quantize_price(2.5) });
+            assert_eq!(
+                replay.frames[1].1.kind,
+                EventKind::Price {
+                    field: PriceField::Input,
+                    delta: quantize_price(2.5)
+                }
+            );
             assert_eq!(store.frame_count, 3);
         }
         let _ = fs::remove_file(&path);
@@ -285,11 +332,12 @@ mod tests {
             file.write_all(&half[..half.len() / 2]).unwrap();
             drop(file);
         }
+        let corrupted_len = fs::metadata(&path).unwrap().len();
         {
             let (_, replay) = EventStore::open(&path);
             assert_eq!(replay.frames.len(), 1);
-            assert!(replay.tail_bytes_discarded > 0);
             assert_eq!(fs::metadata(&path).unwrap().len(), replay.file_bytes);
+            assert!(replay.file_bytes < corrupted_len);
         }
         let _ = fs::remove_file(&path);
     }

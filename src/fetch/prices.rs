@@ -3,7 +3,7 @@
 
 use std::collections::HashMap;
 
-use anyhow::{anyhow, Result};
+use anyhow::{Result, anyhow};
 use chrono::Utc;
 use reqwest::blocking::Client;
 use serde_json::Value;
@@ -11,8 +11,8 @@ use serde_json::Value;
 use super::fetch_json;
 use crate::bench::matching::normalize;
 use crate::infer_creator;
-use crate::{first_number_path, first_string_path, json_shape, string_at};
 use crate::types::*;
+use crate::{first_number_path, first_string_path, json_shape, string_at};
 
 pub(crate) const SURPLUS_MARKETS_URL: &str = "https://api.surplusintelligence.ai/api/markets";
 pub(crate) const SURPLUS_PRICES_URL: &str = "https://api.surplusintelligence.ai/v1/prices";
@@ -30,7 +30,10 @@ pub(crate) fn fetch_prices(client: &Client, settings: &Settings) -> Result<Price
         Ok(value) => match parse_model_catalog(&value) {
             Ok(parsed) if !parsed.is_empty() => parsed,
             Ok(_) => {
-                base_errors.push(format!("/v1/models returned no text-output model prices; JSON shape: {}", json_shape(&value)));
+                base_errors.push(format!(
+                    "/v1/models returned no text-output model prices; JSON shape: {}",
+                    json_shape(&value)
+                ));
                 Vec::new()
             }
             Err(err) => {
@@ -47,13 +50,19 @@ pub(crate) fn fetch_prices(client: &Client, settings: &Settings) -> Result<Price
     let mut quotes = Vec::new();
     match fetch_json(client, SURPLUS_PRICES_URL, "Surplus /v1/prices") {
         Ok(value) => {
-            comparison_updated_at = value.get("updated_at").and_then(Value::as_str).map(str::to_owned);
+            comparison_updated_at = value
+                .get("updated_at")
+                .and_then(Value::as_str)
+                .map(str::to_owned);
             match parse_price_matrix(&value, settings) {
                 Ok(parsed) if !parsed.is_empty() => {
                     quotes = parsed;
                     base_source = "/v1/prices + text catalog".into();
                 }
-                Ok(_) => base_errors.push(format!("/v1/prices returned no usable model prices; JSON shape: {}", json_shape(&value))),
+                Ok(_) => base_errors.push(format!(
+                    "/v1/prices returned no usable model prices; JSON shape: {}",
+                    json_shape(&value)
+                )),
                 Err(err) => base_errors.push(format!("/v1/prices parse: {err:#}")),
             }
         }
@@ -61,7 +70,8 @@ pub(crate) fn fetch_prices(client: &Client, settings: &Settings) -> Result<Price
     }
 
     if !catalog_quotes.is_empty() {
-        let catalog_by_key = catalog_quotes.iter()
+        let catalog_by_key = catalog_quotes
+            .iter()
             .cloned()
             .map(|q| (normalize(&q.model), q))
             .collect::<HashMap<_, _>>();
@@ -96,7 +106,10 @@ pub(crate) fn fetch_prices(client: &Client, settings: &Settings) -> Result<Price
     }
 
     if quotes.is_empty() {
-        return Err(anyhow!("No Surplus text-model pricing source produced models. {}", base_errors.join(" | ")));
+        return Err(anyhow!(
+            "No Surplus text-model pricing source produced models. {}",
+            base_errors.join(" | ")
+        ));
     }
 
     let mut market_error = None;
@@ -105,7 +118,10 @@ pub(crate) fn fetch_prices(client: &Client, settings: &Settings) -> Result<Price
         Ok(value) => {
             let markets = parse_market_overlay(&value, settings);
             if markets.is_empty() {
-                market_error = Some(format!("/api/markets returned no usable text-token quotes; JSON shape: {}", json_shape(&value)));
+                market_error = Some(format!(
+                    "/api/markets returned no usable text-token quotes; JSON shape: {}",
+                    json_shape(&value)
+                ));
             } else {
                 for market in markets {
                     let target = normalize(&market.model);
@@ -116,7 +132,9 @@ pub(crate) fn fetch_prices(client: &Client, settings: &Settings) -> Result<Price
                         q.input = market.input;
                         q.output = market.output;
                         q.cache_read = market.cache_read;
-                        if let Some(provider) = market.provider { q.provider = provider; }
+                        if let Some(provider) = market.provider {
+                            q.provider = provider;
+                        }
                         q.seller_count = market.seller_count;
                         q.healthy_seller_count = market.healthy_seller_count;
                         q.provider_trusted = market.provider_trusted;
@@ -124,6 +142,7 @@ pub(crate) fn fetch_prices(client: &Client, settings: &Settings) -> Result<Price
                         q.volume_24h = market.volume_24h;
                         q.discount_pct = market.discount_pct;
                         q.discount_direction = market.discount_direction.clone();
+                        q.free_offer_listed = market.free_offer_listed;
                         q.market_options = market.provider_options.clone();
                         q.live_market = true;
                         overlay_count += 1;
@@ -148,19 +167,28 @@ pub(crate) fn fetch_prices(client: &Client, settings: &Settings) -> Result<Price
 pub(crate) fn parse_price_matrix(value: &Value, settings: &Settings) -> Result<Vec<Quote>> {
     let models = find_model_entries(value);
     if models.is_empty() {
-        return Err(anyhow!("no model array found; JSON shape: {}", json_shape(value)));
+        return Err(anyhow!(
+            "no model array found; JSON shape: {}",
+            json_shape(value)
+        ));
     }
     let mut quotes = Vec::new();
 
     for model in models {
-        let Some(model_id) = string_at(model, &["model", "id", "model_id", "modelId"]) else { continue };
-        let display_name = string_at(model, &["displayName", "display_name", "name"]).unwrap_or_else(|| model_id.clone());
-        let creator = string_at(model, &["provider", "creator", "model_creator"]).unwrap_or_else(|| infer_creator(&model_id));
+        let Some(model_id) = string_at(model, &["model", "id", "model_id", "modelId"]) else {
+            continue;
+        };
+        let display_name = string_at(model, &["displayName", "display_name", "name"])
+            .unwrap_or_else(|| model_id.clone());
+        let creator = string_at(model, &["provider", "creator", "model_creator"])
+            .unwrap_or_else(|| infer_creator(&model_id));
         let mut best: Option<(String, f64, f64, Option<f64>, f64)> = None;
 
         if let Some(providers) = model.get("providers").and_then(Value::as_object) {
             for (provider, price) in providers {
-                let Some((input, output)) = price_pair_per_million(price) else { continue };
+                let Some((input, output)) = price_pair_per_million(price) else {
+                    continue;
+                };
                 let cache_read = cache_read_per_million(price);
                 let weighted = blended_price(
                     input,
@@ -170,7 +198,11 @@ pub(crate) fn parse_price_matrix(value: &Value, settings: &Settings) -> Result<V
                     settings.cache_read_weight,
                     settings.output_weight,
                 );
-                if best.as_ref().map(|(_, _, _, _, current)| weighted < *current).unwrap_or(true) {
+                if best
+                    .as_ref()
+                    .map(|(_, _, _, _, current)| weighted < *current)
+                    .unwrap_or(true)
+                {
                     best = Some((provider.clone(), input, output, cache_read, weighted));
                 }
             }
@@ -179,7 +211,8 @@ pub(crate) fn parse_price_matrix(value: &Value, settings: &Settings) -> Result<V
             if let Some(cheapest) = model.get("cheapest") {
                 if let Some((input, output)) = price_pair_per_million(cheapest) {
                     let cache_read = cache_read_per_million(cheapest);
-                    let provider = string_at(cheapest, &["provider", "name"]).unwrap_or_else(|| "cheapest".into());
+                    let provider = string_at(cheapest, &["provider", "name"])
+                        .unwrap_or_else(|| "cheapest".into());
                     let weighted = blended_price(
                         input,
                         cache_read,
@@ -223,6 +256,7 @@ pub(crate) fn parse_price_matrix(value: &Value, settings: &Settings) -> Result<V
                 volume_24h: None,
                 discount_pct: None,
                 discount_direction: None,
+                free_offer_listed: false,
                 market_options: vec![],
                 live_market: false,
                 vision: false,
@@ -233,28 +267,56 @@ pub(crate) fn parse_price_matrix(value: &Value, settings: &Settings) -> Result<V
 }
 
 pub(crate) fn parse_model_catalog(value: &Value) -> Result<Vec<Quote>> {
-    let models = value.get("data").and_then(Value::as_array)
+    let models = value
+        .get("data")
+        .and_then(Value::as_array)
         .ok_or_else(|| anyhow!("no data array found; JSON shape: {}", json_shape(value)))?;
     let mut out = Vec::new();
     for model in models {
-        let Some(id) = string_at(model, &["id", "model", "model_id"]) else { continue };
-        let name = string_at(model, &["name", "displayName", "display_name"]).unwrap_or_else(|| id.clone());
-        if !catalog_is_text_model(model, &id, &name) { continue; }
-        let Some(pricing) = model.get("pricing") else { continue };
-        let Some(prompt) = first_number_path(pricing, &[&["prompt"], &["input"]]) else { continue };
-        let Some(completion) = first_number_path(pricing, &[&["completion"], &["output"]]) else { continue };
-        if !prompt.is_finite() || !completion.is_finite() || prompt < 0.0 || completion < 0.0 { continue; }
-        let cache_read = first_number_path(pricing, &[
-            &["input_cache_read"], &["cache_read"], &["cacheRead"],
-        ]).filter(|v| v.is_finite() && *v >= 0.0).map(|v| v * 1_000_000.0);
+        let Some(id) = string_at(model, &["id", "model", "model_id"]) else {
+            continue;
+        };
+        let name = string_at(model, &["name", "displayName", "display_name"])
+            .unwrap_or_else(|| id.clone());
+        if !catalog_is_text_model(model, &id, &name) {
+            continue;
+        }
+        let Some(pricing) = model.get("pricing") else {
+            continue;
+        };
+        let Some(prompt) = first_number_path(pricing, &[&["prompt"], &["input"]]) else {
+            continue;
+        };
+        let Some(completion) = first_number_path(pricing, &[&["completion"], &["output"]]) else {
+            continue;
+        };
+        if !prompt.is_finite() || !completion.is_finite() || prompt < 0.0 || completion < 0.0 {
+            continue;
+        }
+        let cache_read = first_number_path(
+            pricing,
+            &[&["input_cache_read"], &["cache_read"], &["cacheRead"]],
+        )
+        .filter(|v| v.is_finite() && *v >= 0.0)
+        .map(|v| v * 1_000_000.0);
         let creator = string_at(model, &["provider", "creator", "organization"])
             .unwrap_or_else(|| infer_creator(&id));
         out.push(Quote {
-            model: id.clone(), display_name: name, creator, provider: "Surplus catalog".into(),
-            input: prompt * 1_000_000.0, output: completion * 1_000_000.0,
+            model: id.clone(),
+            display_name: name,
+            creator,
+            provider: "Surplus catalog".into(),
+            input: prompt * 1_000_000.0,
+            output: completion * 1_000_000.0,
             cache_read,
-            seller_count: None, healthy_seller_count: None, provider_trusted: None,
-            requests_24h: None, volume_24h: None, discount_pct: None, discount_direction: None,
+            seller_count: None,
+            healthy_seller_count: None,
+            provider_trusted: None,
+            requests_24h: None,
+            volume_24h: None,
+            discount_pct: None,
+            discount_direction: None,
+            free_offer_listed: false,
             market_options: vec![],
             live_market: false,
             vision: catalog_supports_vision(model),
@@ -266,8 +328,13 @@ pub(crate) fn parse_model_catalog(value: &Value) -> Result<Vec<Quote>> {
 /// Vision = accepts image *input* while still emitting text output. Derived
 /// from the same `/v1/models` architecture metadata that gates text models.
 pub(crate) fn catalog_supports_vision(model: &Value) -> bool {
-    let Some(architecture) = model.get("architecture") else { return false };
-    if let Some(inputs) = architecture.get("input_modalities").and_then(Value::as_array) {
+    let Some(architecture) = model.get("architecture") else {
+        return false;
+    };
+    if let Some(inputs) = architecture
+        .get("input_modalities")
+        .and_then(Value::as_array)
+    {
         return inputs
             .iter()
             .filter_map(Value::as_str)
@@ -282,15 +349,25 @@ pub(crate) fn catalog_supports_vision(model: &Value) -> bool {
 }
 
 pub(crate) fn catalog_is_text_model(model: &Value, id: &str, name: &str) -> bool {
-    if !is_probably_text_model_label(id, name) { return false; }
-    let Some(architecture) = model.get("architecture") else { return true; };
+    if !is_probably_text_model_label(id, name) {
+        return false;
+    }
+    let Some(architecture) = model.get("architecture") else {
+        return true;
+    };
 
-    if let Some(outputs) = architecture.get("output_modalities").and_then(Value::as_array) {
-        let modalities = outputs.iter().filter_map(Value::as_str).map(normalize).collect::<Vec<_>>();
+    if let Some(outputs) = architecture
+        .get("output_modalities")
+        .and_then(Value::as_array)
+    {
+        let modalities = outputs
+            .iter()
+            .filter_map(Value::as_str)
+            .map(normalize)
+            .collect::<Vec<_>>();
         // We want language models. Multimodal *input* is fine (vision LLMs), but
         // the output must be text-only; image/audio/video generators are excluded.
-        return !modalities.is_empty()
-            && modalities.iter().all(|m| m == "text");
+        return !modalities.is_empty() && modalities.iter().all(|m| m == "text");
     }
     if let Some(modality) = architecture.get("modality").and_then(Value::as_str) {
         let n = normalize(modality);
@@ -309,48 +386,94 @@ pub(crate) fn is_probably_text_model_label(id: &str, name: &str) -> bool {
     // Product families that are not text-generating LLMs. Keep multimodal-input
     // LLMs unless the product itself is explicitly an image/video/audio generator.
     let blocked = [
-        "image to video", "text to video", "reference to video", "video",
-        "image generator", "image generation", "music", "tts", "text to speech",
-        "speech to text", "audio", "embedding", "embeddings", "rerank", "reranker",
-        "whisper", "seedream", "veo", "kling", "pixverse", "ltx", "wan 2",
+        "image to video",
+        "text to video",
+        "reference to video",
+        "video",
+        "image generator",
+        "image generation",
+        "music",
+        "tts",
+        "text to speech",
+        "speech to text",
+        "audio",
+        "embedding",
+        "embeddings",
+        "rerank",
+        "reranker",
+        "whisper",
+        "seedream",
+        "veo",
+        "kling",
+        "pixverse",
+        "ltx",
+        "wan 2",
     ];
-    !blocked.iter().any(|term| n.contains(term))
-        && !normalize(id).contains("image")
+    !blocked.iter().any(|term| n.contains(term)) && !normalize(id).contains("image")
 }
 
 pub(crate) fn find_model_entries(root: &Value) -> Vec<&Value> {
-    if let Some(arr) = root.as_array() { return arr.iter().collect(); }
+    if let Some(arr) = root.as_array() {
+        return arr.iter().collect();
+    }
     for key in ["models", "items"] {
-        if let Some(arr) = root.get(key).and_then(Value::as_array) { return arr.iter().collect(); }
+        if let Some(arr) = root.get(key).and_then(Value::as_array) {
+            return arr.iter().collect();
+        }
     }
     if let Some(data) = root.get("data") {
-        if let Some(arr) = data.as_array() { return arr.iter().collect(); }
-        if let Some(arr) = data.get("models").and_then(Value::as_array) { return arr.iter().collect(); }
+        if let Some(arr) = data.as_array() {
+            return arr.iter().collect();
+        }
+        if let Some(arr) = data.get("models").and_then(Value::as_array) {
+            return arr.iter().collect();
+        }
     }
     Vec::new()
 }
 
 pub(crate) fn price_pair_per_million(value: &Value) -> Option<(f64, f64)> {
-    let input = first_number_path(value, &[
-        &["input"], &["input_price"], &["inputPrice"], &["price_input_per_1m"], &["inputPricePerMillion"],
-    ])?;
-    let output = first_number_path(value, &[
-        &["output"], &["output_price"], &["outputPrice"], &["price_output_per_1m"], &["outputPricePerMillion"],
-    ])?;
-    if input.is_finite() && output.is_finite() && input >= 0.0 && output >= 0.0 { Some((input, output)) } else { None }
+    let input = first_number_path(
+        value,
+        &[
+            &["input"],
+            &["input_price"],
+            &["inputPrice"],
+            &["price_input_per_1m"],
+            &["inputPricePerMillion"],
+        ],
+    )?;
+    let output = first_number_path(
+        value,
+        &[
+            &["output"],
+            &["output_price"],
+            &["outputPrice"],
+            &["price_output_per_1m"],
+            &["outputPricePerMillion"],
+        ],
+    )?;
+    if input.is_finite() && output.is_finite() && input >= 0.0 && output >= 0.0 {
+        Some((input, output))
+    } else {
+        None
+    }
 }
 
 pub(crate) fn cache_read_per_million(value: &Value) -> Option<f64> {
-    first_number_path(value, &[
-        &["cache_read"],
-        &["cacheRead"],
-        &["input_cache_read"],
-        &["inputCacheRead"],
-        &["cache_read_per_1m"],
-        &["cacheReadPer1m"],
-        &["best_cache_read_per_1m"],
-        &["bestCacheReadPer1m"],
-    ])
+    first_number_path(
+        value,
+        &[
+            &["cache_read"],
+            &["cacheRead"],
+            &["input_cache_read"],
+            &["inputCacheRead"],
+            &["cache_read_per_1m"],
+            &["cacheReadPer1m"],
+            &["best_cache_read_per_1m"],
+            &["bestCacheReadPer1m"],
+        ],
+    )
     .filter(|v| v.is_finite() && *v >= 0.0)
 }
 
@@ -368,6 +491,7 @@ pub(crate) struct MarketOverlay {
     pub(crate) volume_24h: Option<f64>,
     pub(crate) discount_pct: Option<f64>,
     pub(crate) discount_direction: Option<String>,
+    pub(crate) free_offer_listed: bool,
     pub(crate) provider_options: Vec<ProviderMarketQuote>,
 }
 
@@ -378,55 +502,104 @@ pub(crate) fn parse_market_overlay(root: &Value, settings: &Settings) -> Vec<Mar
     let mut out = Vec::new();
 
     for entry in entries {
-        let Some(model) = string_at(entry, &["model", "model_name", "modelName", "id", "name"]) else { continue };
-        let input_micro = first_number_path(entry, &[
-            &["best_input_per_1m"], &["bestInputPer1m"], &["best_input"], &["bestInput"],
-        ]);
-        let output_micro = first_number_path(entry, &[
-            &["best_output_per_1m"], &["bestOutputPer1m"], &["best_output"], &["bestOutput"],
-        ]);
-        let (Some(input_micro), Some(output_micro)) = (input_micro, output_micro) else { continue };
-        if !input_micro.is_finite() || !output_micro.is_finite() || input_micro < 0.0 || output_micro < 0.0 { continue; }
-        let media_unit_present = entry.get("media_unit").is_some_and(|v| !v.is_null());
-        if (media_unit_present && input_micro == 0.0 && output_micro == 0.0)
-            || (input_micro == 0.0 && output_micro == 0.0)
+        let Some(model) = string_at(entry, &["model", "model_name", "modelName", "id", "name"])
+        else {
+            continue;
+        };
+        let input_micro = first_number_path(
+            entry,
+            &[
+                &["best_input_per_1m"],
+                &["bestInputPer1m"],
+                &["best_input"],
+                &["bestInput"],
+            ],
+        );
+        let output_micro = first_number_path(
+            entry,
+            &[
+                &["best_output_per_1m"],
+                &["bestOutputPer1m"],
+                &["best_output"],
+                &["bestOutput"],
+            ],
+        );
+        let (Some(input_micro), Some(output_micro)) = (input_micro, output_micro) else {
+            continue;
+        };
+        if !input_micro.is_finite()
+            || !output_micro.is_finite()
+            || input_micro < 0.0
+            || output_micro < 0.0
         {
+            continue;
+        }
+        // Media SKUs price per generated unit, not per token: their token pair
+        // is $0 because tokens are not the product. Token markets with $0 asks
+        // are real (100%-off offers) and must survive; they are only kept out of
+        // the headline price in favour of the cheapest priced ask below. Rows
+        // with no sellers at all have nothing to overlay regardless.
+        let media_unit_present = entry.get("media_unit").is_some_and(|v| !v.is_null());
+        let seller_free = first_number_path(
+            entry,
+            &[
+                &["seller_count"],
+                &["num_sellers"],
+                &["sellerCount"],
+                &["numSellers"],
+            ],
+        )
+        .map(|n| n <= 0.0)
+        .unwrap_or(false);
+        if is_free_pair(input_micro, output_micro) && (media_unit_present || seller_free) {
             continue;
         }
 
         let top_input = input_micro / SURPLUS_MARKET_MICRO_USD_PER_USD;
         let top_output = output_micro / SURPLUS_MARKET_MICRO_USD_PER_USD;
-        let top_cache_read = first_number_path(entry, &[
-            &["best_cache_read_per_1m"], &["bestCacheReadPer1m"],
-        ])
+        let top_cache_read = first_number_path(
+            entry,
+            &[&["best_cache_read_per_1m"], &["bestCacheReadPer1m"]],
+        )
         .filter(|v| v.is_finite() && *v >= 0.0)
         .map(|v| v / SURPLUS_MARKET_MICRO_USD_PER_USD);
 
         // Retain every real provider quote, then pick the cheapest for the
         // configured workload as the default display price. Liquidity filters can
         // later re-select the cheapest trusted / sufficiently healthy provider.
-        let provider_options = entry.get("providers")
+        let provider_options = entry
+            .get("providers")
             .and_then(Value::as_array)
             .map(|providers| {
-                providers.iter()
+                providers
+                    .iter()
                     .filter_map(|p| {
                         let provider = string_at(p, &["provider", "name"])?;
-                        let i_micro = first_number_path(p, &[&["best_input_per_1m"], &["bestInputPer1m"]])?;
-                        let o_micro = first_number_path(p, &[&["best_output_per_1m"], &["bestOutputPer1m"]])?;
-                        if !i_micro.is_finite() || !o_micro.is_finite() || i_micro < 0.0 || o_micro < 0.0 {
+                        let i_micro =
+                            first_number_path(p, &[&["best_input_per_1m"], &["bestInputPer1m"]])?;
+                        let o_micro =
+                            first_number_path(p, &[&["best_output_per_1m"], &["bestOutputPer1m"]])?;
+                        if !i_micro.is_finite()
+                            || !o_micro.is_finite()
+                            || i_micro < 0.0
+                            || o_micro < 0.0
+                        {
                             return None;
                         }
                         let input = i_micro / SURPLUS_MARKET_MICRO_USD_PER_USD;
                         let output = o_micro / SURPLUS_MARKET_MICRO_USD_PER_USD;
-                        let cache_read = first_number_path(p, &[
-                            &["best_cache_read_per_1m"], &["bestCacheReadPer1m"],
-                        ])
+                        let cache_read = first_number_path(
+                            p,
+                            &[&["best_cache_read_per_1m"], &["bestCacheReadPer1m"]],
+                        )
                         .filter(|v| v.is_finite() && *v >= 0.0)
                         .map(|v| v / SURPLUS_MARKET_MICRO_USD_PER_USD);
                         let trusted = p.get("trusted").and_then(Value::as_bool);
-                        let healthy_seller_count = first_number_path(p, &[
-                            &["healthy_seller_count"], &["healthySellerCount"],
-                        ]).and_then(|n| (n >= 0.0).then_some(n as u64));
+                        let healthy_seller_count = first_number_path(
+                            p,
+                            &[&["healthy_seller_count"], &["healthySellerCount"]],
+                        )
+                        .and_then(|n| (n >= 0.0).then_some(n as u64));
                         Some(ProviderMarketQuote {
                             provider,
                             input,
@@ -439,7 +612,11 @@ pub(crate) fn parse_market_overlay(root: &Value, settings: &Settings) -> Vec<Mar
                     .collect::<Vec<_>>()
             })
             .unwrap_or_default();
-        let provider_quote = provider_options.iter().min_by(|a, b| {
+        // A zero-priced aggregate means that provider's cheapest ask is a
+        // 100%-off offer. It stays visible in provider_options but must not own
+        // the headline price while any priced provider exists; only an entirely
+        // free market keeps it.
+        let by_workload = |a: &&ProviderMarketQuote, b: &&ProviderMarketQuote| {
             a.workload_price(
                 settings.input_weight,
                 settings.cache_read_weight,
@@ -450,41 +627,74 @@ pub(crate) fn parse_market_overlay(root: &Value, settings: &Settings) -> Vec<Mar
                 settings.cache_read_weight,
                 settings.output_weight,
             ))
-        });
-
-        let fallback_provider = first_string_path(entry, &[
-            &["provider"], &["best_ask", "provider"], &["bestAsk", "provider"],
-        ]);
-        let (provider, input, output, cache_read, provider_trusted, provider_healthy) = match provider_quote {
-            Some(option) => (
-                Some(option.provider.clone()),
-                option.input,
-                option.output,
-                option.cache_read,
-                option.trusted,
-                option.healthy_seller_count,
-            ),
-            None => (fallback_provider, top_input, top_output, top_cache_read, None, None),
         };
+        let priced_options = provider_options
+            .iter()
+            .filter(|option| !is_free_pair(option.input, option.output))
+            .collect::<Vec<_>>();
+        let provider_quote = priced_options
+            .into_iter()
+            .min_by(|a, b| by_workload(a, b))
+            .or_else(|| provider_options.iter().min_by(|a, b| by_workload(a, b)));
+        let free_offer_listed = provider_options.iter().any(|option| is_free_pair(option.input, option.output))
+            // Payloads without a provider array still say so via a $0 best pair.
+            || (provider_options.is_empty() && is_free_pair(top_input, top_output));
 
-        let seller_count = first_number_path(entry, &[
-            &["seller_count"], &["num_sellers"], &["sellerCount"], &["numSellers"],
-        ]).and_then(|n| (n >= 0.0).then_some(n as u64));
-        let healthy_seller_count = provider_healthy.or_else(|| first_number_path(entry, &[
-            &["healthy_seller_count"], &["healthySellerCount"],
-        ]).and_then(|n| (n >= 0.0).then_some(n as u64)));
-        let requests_24h = first_number_path(entry, &[
-            &["requests_24h"], &["requests24h"],
-        ]).and_then(|n| (n >= 0.0).then_some(n as u64));
-        let volume_24h = first_number_path(entry, &[
-            &["volume_24h"], &["volume24h"],
-        ]).filter(|n| n.is_finite() && *n >= 0.0);
-        let discount_pct = first_number_path(entry, &[
-            &["discount_trend", "current_discount_pct"], &["best_discount_pct"],
-        ]).filter(|n| n.is_finite());
-        let discount_direction = first_string_path(entry, &[
-            &["discount_trend", "direction"],
-        ]);
+        let fallback_provider = first_string_path(
+            entry,
+            &[
+                &["provider"],
+                &["best_ask", "provider"],
+                &["bestAsk", "provider"],
+            ],
+        );
+        let (provider, input, output, cache_read, provider_trusted, provider_healthy) =
+            match provider_quote {
+                Some(option) => (
+                    Some(option.provider.clone()),
+                    option.input,
+                    option.output,
+                    option.cache_read,
+                    option.trusted,
+                    option.healthy_seller_count,
+                ),
+                None => (
+                    fallback_provider,
+                    top_input,
+                    top_output,
+                    top_cache_read,
+                    None,
+                    None,
+                ),
+            };
+
+        let seller_count = first_number_path(
+            entry,
+            &[
+                &["seller_count"],
+                &["num_sellers"],
+                &["sellerCount"],
+                &["numSellers"],
+            ],
+        )
+        .and_then(|n| (n >= 0.0).then_some(n as u64));
+        let healthy_seller_count = provider_healthy.or_else(|| {
+            first_number_path(entry, &[&["healthy_seller_count"], &["healthySellerCount"]])
+                .and_then(|n| (n >= 0.0).then_some(n as u64))
+        });
+        let requests_24h = first_number_path(entry, &[&["requests_24h"], &["requests24h"]])
+            .and_then(|n| (n >= 0.0).then_some(n as u64));
+        let volume_24h = first_number_path(entry, &[&["volume_24h"], &["volume24h"]])
+            .filter(|n| n.is_finite() && *n >= 0.0);
+        let discount_pct = first_number_path(
+            entry,
+            &[
+                &["discount_trend", "current_discount_pct"],
+                &["best_discount_pct"],
+            ],
+        )
+        .filter(|n| n.is_finite());
+        let discount_direction = first_string_path(entry, &[&["discount_trend", "direction"]]);
 
         out.push(MarketOverlay {
             model,
@@ -499,6 +709,7 @@ pub(crate) fn parse_market_overlay(root: &Value, settings: &Settings) -> Vec<Mar
             volume_24h,
             discount_pct,
             discount_direction,
+            free_offer_listed,
             provider_options,
         });
     }
@@ -506,18 +717,23 @@ pub(crate) fn parse_market_overlay(root: &Value, settings: &Settings) -> Vec<Mar
 }
 
 pub(crate) fn find_market_entries(root: &Value) -> Vec<&Value> {
-    if let Some(arr) = root.as_array() { return arr.iter().collect(); }
+    if let Some(arr) = root.as_array() {
+        return arr.iter().collect();
+    }
     for key in ["models", "markets", "data", "items"] {
-        if let Some(arr) = root.get(key).and_then(Value::as_array) { return arr.iter().collect(); }
+        if let Some(arr) = root.get(key).and_then(Value::as_array) {
+            return arr.iter().collect();
+        }
     }
     if let Some(data) = root.get("data") {
         for key in ["models", "markets", "items"] {
-            if let Some(arr) = data.get(key).and_then(Value::as_array) { return arr.iter().collect(); }
+            if let Some(arr) = data.get(key).and_then(Value::as_array) {
+                return arr.iter().collect();
+            }
         }
     }
     Vec::new()
 }
-
 
 #[cfg(test)]
 mod tests {
@@ -554,6 +770,76 @@ mod tests {
         assert_eq!(rows[0].healthy_seller_count, Some(5));
         assert_eq!(rows[0].requests_24h, Some(641));
         assert_eq!(rows[0].discount_direction.as_deref(), Some("tightening"));
+        assert!(!rows[0].free_offer_listed);
+    }
+
+    #[test]
+    fn zero_priced_ask_defers_to_cheapest_priced_provider() {
+        // Live gpt-5.6-sol shape (2026-08): one seller lists at cost multiplier
+        // zero, so the aggregate best pair is $0 while every other ask costs.
+        let v = serde_json::json!({
+            "markets": [{
+                "model": "gpt-5.6-sol",
+                "best_input_per_1m": 0,
+                "best_output_per_1m": 0,
+                "best_cache_read_per_1m": null,
+                "media_unit": null,
+                "seller_count": 924,
+                "healthy_seller_count": 788,
+                "discount_trend": {"current_discount_pct": 95.55, "direction": "tightening"},
+                "providers": [
+                    {"provider": "openai", "trusted": true, "healthy_seller_count": 548,
+                     "best_input_per_1m": 0, "best_output_per_1m": 0},
+                    {"provider": "inferhub", "trusted": false, "healthy_seller_count": 13,
+                     "best_input_per_1m": 50826, "best_output_per_1m": 254130}
+                ]
+            }]
+        });
+        let rows = parse_market_overlay(&v, &Settings::default());
+        assert_eq!(rows.len(), 1);
+        let row = &rows[0];
+        assert_eq!(row.provider.as_deref(), Some("inferhub"));
+        assert!((row.input - 0.050826).abs() < 1e-9);
+        assert!((row.output - 0.25413).abs() < 1e-9);
+        assert!(row.free_offer_listed);
+        assert_eq!(row.discount_pct, Some(95.55));
+    }
+
+    #[test]
+    fn entirely_free_token_markets_are_kept_at_zero_prices() {
+        let v = serde_json::json!({
+            "markets": [{
+                "model": "free-model",
+                "best_input_per_1m": 0,
+                "best_output_per_1m": 0,
+                "media_unit": null,
+                "seller_count": 40,
+                "providers": [
+                    {"provider": "free-a", "trusted": true, "healthy_seller_count": 3,
+                     "best_input_per_1m": 0, "best_output_per_1m": 0}
+                ]
+            }]
+        });
+        let rows = parse_market_overlay(&v, &Settings::default());
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].input, 0.0);
+        assert_eq!(rows[0].output, 0.0);
+        assert!(rows[0].free_offer_listed);
+    }
+
+    #[test]
+    fn media_unit_rows_still_skip_zero_token_prices() {
+        let v = serde_json::json!({
+            "markets": [{
+                "model": "video-gen",
+                "best_input_per_1m": 0,
+                "best_output_per_1m": 0,
+                "best_media_unit_price": 56000,
+                "media_unit": "job",
+                "seller_count": 1
+            }]
+        });
+        assert!(parse_market_overlay(&v, &Settings::default()).is_empty());
     }
 
     #[test]
@@ -566,12 +852,20 @@ mod tests {
         q.provider_trusted = Some(false);
         q.market_options = vec![
             ProviderMarketQuote {
-                provider: "cheap-untrusted".into(), input: 0.5, output: 1.0,
-                cache_read: Some(0.05), trusted: Some(false), healthy_seller_count: Some(20),
+                provider: "cheap-untrusted".into(),
+                input: 0.5,
+                output: 1.0,
+                cache_read: Some(0.05),
+                trusted: Some(false),
+                healthy_seller_count: Some(20),
             },
             ProviderMarketQuote {
-                provider: "trusted-provider".into(), input: 0.6, output: 1.1,
-                cache_read: Some(0.06), trusted: Some(true), healthy_seller_count: Some(5),
+                provider: "trusted-provider".into(),
+                input: 0.6,
+                output: 1.1,
+                cache_read: Some(0.06),
+                trusted: Some(true),
+                healthy_seller_count: Some(5),
             },
         ];
         let selected = LiquidityFilter::Trusted.apply(&q, 15.0, 80.0, 5.0).unwrap();
@@ -642,5 +936,4 @@ mod tests {
         assert!(!by_id("text-llm").vision);
         assert!(by_id("modality-string-only").vision);
     }
-
 }
