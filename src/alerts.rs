@@ -73,9 +73,7 @@ pub(crate) fn semantic_alert_status(
         alert.metric,
         alert.cost_basis,
         benchmark_metric,
-        input_weight,
-        cache_read_weight,
-        output_weight,
+        (input_weight, cache_read_weight, output_weight),
     );
     if alert.model == ANY_MODEL {
         // Wildcard rules watch the whole population, not one target.

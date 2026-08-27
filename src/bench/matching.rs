@@ -161,19 +161,23 @@ pub(crate) fn benchmark_model_key(s: &str) -> String {
     // `qwen 3 5`; split the attached generation number so they join exactly.
     let mut expanded = Vec::with_capacity(tokens.len() + 1);
     for token in tokens {
-        if let Some(suffix) = token.strip_prefix("qwen") {
-            if !suffix.is_empty() && suffix.chars().all(|c| c.is_ascii_digit()) {
-                expanded.push("qwen".to_owned());
-                expanded.push(suffix.to_owned());
-                continue;
-            }
+        if let Some(suffix) = token.strip_prefix("qwen")
+            && !suffix.is_empty()
+            && suffix.chars().all(|c| c.is_ascii_digit())
+        {
+            expanded.push("qwen".to_owned());
+            expanded.push(suffix.to_owned());
+            continue;
         }
         expanded.push(token);
     }
     let mut tokens = expanded;
-    if tokens.len() >= 3 && tokens[0] == "open" && tokens[1] == "ai" {
-        tokens.drain(0..2);
-    } else if tokens.len() >= 3 && tokens[0] == "z" && tokens[1] == "ai" {
+    if tokens.len() >= 3
+        && matches!(
+            (tokens[0].as_str(), tokens[1].as_str()),
+            ("open", "ai") | ("z", "ai")
+        )
+    {
         tokens.drain(0..2);
     } else if tokens.len() >= 2
         && matches!(
@@ -209,11 +213,10 @@ pub(crate) fn benchmark_model_key(s: &str) -> String {
         if let Some(pos) = tokens
             .iter()
             .position(|token| matches!(token.as_str(), "opus" | "sonnet" | "haiku" | "fable"))
+            && pos != 0
         {
-            if pos != 0 {
-                let family = tokens.remove(pos);
-                tokens.insert(0, family);
-            }
+            let family = tokens.remove(pos);
+            tokens.insert(0, family);
         }
     }
 

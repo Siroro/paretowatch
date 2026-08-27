@@ -290,14 +290,13 @@ impl ParetoWatchApp {
             .auto_shrink([false, false])
             .show(ui, |ui| {
         ui.add_space(6.0);
-        if !self.benchmark_source.is_composite() {
-            if let Some(err) = self.benchmark_errors.get(&self.benchmark_source) {
+        if !self.benchmark_source.is_composite()
+            && let Some(err) = self.benchmark_errors.get(&self.benchmark_source) {
                 ui.colored_label(
                     ui.visuals().error_fg_color,
                     format!("{}: {err}", self.benchmark_source.label()),
                 );
             }
-        }
 
         if self.price_snapshot.is_none() {
             ui.spinner();
@@ -702,8 +701,8 @@ impl ParetoWatchApp {
                 ui.separator();
                 ui.label(format!("Output ${:.4}", p.output));
             });
-            if self.cost_basis == CostBasis::EstimatedPerTask {
-                if let Some(tokens) = p.tokens_per_task {
+            if self.cost_basis == CostBasis::EstimatedPerTask
+                && let Some(tokens) = p.tokens_per_task {
                     ui.horizontal_wrapped(|ui| {
                         ui.label(format!("Benchmark workload: {} tokens/task", format_compact_number(tokens)));
                         if let Some(profile) = &p.token_profile {
@@ -714,7 +713,6 @@ impl ParetoWatchApp {
                         ui.small("repriced with current Surplus blended rate");
                     });
                 }
-            }
             ui.horizontal_wrapped(|ui| {
                 let mut shown = false;
                 if !p.creator.is_empty() {
@@ -879,8 +877,8 @@ impl ParetoWatchApp {
             }
 
             ui.horizontal_wrapped(|ui| {
-                if self.cost_basis == CostBasis::PerMillion {
-                    if ui.button("Set price alert").clicked() {
+                if self.cost_basis == CostBasis::PerMillion
+                    && ui.button("Set price alert").clicked() {
                         self.alert_model = p.model_id.clone();
                         self.alert_mode = AlertMode::Threshold;
                         self.alert_metric = self.price_metric;
@@ -888,7 +886,6 @@ impl ParetoWatchApp {
                         self.alert_threshold = p.cost;
                         self.tab = Tab::Alerts;
                     }
-                }
                 if ui.button("Watch any change").clicked() {
                     self.alert_model = p.model_id.clone();
                     self.alert_mode = AlertMode::AnyChange;

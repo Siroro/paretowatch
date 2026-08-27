@@ -162,15 +162,14 @@ pub(crate) fn parse_terminal_bench_harbor(root: &Value) -> Result<Vec<Benchmark>
                 (total > 0.0).then_some(total)
             });
         let n_trials = row.get("n_trials").and_then(number_value);
-        if let (Some(total_tokens), Some(n_trials)) = (total_tokens, n_trials) {
-            if total_tokens.is_finite()
-                && total_tokens > 0.0
-                && n_trials.is_finite()
-                && n_trials > 0.0
-            {
-                b.tokens_per_task = Some(total_tokens / n_trials);
-                b.token_profile = Some("Terminal-Bench total tokens ÷ trials".to_owned());
-            }
+        if let (Some(total_tokens), Some(n_trials)) = (total_tokens, n_trials)
+            && total_tokens.is_finite()
+            && total_tokens > 0.0
+            && n_trials.is_finite()
+            && n_trials > 0.0
+        {
+            b.tokens_per_task = Some(total_tokens / n_trials);
+            b.token_profile = Some("Terminal-Bench total tokens ÷ trials".to_owned());
         }
         out.push(b);
     }

@@ -19,6 +19,6 @@ A lightweight native Rust tray app that tracks [Surplus Intelligence](https://su
 cargo run --release
 ```
 
-The app starts hidden in the tray; opening creates a normal taskbar entry, hiding removes it while polling and alerting continue. Runs on Windows and Linux. Prebuilt binaries for tagged releases are on the [releases page](https://github.com/Siroro/paretowatch/releases).
+The app opens normally when it starts. Closing or hiding it moves the app to the tray and removes its taskbar entry, while polling and alerting continue; use the tray menu to show it again. Runs on Windows and Linux. Prebuilt binaries for tagged releases are on the [releases page](https://github.com/Siroro/paretowatch/releases).
 
 MIT licensed — see [LICENSE](LICENSE).

@@ -143,10 +143,10 @@ pub(crate) fn livebench_category_average(
             continue;
         };
         let Some(raw) = row.get(index) else { continue };
-        if let Ok(value) = raw.trim().parse::<f64>() {
-            if value.is_finite() {
-                scores.push(value);
-            }
+        if let Ok(value) = raw.trim().parse::<f64>()
+            && value.is_finite()
+        {
+            scores.push(value);
         }
     }
     mean(&scores)

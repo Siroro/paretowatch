@@ -521,48 +521,45 @@ fn chart(
                     .color(s.color)
                     .width(2.0),
                 );
-                if let Some(x) = hover_x {
-                    if let Some((_, v)) = nearest_at_or_before(&s.points, x) {
-                        plot_ui.points(
-                            Points::new("", PlotPoints::from(vec![[x, *v]]))
-                                .radius(3.5)
-                                .color(egui::Color32::WHITE),
-                        );
-                    }
+                if let Some(x) = hover_x
+                    && let Some((_, v)) = nearest_at_or_before(&s.points, x)
+                {
+                    plot_ui.points(
+                        Points::new("", PlotPoints::from(vec![[x, *v]]))
+                            .radius(3.5)
+                            .color(egui::Color32::WHITE),
+                    );
                 }
             }
         });
     state.reset_zoom = false;
 
-    if let Some(x) = hover_x {
-        if response.response.hovered() {
-            response.response.on_hover_ui(|ui| {
-                ui.vertical(|ui| {
-                    ui.strong(format_time_utc(x));
-                    for s in &*prepared {
-                        match nearest_at_or_before(&s.points, x) {
-                            Some((ts, v)) => {
-                                let prev =
-                                    nearest_strictly_before(&s.points, *ts).map(|(_, pv)| *pv);
-                                ui.horizontal(|ui| {
-                                    ui.colored_label(s.color, "●");
-                                    ui.label(series_tooltip_row(
-                                        s, *ts, *v, prev, metric, normalize,
-                                    ));
-                                });
-                            }
-                            None => {
-                                ui.horizontal(|ui| {
-                                    ui.colored_label(s.color, "●");
-                                    ui.weak(format!("no data at cursor ({})", s.name));
-                                });
-                            }
+    if let Some(x) = hover_x
+        && response.response.hovered()
+    {
+        response.response.on_hover_ui(|ui| {
+            ui.vertical(|ui| {
+                ui.strong(format_time_utc(x));
+                for s in &*prepared {
+                    match nearest_at_or_before(&s.points, x) {
+                        Some((ts, v)) => {
+                            let prev = nearest_strictly_before(&s.points, *ts).map(|(_, pv)| *pv);
+                            ui.horizontal(|ui| {
+                                ui.colored_label(s.color, "●");
+                                ui.label(series_tooltip_row(s, *ts, *v, prev, metric, normalize));
+                            });
+                        }
+                        None => {
+                            ui.horizontal(|ui| {
+                                ui.colored_label(s.color, "●");
+                                ui.weak(format!("no data at cursor ({})", s.name));
+                            });
                         }
                     }
-                    ui.weak(format!("{} ago", age_string(now_ts - x)));
-                });
+                }
+                ui.weak(format!("{} ago", age_string(now_ts - x)));
             });
-        }
+        });
     }
     ui.set_style(saved_style);
 }

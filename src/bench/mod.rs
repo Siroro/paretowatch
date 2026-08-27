@@ -71,10 +71,9 @@ pub(crate) fn available_scaffolds(sets: &HashMap<BenchmarkSource, Vec<Benchmark>
         if let Some((key, value)) = by_key
             .iter()
             .find(|(_, value)| scaffold_matches(value, wanted))
+            && used.insert(key.clone())
         {
-            if used.insert(key.clone()) {
-                out.push(value.clone());
-            }
+            out.push(value.clone());
         }
     }
     let mut rest = by_key

@@ -156,7 +156,7 @@ pub(crate) fn execution_mode_aliases() -> HashMap<String, String> {
             let mode_key = benchmark_model_key(mode);
             let base_key = benchmark_model_key(base);
             (!mode_key.is_empty() && !base_key.is_empty() && mode_key != base_key)
-                .then(|| (mode_key, base_key))
+                .then_some((mode_key, base_key))
         })
         .collect()
 }
@@ -505,18 +505,17 @@ pub(crate) fn build_agentic_composite(
             if representative.is_none() {
                 representative = Some(row.clone());
             }
-            if task_profile.is_none() {
-                if let Some(tokens) = row
+            if task_profile.is_none()
+                && let Some(tokens) = row
                     .tokens_per_task
                     .filter(|tokens| tokens.is_finite() && *tokens > 0.0)
-                {
-                    task_profile = Some((
-                        tokens,
-                        row.token_profile
-                            .clone()
-                            .unwrap_or_else(|| source.short_label().to_owned()),
-                    ));
-                }
+            {
+                task_profile = Some((
+                    tokens,
+                    row.token_profile
+                        .clone()
+                        .unwrap_or_else(|| source.short_label().to_owned()),
+                ));
             }
         }
 

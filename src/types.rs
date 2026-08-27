@@ -628,16 +628,13 @@ pub(crate) fn blended_price(
 /// the cache-read leg. Returns `None` when the list blended price is zero or
 /// the ratio is not finite, so callers can keep the feed's published number.
 pub(crate) fn workload_discount_pct(
-    market_input: f64,
-    market_cache_read: Option<f64>,
-    market_output: f64,
-    list_input: f64,
-    list_cache_read: Option<f64>,
-    list_output: f64,
-    input_weight: f64,
-    cache_read_weight: f64,
-    output_weight: f64,
+    market: (f64, Option<f64>, f64),
+    list: (f64, Option<f64>, f64),
+    weights: (f64, f64, f64),
 ) -> Option<f64> {
+    let (market_input, market_cache_read, market_output) = market;
+    let (list_input, list_cache_read, list_output) = list;
+    let (input_weight, cache_read_weight, output_weight) = weights;
     let list_blended = blended_price(
         list_input,
         list_cache_read,
@@ -646,7 +643,7 @@ pub(crate) fn workload_discount_pct(
         cache_read_weight,
         output_weight,
     );
-    if !(list_blended > f64::EPSILON) {
+    if list_blended.partial_cmp(&f64::EPSILON) != Some(std::cmp::Ordering::Greater) {
         return None;
     }
     let market_blended = blended_price(
@@ -730,15 +727,9 @@ mod tests {
     fn workload_discount_includes_cache_read_leg() {
         // Same 50% cut on every leg must give 50% regardless of weights.
         let pct = workload_discount_pct(
-            1.0,
-            Some(0.1),
-            5.0, //
-            2.0,
-            Some(0.2),
-            10.0, //
-            15.0,
-            80.0,
-            5.0,
+            (1.0, Some(0.1), 5.0),
+            (2.0, Some(0.2), 10.0),
+            (15.0, 80.0, 5.0),
         )
         .unwrap();
         assert!((pct - 50.0).abs() < 1e-9);
@@ -746,27 +737,15 @@ mod tests {
         // leg is discounted here (input/output cost the same on both
         // sides), so a no-cache workload sees none of the cut.
         let cache_heavy = workload_discount_pct(
-            2.0,
-            Some(0.02),
-            10.0, //
-            2.0,
-            Some(0.2),
-            10.0, //
-            15.0,
-            80.0,
-            5.0,
+            (2.0, Some(0.02), 10.0),
+            (2.0, Some(0.2), 10.0),
+            (15.0, 80.0, 5.0),
         )
         .unwrap();
         let no_cache = workload_discount_pct(
-            2.0,
-            Some(0.02),
-            10.0, //
-            2.0,
-            Some(0.2),
-            10.0, //
-            50.0,
-            0.0,
-            50.0,
+            (2.0, Some(0.02), 10.0),
+            (2.0, Some(0.2), 10.0),
+            (50.0, 0.0, 50.0),
         )
         .unwrap();
         assert!(cache_heavy > 10.0);
@@ -777,27 +756,14 @@ mod tests {
     fn workload_discount_missing_cache_falls_back_to_input() {
         // No cache price on either side: both fall back to their input
         // prices, and an all-legs-50% market still yields exactly 50%.
-        let pct = workload_discount_pct(
-            1.0, None, 5.0, //
-            2.0, None, 10.0, //
-            15.0, 80.0, 5.0,
-        )
-        .unwrap();
+        let pct =
+            workload_discount_pct((1.0, None, 5.0), (2.0, None, 10.0), (15.0, 80.0, 5.0)).unwrap();
         assert!((pct - 50.0).abs() < 1e-9);
         // Market side lacking a cache price while the catalogue has one
         // borrows the market input price for that leg.
-        let pct = workload_discount_pct(
-            1.0,
-            None,
-            10.0, //
-            2.0,
-            Some(0.2),
-            10.0, //
-            0.0,
-            100.0,
-            0.0,
-        )
-        .unwrap();
+        let pct =
+            workload_discount_pct((1.0, None, 10.0), (2.0, Some(0.2), 10.0), (0.0, 100.0, 0.0))
+                .unwrap();
         assert!((pct - (1.0 - 1.0 / 0.2) * 100.0).abs() < 1e-9);
     }
 
@@ -805,15 +771,9 @@ mod tests {
     fn workload_discount_rejects_degenerate_list_prices() {
         assert!(
             workload_discount_pct(
-                1.0,
-                Some(0.1),
-                5.0, //
-                0.0,
-                Some(0.0),
-                0.0, //
-                15.0,
-                80.0,
-                5.0
+                (1.0, Some(0.1), 5.0),
+                (0.0, Some(0.0), 0.0),
+                (15.0, 80.0, 5.0),
             )
             .is_none()
         );

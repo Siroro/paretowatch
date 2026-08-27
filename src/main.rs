@@ -31,7 +31,7 @@ fn main() -> eframe::Result {
             .with_inner_size([1050.0, 760.0])
             .with_min_inner_size([760.0, 520.0])
             .with_taskbar(true)
-            .with_visible(false),
+            .with_visible(true),
         renderer: eframe::Renderer::Glow,
         ..Default::default()
     };

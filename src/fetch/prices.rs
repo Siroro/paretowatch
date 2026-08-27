@@ -205,15 +205,17 @@ fn market_discount_pct(
     let list_input = market.direct_input.unwrap_or(catalog_input);
     let list_output = market.direct_output.unwrap_or(catalog_output);
     workload_discount_pct(
-        market.input,
-        market.cache_read.or(market.top_cache_read),
-        market.output,
-        list_input,
-        catalog_cache_read,
-        list_output,
-        settings.input_weight,
-        settings.cache_read_weight,
-        settings.output_weight,
+        (
+            market.input,
+            market.cache_read.or(market.top_cache_read),
+            market.output,
+        ),
+        (list_input, catalog_cache_read, list_output),
+        (
+            settings.input_weight,
+            settings.cache_read_weight,
+            settings.output_weight,
+        ),
     )
     .or(market.discount_pct)
 }
@@ -261,37 +263,36 @@ pub(crate) fn parse_price_matrix(value: &Value, settings: &Settings) -> Result<V
                 }
             }
         }
-        if best.is_none() {
-            if let Some(cheapest) = model.get("cheapest") {
-                if let Some((input, output)) = price_pair_per_million(cheapest) {
-                    let cache_read = cache_read_per_million(cheapest);
-                    let provider = string_at(cheapest, &["provider", "name"])
-                        .unwrap_or_else(|| "cheapest".into());
-                    let weighted = blended_price(
-                        input,
-                        cache_read,
-                        output,
-                        settings.input_weight,
-                        settings.cache_read_weight,
-                        settings.output_weight,
-                    );
-                    best = Some((provider, input, output, cache_read, weighted));
-                }
-            }
+        if best.is_none()
+            && let Some(cheapest) = model.get("cheapest")
+            && let Some((input, output)) = price_pair_per_million(cheapest)
+        {
+            let cache_read = cache_read_per_million(cheapest);
+            let provider =
+                string_at(cheapest, &["provider", "name"]).unwrap_or_else(|| "cheapest".into());
+            let weighted = blended_price(
+                input,
+                cache_read,
+                output,
+                settings.input_weight,
+                settings.cache_read_weight,
+                settings.output_weight,
+            );
+            best = Some((provider, input, output, cache_read, weighted));
         }
-        if best.is_none() {
-            if let Some((input, output)) = price_pair_per_million(model) {
-                let cache_read = cache_read_per_million(model);
-                let weighted = blended_price(
-                    input,
-                    cache_read,
-                    output,
-                    settings.input_weight,
-                    settings.cache_read_weight,
-                    settings.output_weight,
-                );
-                best = Some(("comparison".into(), input, output, cache_read, weighted));
-            }
+        if best.is_none()
+            && let Some((input, output)) = price_pair_per_million(model)
+        {
+            let cache_read = cache_read_per_million(model);
+            let weighted = blended_price(
+                input,
+                cache_read,
+                output,
+                settings.input_weight,
+                settings.cache_read_weight,
+                settings.output_weight,
+            );
+            best = Some(("comparison".into(), input, output, cache_read, weighted));
         }
 
         if let Some((provider, input, output, cache_read, _)) = best {

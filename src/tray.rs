@@ -89,9 +89,9 @@ fn make_tray_icon() -> Result<tray_icon::Icon> {
                 rgba[i + 3] = 255;
             }
             // small rising frontier mark
-            if (x >= 8 && x <= 11 && y >= 20 && y <= 23)
-                || (x >= 14 && x <= 17 && y >= 14 && y <= 17)
-                || (x >= 20 && x <= 23 && y >= 8 && y <= 11)
+            if ((8..=11).contains(&x) && (20..=23).contains(&y))
+                || ((14..=17).contains(&x) && (14..=17).contains(&y))
+                || ((20..=23).contains(&x) && (8..=11).contains(&y))
             {
                 rgba[i] = 255;
                 rgba[i + 1] = 255;

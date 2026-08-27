@@ -77,53 +77,51 @@ pub(crate) fn joined_points(
     price_metric: PriceMetric,
     cost_basis: CostBasis,
     benchmark_metric: BenchmarkMetric,
-    input_weight: f64,
-    cache_read_weight: f64,
-    output_weight: f64,
+    weights: (f64, f64, f64),
 ) -> Vec<JoinedPoint> {
+    let (input_weight, cache_read_weight, output_weight) = weights;
     let mut out = vec![];
     for q in quotes {
-        if let Some(b) = best_benchmark_match(q, benchmarks) {
-            if let Some(score) = benchmark_metric.value(b) {
-                let per_million =
-                    q.price(price_metric, input_weight, cache_read_weight, output_weight);
-                let cost = match cost_basis {
-                    CostBasis::PerMillion => per_million,
-                    CostBasis::EstimatedPerTask => {
-                        // Cost/task is intentionally only available for the blended
-                        // rate. The benchmark contributes observed token volume; all
-                        // dollar pricing comes from the current Surplus quote.
-                        if price_metric != PriceMetric::Blended {
-                            continue;
-                        }
-                        let Some(tokens) = b
-                            .tokens_per_task
-                            .filter(|tokens| tokens.is_finite() && *tokens > 0.0)
-                        else {
-                            continue;
-                        };
-                        per_million * tokens / 1_000_000.0
+        if let Some(b) = best_benchmark_match(q, benchmarks)
+            && let Some(score) = benchmark_metric.value(b)
+        {
+            let per_million = q.price(price_metric, input_weight, cache_read_weight, output_weight);
+            let cost = match cost_basis {
+                CostBasis::PerMillion => per_million,
+                CostBasis::EstimatedPerTask => {
+                    // Cost/task is intentionally only available for the blended
+                    // rate. The benchmark contributes observed token volume; all
+                    // dollar pricing comes from the current Surplus quote.
+                    if price_metric != PriceMetric::Blended {
+                        continue;
                     }
-                };
-                if cost.is_finite() && score.is_finite() {
-                    out.push(JoinedPoint {
-                        model_id: q.model.clone(),
-                        model: q.display_name.clone(),
-                        creator: q.creator.clone(),
-                        provider: q.provider.clone(),
-                        benchmark_name: b.name.clone(),
-                        input: q.input,
-                        output: q.output,
-                        cache_read: q.cache_read,
-                        cost,
-                        tokens_per_task: b.tokens_per_task,
-                        token_profile: b.token_profile.clone(),
-                        score,
-                        live_market: q.live_market,
-                        free_offer_listed: q.free_offer_listed,
-                        vision: q.vision,
-                    });
+                    let Some(tokens) = b
+                        .tokens_per_task
+                        .filter(|tokens| tokens.is_finite() && *tokens > 0.0)
+                    else {
+                        continue;
+                    };
+                    per_million * tokens / 1_000_000.0
                 }
+            };
+            if cost.is_finite() && score.is_finite() {
+                out.push(JoinedPoint {
+                    model_id: q.model.clone(),
+                    model: q.display_name.clone(),
+                    creator: q.creator.clone(),
+                    provider: q.provider.clone(),
+                    benchmark_name: b.name.clone(),
+                    input: q.input,
+                    output: q.output,
+                    cache_read: q.cache_read,
+                    cost,
+                    tokens_per_task: b.tokens_per_task,
+                    token_profile: b.token_profile.clone(),
+                    score,
+                    live_market: q.live_market,
+                    free_offer_listed: q.free_offer_listed,
+                    vision: q.vision,
+                });
             }
         }
     }
@@ -194,9 +192,7 @@ mod tests {
             PriceMetric::Blended,
             CostBasis::EstimatedPerTask,
             BenchmarkMetric::AgenticCoding,
-            15.0,
-            80.0,
-            5.0,
+            (15.0, 80.0, 5.0),
         );
         assert_eq!(points.len(), 1);
         // test_quote => input $2, cache $0.2, output $4 => blend $0.66/M.

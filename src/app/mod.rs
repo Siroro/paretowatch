@@ -189,7 +189,7 @@ impl ParetoWatchApp {
             consensus_cache: None,
             status: "Starting…".into(),
             last_price_error: None,
-            is_visible: false,
+            is_visible: true,
             quitting: false,
             settings_dirty: false,
             #[cfg(not(target_os = "linux"))]
@@ -241,10 +241,10 @@ impl ParetoWatchApp {
                         }
                         delisted = detect_delisted(previous, &snapshot, &self.settings);
                     }
-                    if self.alert_model.is_empty() {
-                        if let Some(q) = snapshot.quotes.first() {
-                            self.alert_model = q.model.clone();
-                        }
+                    if self.alert_model.is_empty()
+                        && let Some(q) = snapshot.quotes.first()
+                    {
+                        self.alert_model = q.model.clone();
                     }
                     self.status = if snapshot.market_overlay_count > 0 {
                         format!(
@@ -463,10 +463,10 @@ impl ParetoWatchApp {
     /// Scaffold list only changes when benchmark data changes, but computing it
     /// walks every row of every leaderboard; never do that per UI frame.
     fn cached_scaffolds(&mut self) -> Vec<String> {
-        if let Some((version, options)) = &self.scaffold_cache {
-            if *version == self.data_version {
-                return options.clone();
-            }
+        if let Some((version, options)) = &self.scaffold_cache
+            && *version == self.data_version
+        {
+            return options.clone();
         }
         let options = available_scaffolds(&self.benchmark_sets);
         self.scaffold_cache = Some((self.data_version, options.clone()));
@@ -499,10 +499,10 @@ impl ParetoWatchApp {
     /// keeps per-frame handoff cheap — the joined points are never copied.
     fn ensure_pareto_view(&mut self) -> Option<Arc<ParetoCache>> {
         let key = self.pareto_cache_key();
-        if let Some(cache) = &self.pareto_cache {
-            if cache.key == key {
-                return Some(Arc::clone(cache));
-            }
+        if let Some(cache) = &self.pareto_cache
+            && cache.key == key
+        {
+            return Some(Arc::clone(cache));
         }
         let snapshot = self.price_snapshot.as_ref()?;
         let weights = (
@@ -532,9 +532,7 @@ impl ParetoWatchApp {
             key.price_metric,
             key.cost_basis,
             key.benchmark_metric,
-            weights.0,
-            weights.1,
-            weights.2,
+            weights,
         );
         let frontier = pareto_frontier(&joined);
         self.pareto_cache = Some(Arc::new(ParetoCache {
@@ -559,14 +557,13 @@ impl ParetoWatchApp {
     /// Consensus panel ranks a quote across all eight leaderboards; cache it per
     /// selection instead of re-ranking every frame.
     fn cached_consensus(&mut self, model_id: &str) -> Option<BenchmarkConsensus> {
-        if let Some((version, mode, scaffold, cached_id, consensus)) = &self.consensus_cache {
-            if *version == self.data_version
-                && *mode == self.comparison_mode
-                && *scaffold == self.common_scaffold
-                && cached_id == model_id
-            {
-                return consensus.clone();
-            }
+        if let Some((version, mode, scaffold, cached_id, consensus)) = &self.consensus_cache
+            && *version == self.data_version
+            && *mode == self.comparison_mode
+            && *scaffold == self.common_scaffold
+            && cached_id == model_id
+        {
+            return consensus.clone();
         }
         let quote = self.selected_pareto_quote(model_id)?;
         let consensus = benchmark_consensus_for_quote(
@@ -757,9 +754,11 @@ impl ParetoWatchApp {
                 alert.metric,
                 alert.cost_basis,
                 benchmark_metric,
-                self.settings.input_weight,
-                self.settings.cache_read_weight,
-                self.settings.output_weight,
+                (
+                    self.settings.input_weight,
+                    self.settings.cache_read_weight,
+                    self.settings.output_weight,
+                ),
             );
 
             if wildcard {

@@ -27,23 +27,12 @@ const FORMAT_VERSION: u8 = 1;
 /// Price resolution: 0.001 $/M tokens. Also the minimum price movement that
 /// registers as a change.
 pub(crate) const PRICE_QUANT: f64 = 0.001;
-/// Composite score resolution: 0.1 points on the 0..100 scale.
-pub(crate) const SCORE_QUANT: f64 = 0.1;
-
 pub(crate) fn quantize_price(v: f64) -> i32 {
     (v / PRICE_QUANT).round() as i32
 }
 
 pub(crate) fn dequantize_price(q: i32) -> f64 {
     q as f64 * PRICE_QUANT
-}
-
-pub(crate) fn quantize_score(v: f64) -> i32 {
-    (v / SCORE_QUANT).round() as i32
-}
-
-pub(crate) fn dequantize_score(q: i32) -> f64 {
-    q as f64 * SCORE_QUANT
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -181,10 +170,10 @@ impl EventStore {
         } else {
             fs::metadata(path).map(|m| m.len()).unwrap_or(good as u64)
         };
-        if discarded > 0 {
-            if let Ok(file) = OpenOptions::new().write(true).open(path) {
-                let _ = file.set_len(good as u64);
-            }
+        if discarded > 0
+            && let Ok(file) = OpenOptions::new().write(true).open(path)
+        {
+            let _ = file.set_len(good as u64);
         }
         Ok(Replay { frames, file_bytes })
     }
@@ -282,7 +271,7 @@ mod tests {
                         id: 0,
                         dt: 0,
                         kind: EventKind::Composite {
-                            capability: Some(quantize_score(77.7)),
+                            capability: Some(777),
                             deployment: None,
                         },
                     },
@@ -345,7 +334,6 @@ mod tests {
     fn quantization_is_stable_and_lossless_for_repr() {
         assert_eq!(quantize_price(2.5004), 2500);
         assert_eq!(dequantize_price(quantize_price(2.5)), 2.5);
-        assert_eq!(dequantize_score(quantize_score(77.74)), 77.7);
         // Sub-epsilon change quantizes identically → no event.
         assert_eq!(quantize_price(1.0001), quantize_price(1.0004));
     }
