@@ -668,9 +668,59 @@ impl ParetoWatchApp {
         let selected_quote = self.selected_pareto_quote(&p.model_id);
         let consensus = self.cached_consensus(&p.model_id);
         egui::Frame::group(ui.style()).show(ui, |ui| {
-            ui.horizontal_wrapped(|ui| {
+            ui.horizontal(|ui| {
                 ui.label(egui::RichText::new("●").color(creator_color(&p.creator)).size(16.0));
                 ui.heading(&p.model);
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    ui.menu_button(egui::RichText::new("🔔").size(16.0), |ui| {
+                        if self.cost_basis == CostBasis::PerMillion
+                            && ui.button("Price threshold").clicked()
+                        {
+                            self.alert_model = p.model_id.clone();
+                            self.alert_mode = AlertMode::Threshold;
+                            self.alert_metric = self.price_metric;
+                            self.alert_cost_basis = CostBasis::PerMillion;
+                            self.alert_threshold = p.cost;
+                            self.tab = Tab::Alerts;
+                            ui.close();
+                        }
+                        if ui.button("Any price change").clicked() {
+                            self.alert_model = p.model_id.clone();
+                            self.alert_mode = AlertMode::AnyChange;
+                            self.tab = Tab::Alerts;
+                            ui.close();
+                        }
+                        if ui.button("Pareto frontier entry").clicked() {
+                            self.alert_model = p.model_id.clone();
+                            self.alert_mode = AlertMode::EntersFrontier;
+                            self.alert_metric = self.price_metric;
+                            self.alert_cost_basis = self.cost_basis;
+                            self.tab = Tab::Alerts;
+                            ui.close();
+                        }
+                        if ui.button("Pareto frontier exit").clicked() {
+                            self.alert_model = p.model_id.clone();
+                            self.alert_mode = AlertMode::LeavesFrontier;
+                            self.alert_metric = self.price_metric;
+                            self.alert_cost_basis = self.cost_basis;
+                            self.tab = Tab::Alerts;
+                            ui.close();
+                        }
+                        if ui.button("Cheapest at or above current score").clicked() {
+                            self.alert_model = p.model_id.clone();
+                            self.alert_mode = AlertMode::CheapestAboveScore;
+                            self.alert_metric = self.price_metric;
+                            self.alert_cost_basis = self.cost_basis;
+                            self.alert_score_threshold = p.score;
+                            self.tab = Tab::Alerts;
+                            ui.close();
+                        }
+                    })
+                    .response
+                    .on_hover_text("Add alarm");
+                });
+            });
+            ui.horizontal_wrapped(|ui| {
                 if p.vision {
                     ui.colored_label(egui::Color32::from_rgb(120, 200, 255), "vision");
                 } else {
@@ -838,16 +888,6 @@ impl ParetoWatchApp {
                 });
             }
 
-            if self.benchmark_source.is_composite() {
-                // The composite row name carries the full per-benchmark
-                // breakdown (measured/adjusted, prior, every board's raw
-                // score, pending boards). Show it — otherwise the method
-                // exists only in data and never reaches the user.
-                ui.collapsing("Composite breakdown", |ui| {
-                    ui.small(&p.benchmark_name);
-                });
-            }
-
             if let Some(consensus) = &consensus {
                 ui.collapsing("Source-by-source percentile", |ui| {
                     // Bounded so an open grid cannot push the Pareto-efficient
@@ -876,44 +916,6 @@ impl ParetoWatchApp {
                 });
             }
 
-            ui.horizontal_wrapped(|ui| {
-                if self.cost_basis == CostBasis::PerMillion
-                    && ui.button("Set price alert").clicked() {
-                        self.alert_model = p.model_id.clone();
-                        self.alert_mode = AlertMode::Threshold;
-                        self.alert_metric = self.price_metric;
-                        self.alert_cost_basis = CostBasis::PerMillion;
-                        self.alert_threshold = p.cost;
-                        self.tab = Tab::Alerts;
-                    }
-                if ui.button("Watch any change").clicked() {
-                    self.alert_model = p.model_id.clone();
-                    self.alert_mode = AlertMode::AnyChange;
-                    self.tab = Tab::Alerts;
-                }
-                if ui.button("Watch frontier entry").clicked() {
-                    self.alert_model = p.model_id.clone();
-                    self.alert_mode = AlertMode::EntersFrontier;
-                    self.alert_metric = self.price_metric;
-                    self.alert_cost_basis = self.cost_basis;
-                    self.tab = Tab::Alerts;
-                }
-                if ui.button("Watch frontier exit").clicked() {
-                    self.alert_model = p.model_id.clone();
-                    self.alert_mode = AlertMode::LeavesFrontier;
-                    self.alert_metric = self.price_metric;
-                    self.alert_cost_basis = self.cost_basis;
-                    self.tab = Tab::Alerts;
-                }
-                if ui.button("Watch cheapest ≥ current score").clicked() {
-                    self.alert_model = p.model_id.clone();
-                    self.alert_mode = AlertMode::CheapestAboveScore;
-                    self.alert_metric = self.price_metric;
-                    self.alert_cost_basis = self.cost_basis;
-                    self.alert_score_threshold = p.score;
-                    self.tab = Tab::Alerts;
-                }
-            });
         });
     }
 

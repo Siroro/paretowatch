@@ -1,5 +1,4 @@
-//! Alerts tab: form for new alert rules, the live rule table, and the
-//! recent price-moves feed.
+//! Alerts tab: form for new alert rules and the live rule table.
 
 use eframe::egui;
 
@@ -487,98 +486,5 @@ impl ParetoWatchApp {
         }
 
         ui.add_space(8.0);
-        ui.label("Threshold, discount, seller-health, and benchmark alerts are edge-triggered and re-arm when their condition becomes false. Move alerts fire per observed poll change once any leg (input, output, blended) clears the minimum; live-market/fallback source switches are ignored. All-time-low alerts fire whenever the blended price undercuts the history log's minimum (discounts and seller counts come from the live market only). Feed-wide alerts fire when a model appears in or disappears from the price feed (new listings are remembered across restarts via the history log; the first poll after startup only seeds the baseline). \"Any model\" frontier alerts diff the whole frontier membership; \"Any model\" cheapest alerts fire when the lead changes hands.");
-
-        ui.add_space(14.0);
-        ui.heading("Recent price moves");
-        if self.recent_changes.is_empty() {
-            ui.label("No price changes observed since the app started.");
-        } else {
-            egui::ScrollArea::vertical()
-                .max_height(260.0)
-                .show(ui, |ui| {
-                    for change in self.recent_changes.iter().take(40) {
-                        let delta = change.delta();
-                        let (arrow, color) = if delta < 0.0 {
-                            ("↓", egui::Color32::from_rgb(54, 179, 126))
-                        } else if delta > 0.0 {
-                            ("↑", egui::Color32::from_rgb(224, 86, 86))
-                        } else {
-                            ("↔", ui.visuals().text_color())
-                        };
-                        egui::Frame::group(ui.style()).show(ui, |ui| {
-                            ui.horizontal_wrapped(|ui| {
-                                ui.colored_label(
-                                    color,
-                                    egui::RichText::new(arrow).size(22.0).strong(),
-                                );
-                                ui.strong(&change.display_name);
-                                if let Some(pct) = change.percent_delta() {
-                                    ui.colored_label(color, format!("{pct:+.2}% blended"));
-                                } else {
-                                    ui.colored_label(color, "price changed");
-                                }
-                                ui.separator();
-                                ui.small(change.at.format("%H:%M:%S UTC").to_string());
-                                ui.separator();
-                                ui.small(change.source);
-                            });
-                            ui.horizontal_wrapped(|ui| {
-                                ui.label(format!(
-                                    "Blended ${:.6} → ${:.6}",
-                                    change.old_blended, change.new_blended
-                                ));
-                                ui.separator();
-                                ui.label(format!(
-                                    "Input ${:.6} → ${:.6}",
-                                    change.old_input, change.new_input
-                                ));
-                                ui.separator();
-                                ui.label(format!(
-                                    "Output ${:.6} → ${:.6}",
-                                    change.old_output, change.new_output
-                                ));
-                            });
-                        });
-                        ui.add_space(4.0);
-                    }
-                });
-        }
-
-        ui.add_space(14.0);
-        ui.horizontal(|ui| {
-            ui.heading("Notification history");
-            if ui.small_button("Clear").clicked()
-                && let Ok(mut log) = self.notifications.lock()
-            {
-                log.clear();
-            }
-        });
-        let records = self
-            .notifications
-            .lock()
-            .map(|log| log.records().cloned().collect::<Vec<_>>())
-            .unwrap_or_default();
-        if records.is_empty() {
-            ui.label("No alerts have fired this session.");
-        } else {
-            egui::ScrollArea::vertical()
-                .max_height(240.0)
-                .show(ui, |ui| {
-                    for record in &records {
-                        egui::Frame::group(ui.style()).show(ui, |ui| {
-                            ui.horizontal_wrapped(|ui| {
-                                ui.strong(&record.summary);
-                                ui.separator();
-                                ui.small(record.at.format("%Y-%m-%d %H:%M:%S UTC").to_string());
-                            });
-                            if !record.body.is_empty() {
-                                ui.small(&record.body);
-                            }
-                        });
-                        ui.add_space(4.0);
-                    }
-                });
-        }
     }
 }

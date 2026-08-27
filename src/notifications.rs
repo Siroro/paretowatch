@@ -2,7 +2,7 @@
 //!
 //! Every alert path (worker-thread price rules, UI-thread semantic rules,
 //! feed-wide listing rules) routes through [`notify`], so a toast always has
-//! a matching record the Alerts tab can replay. The log is session-only and
+//! a matching record the Activity tab can replay. The log is session-only and
 //! capped; long-term history lives in `crate::history`.
 
 use std::collections::VecDeque;

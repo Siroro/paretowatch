@@ -2,6 +2,7 @@
 //! pumps messages into that state, and delegates each tab's view to its
 //! sibling tab module.
 
+mod activity_tab;
 mod alerts_tab;
 mod pareto_tab;
 mod settings_tab;
@@ -47,7 +48,14 @@ enum Tab {
     Pareto,
     History,
     Alerts,
+    Activity,
     Settings,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ActivityTab {
+    PriceMoves,
+    Notifications,
 }
 
 pub(crate) struct ParetoWatchApp {
@@ -63,6 +71,7 @@ pub(crate) struct ParetoWatchApp {
     worker_rx: Receiver<WorkerMessage>,
     ui_rx: Receiver<UiCommand>,
     tab: Tab,
+    activity_tab: ActivityTab,
     price_metric: PriceMetric,
     cost_basis: CostBasis,
     benchmark_source: BenchmarkSource,
@@ -156,6 +165,7 @@ impl ParetoWatchApp {
             worker_rx,
             ui_rx,
             tab: Tab::Pareto,
+            activity_tab: ActivityTab::PriceMoves,
             price_metric: PriceMetric::Blended,
             cost_basis: CostBasis::PerMillion,
             benchmark_source: BenchmarkSource::CompositeAgentic,
@@ -1057,6 +1067,7 @@ impl ParetoWatchApp {
                 (Tab::Pareto, "Pareto"),
                 (Tab::History, "History"),
                 (Tab::Alerts, "Alerts"),
+                (Tab::Activity, "Activity"),
                 (Tab::Settings, "Settings"),
             ] {
                 if ui.selectable_label(self.tab == tab, label).clicked() {
@@ -1143,6 +1154,7 @@ impl eframe::App for ParetoWatchApp {
                 Tab::Pareto => self.pareto_tab(ui),
                 Tab::History => self.history_tab(ui),
                 Tab::Alerts => self.alerts_tab(ui),
+                Tab::Activity => self.activity_tab(ui),
                 Tab::Settings => self.settings_tab(ui),
             }
         });

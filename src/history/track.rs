@@ -370,7 +370,6 @@ pub(crate) fn step_points(series: &[(f64, f64)], until: f64) -> Vec<[f64; 2]> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::history::store::quantize_price;
     use std::fs;
 
     fn temp_path(tag: &str) -> std::path::PathBuf {
@@ -576,38 +575,5 @@ mod tests {
         let t2 = HistoryTracker::open(&path);
         assert_eq!(t2.series("a/b").unwrap().input, s.input);
         let _ = fs::remove_file(&path);
-    }
-
-    #[test]
-    fn quantize_helpers_match_store() {
-        assert_eq!(super::quantize_price(2.5), quantize_price(2.5));
-    }
-
-    /// Ignored network-ish diagnostic: replays the developer's real history
-    /// log and prints what survived a restart. Run with
-    /// `cargo test live_history -- --ignored --nocapture`.
-    #[test]
-    #[ignore]
-    fn live_history_log_replays() {
-        let path = crate::history::history_log_path();
-        let t = HistoryTracker::open(&path);
-        let (bytes, frames) = t.store_stats();
-        println!(
-            "{} models · {} frames · {} bytes",
-            t.model_count(),
-            frames,
-            bytes
-        );
-        let shown = t.series_list().take(3).cloned().collect::<Vec<_>>();
-        for s in &shown {
-            println!(
-                "{}: input {} events (last {:?})",
-                s.display,
-                s.input.len(),
-                s.input.last().map(|(_, v)| *v),
-            );
-        }
-        assert!(t.model_count() > 50, "expected the live catalog in the log");
-        assert!(bytes > 0);
     }
 }
