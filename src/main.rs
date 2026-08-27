@@ -7,6 +7,7 @@ mod bench;
 mod fetch;
 mod format;
 mod history;
+mod notifications;
 mod pareto;
 mod settings_store;
 #[cfg(test)]

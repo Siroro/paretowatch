@@ -65,14 +65,46 @@ impl AlertDirection {
     }
 }
 
+/// Which way an any-change alert's minimum-move filter lets through.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
+pub(crate) enum MoveDirection {
+    #[default]
+    Any,
+    Up,
+    Down,
+}
+
+impl MoveDirection {
+    pub(crate) fn label(self) -> &'static str {
+        match self {
+            Self::Any => "any direction",
+            Self::Up => "up only",
+            Self::Down => "down only",
+        }
+    }
+}
+
+/// Sentinel `AlertRule.model` meaning "do not pin this alert to one model".
+/// Frontier entry/exit alerts read it as "watch the whole frontier".
+pub(crate) const ANY_MODEL: &str = "*";
+
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
 pub(crate) enum AlertMode {
     #[default]
     Threshold,
     AnyChange,
+    /// Fires each time the blended price undercuts every previously
+    /// recorded value (baseline = the persistent history log).
+    PriceFloor,
+    /// Live-market discount percentage at or above a level.
+    Discount,
+    /// Healthy seller count at or below a level.
+    SellerHealth,
     EntersFrontier,
     LeavesFrontier,
     CheapestAboveScore,
+    NewModelListed,
+    ModelDelisted,
 }
 
 impl AlertMode {
@@ -80,9 +112,14 @@ impl AlertMode {
         match self {
             Self::Threshold => "Threshold",
             Self::AnyChange => "Any price change",
+            Self::PriceFloor => "All-time price low",
+            Self::Discount => "Discount at or above",
+            Self::SellerHealth => "Seller health falls to",
             Self::EntersFrontier => "Enters Pareto frontier",
             Self::LeavesFrontier => "Leaves Pareto frontier",
             Self::CheapestAboveScore => "Cheapest above score",
+            Self::NewModelListed => "New model listed",
+            Self::ModelDelisted => "Model delisted",
         }
     }
 
@@ -90,6 +127,22 @@ impl AlertMode {
         matches!(
             self,
             Self::EntersFrontier | Self::LeavesFrontier | Self::CheapestAboveScore
+        )
+    }
+
+    /// Feed-wide modes ignore the rule's model: they watch the whole price
+    /// feed and are evaluated on the UI thread against the tracking history
+    /// and consecutive snapshot diffs.
+    pub(crate) fn feed_wide(self) -> bool {
+        matches!(self, Self::NewModelListed | Self::ModelDelisted)
+    }
+
+    /// Modes the fetch worker can decide from quotes alone (no benchmarks,
+    /// no long-term history). Everything else is evaluated on the UI thread.
+    pub(crate) fn worker_evaluated(self) -> bool {
+        matches!(
+            self,
+            Self::Threshold | Self::AnyChange | Self::Discount | Self::SellerHealth
         )
     }
 }
@@ -410,12 +463,27 @@ pub(crate) struct AlertRule {
     pub(crate) liquidity_filter: LiquidityFilter,
     #[serde(default = "default_score_threshold")]
     pub(crate) score_threshold: f64,
+    /// Any-change filter: minimum |%| move (on input, output, or blended)
+    /// before the alert fires. 0 keeps the historical "any change" behavior.
+    #[serde(default)]
+    pub(crate) min_move_pct: f64,
+    #[serde(default)]
+    pub(crate) move_direction: MoveDirection,
+    /// Discount mode: market discount percentage that arms the rule.
+    #[serde(default = "default_discount_threshold")]
+    pub(crate) discount_threshold_pct: f64,
+    /// Seller-health mode: fire when healthy sellers fall to or below this.
+    #[serde(default)]
+    pub(crate) healthy_seller_floor: u64,
 }
 
 pub(crate) fn default_common_scaffold() -> String {
     "mini-SWE-agent".into()
 }
 pub(crate) fn default_score_threshold() -> f64 {
+    50.0
+}
+pub(crate) fn default_discount_threshold() -> f64 {
     50.0
 }
 
@@ -626,6 +694,29 @@ pub(crate) struct Benchmark {
 mod tests {
     use super::*;
     use crate::testfix::test_quote;
+
+    #[test]
+    fn alert_rules_from_pre_move_filter_configs_keep_defaults() {
+        // A config.json written before min-move filtering and the feed-wide
+        // modes must load unchanged: every added field is serde-defaulted.
+        let legacy = r#"{
+            "id": 7,
+            "model": "openai/gpt-x",
+            "mode": "AnyChange",
+            "metric": "Blended",
+            "cost_basis": "PerMillion",
+            "direction": "BelowOrEqual",
+            "threshold": 1.0,
+            "enabled": true
+        }"#;
+        let alert: AlertRule = serde_json::from_str(legacy).expect("legacy alert loads");
+        assert_eq!(alert.mode, AlertMode::AnyChange);
+        assert_eq!(alert.min_move_pct, 0.0);
+        assert_eq!(alert.move_direction, MoveDirection::Any);
+        assert_eq!(alert.common_scaffold, default_common_scaffold());
+        assert_eq!(alert.discount_threshold_pct, default_discount_threshold());
+        assert_eq!(alert.healthy_seller_floor, 0);
+    }
 
     #[test]
     fn blended_price_is_normalized_and_cache_aware() {

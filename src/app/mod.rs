@@ -8,26 +8,33 @@ mod settings_tab;
 
 use std::collections::{HashMap, VecDeque};
 use std::sync::Arc;
+use std::sync::Mutex;
 use std::sync::mpsc::{self, Receiver, Sender, TryRecvError};
 
 use chrono::Utc;
 use eframe::egui;
-use notify_rust::Notification;
 
-use crate::alerts::{PriceChangeEvent, detect_price_changes, semantic_alert_status};
+use crate::alerts::{
+    ListingChange, PriceChangeEvent, detect_delisted, detect_price_changes, frontier_changes,
+    semantic_alert_status,
+};
 use crate::artificial_analysis_snapshot::artificial_analysis_snapshot;
 use crate::bench::{
     BenchmarkConsensus, available_scaffolds, benchmark_consensus_for_quote, benchmarks_for_source,
 };
 use crate::fetch::start_worker;
 use crate::history;
+use crate::history::track::blended_series;
+use crate::notifications::{NotificationLog, SharedNotifications, notify};
 use crate::pareto::{ParetoCache, ParetoCacheKey, joined_points, pareto_frontier};
 use crate::settings_store::{load_settings, save_settings};
-use crate::tray::{UiCommand, create_tray, install_tray_event_handlers};
+#[cfg(not(target_os = "linux"))]
+use crate::tray::create_tray;
+use crate::tray::{UiCommand, install_tray_event_handlers};
 use crate::types::{
-    AlertDirection, AlertMode, Benchmark, BenchmarkMetric, BenchmarkSource, ComparisonMode,
-    CostBasis, LiquidityFilter, ModalityFilter, PriceMetric, PriceSnapshot, Quote, Settings,
-    default_common_scaffold,
+    ANY_MODEL, AlertDirection, AlertMode, AlertRule, Benchmark, BenchmarkMetric, BenchmarkSource,
+    ComparisonMode, CostBasis, LiquidityFilter, ModalityFilter, MoveDirection, PriceMetric,
+    PriceSnapshot, Quote, Settings, default_common_scaffold,
 };
 use crate::widgets;
 use crate::worker::{WorkerCommand, WorkerMessage};
@@ -74,7 +81,21 @@ pub(crate) struct ParetoWatchApp {
     alert_direction: AlertDirection,
     alert_threshold: f64,
     alert_score_threshold: f64,
+    alert_move_direction: MoveDirection,
+    alert_min_move_pct: f64,
+    alert_discount_pct: f64,
+    alert_healthy_floor: u64,
     semantic_alert_state: HashMap<u64, bool>,
+    /// Last-known frontier membership (model id → display name) per wildcard
+    /// frontier alert, so "any model" rules can diff the set instead of a
+    /// single bool.
+    semantic_frontier_state: HashMap<u64, HashMap<String, String>>,
+    /// Last-known leader (cheapest model above the score floor, if any) per
+    /// wildcard cheapest rule.
+    semantic_leader_state: HashMap<u64, Option<String>>,
+    /// Toast history shared with the fetch worker; every notification path
+    /// appends here so the Alerts tab can replay what was fired.
+    notifications: SharedNotifications,
     data_version: u64,
     scaffold_cache: Option<(u64, Vec<String>)>,
     pareto_cache: Option<Arc<ParetoCache>>,
@@ -100,7 +121,12 @@ pub(crate) struct ParetoWatchApp {
 impl ParetoWatchApp {
     pub(crate) fn new(cc: &eframe::CreationContext<'_>) -> Self {
         let settings = load_settings().unwrap_or_default();
-        let (worker_tx, worker_rx) = start_worker(cc.egui_ctx.clone(), settings.clone());
+        let notifications: SharedNotifications = Arc::new(Mutex::new(NotificationLog::default()));
+        let (worker_tx, worker_rx) = start_worker(
+            cc.egui_ctx.clone(),
+            settings.clone(),
+            Arc::clone(&notifications),
+        );
         let (ui_tx, ui_rx) = mpsc::channel();
 
         install_tray_event_handlers(cc.egui_ctx.clone(), ui_tx);
@@ -148,7 +174,14 @@ impl ParetoWatchApp {
             alert_direction: AlertDirection::BelowOrEqual,
             alert_threshold: 1.0,
             alert_score_threshold: 50.0,
+            alert_move_direction: MoveDirection::Any,
+            alert_min_move_pct: 0.0,
+            alert_discount_pct: 50.0,
+            alert_healthy_floor: 0,
             semantic_alert_state: HashMap::new(),
+            semantic_frontier_state: HashMap::new(),
+            semantic_leader_state: HashMap::new(),
+            notifications,
             data_version: 0,
             scaffold_cache: None,
             pareto_cache: None,
@@ -192,9 +225,13 @@ impl ParetoWatchApp {
 
     fn handle_worker_messages(&mut self) {
         let mut data_dirty = false;
+        let mut prices_arrived = false;
+        let mut first_price_poll = false;
+        let mut delisted: Vec<ListingChange> = Vec::new();
         loop {
             match self.worker_rx.try_recv() {
                 Ok(WorkerMessage::Prices(Ok(snapshot))) => {
+                    first_price_poll = self.price_snapshot.is_none();
                     if let Some(previous) = &self.price_snapshot {
                         for change in detect_price_changes(previous, &snapshot, &self.settings) {
                             self.recent_changes.push_front(change);
@@ -202,6 +239,7 @@ impl ParetoWatchApp {
                         while self.recent_changes.len() > 80 {
                             self.recent_changes.pop_back();
                         }
+                        delisted = detect_delisted(previous, &snapshot, &self.settings);
                     }
                     if self.alert_model.is_empty() {
                         if let Some(q) = snapshot.quotes.first() {
@@ -221,6 +259,7 @@ impl ParetoWatchApp {
                     self.last_price_error = None;
                     self.data_version += 1;
                     data_dirty = true;
+                    prices_arrived = true;
                 }
                 Ok(WorkerMessage::Prices(Err(err))) => {
                     self.last_price_error = Some(err.clone());
@@ -239,15 +278,185 @@ impl ParetoWatchApp {
             }
         }
         if data_dirty {
+            if prices_arrived {
+                // Floor rules compare the new blended price against the
+                // history log's all-time minimum, so they must run before this
+                // poll is recorded into that log.
+                self.evaluate_floor_alerts();
+            }
             // Frontier/cheapest alerts depend on benchmark boards too, so a
             // board refresh (every six hours) must re-evaluate them instead
             // of waiting for the next price poll.
             self.evaluate_semantic_alerts();
             // Long-term history: diff each delivered poll against the last
-            // recorded state. Writes only when something actually changed.
-            if let Some(snapshot) = &self.price_snapshot {
-                self.history.record(snapshot, Utc::now());
+            // recorded state. Writes only when something actually changed,
+            // and reports models seen for the first time ever.
+            let newly_listed = self
+                .price_snapshot
+                .as_ref()
+                .map(|snapshot| self.history.record(snapshot, Utc::now()))
+                .unwrap_or_default();
+            if prices_arrived {
+                // The session's first poll only seeds the baseline: it would
+                // otherwise replay every model added since the last run (or
+                // the whole catalog on a fresh install) as notifications.
+                self.evaluate_listing_alerts(&newly_listed, &delisted, !first_price_poll);
             }
+        }
+    }
+
+    /// All-time-low rules: fire when the current blended price undercuts
+    /// every value in the persistent history. Self-resetting by construction
+    /// — once the new low is recorded it becomes the floor, so the same price
+    /// cannot re-fire. The margin (one quantization step) keeps sub-step
+    /// wobble from oscillating around the minimum.
+    fn evaluate_floor_alerts(&mut self) {
+        let Some(snapshot) = self.price_snapshot.as_ref() else {
+            return;
+        };
+        let notifications = Arc::clone(&self.notifications);
+        for alert in &self.settings.alerts {
+            if !alert.enabled || alert.mode != AlertMode::PriceFloor {
+                continue;
+            }
+            let Some(quote) = snapshot.quotes.iter().find(|q| q.model == alert.model) else {
+                continue;
+            };
+            let Some(series) = self.history.series(&alert.model) else {
+                continue;
+            };
+            let current = quote.price(
+                PriceMetric::Blended,
+                self.settings.input_weight,
+                self.settings.cache_read_weight,
+                self.settings.output_weight,
+            );
+            let Some(previous_low) = blended_series(
+                series,
+                self.settings.input_weight,
+                self.settings.cache_read_weight,
+                self.settings.output_weight,
+            )
+            .into_iter()
+            .map(|(_, value)| value)
+            .fold(None, |acc: Option<f64>, value| match acc {
+                Some(min) if min <= value => Some(min),
+                _ => Some(value),
+            }) else {
+                continue;
+            };
+            const FLOOR_MARGIN: f64 = 0.001; // one history quantization step, $/M
+            if current >= previous_low - FLOOR_MARGIN {
+                continue;
+            }
+            let pct = if previous_low.abs() > f64::EPSILON {
+                format!(
+                    " · {:.2}% below",
+                    (previous_low - current) / previous_low * 100.0
+                )
+            } else {
+                String::new()
+            };
+            notify(
+                &notifications,
+                &format!("▽ {} all-time low", quote.display_name),
+                &format!(
+                    "Blended ${:.6}/1M — previous low ${:.6}/1M{pct}\nInput ${:.4} · Output ${:.4}",
+                    current, previous_low, quote.input, quote.output,
+                ),
+            );
+        }
+    }
+
+    /// Feed-wide rules: new models appearing in the price feed and models
+    /// disappearing from it. Event-driven, so unlike the edge-triggered
+    /// rules there is no per-alert state to maintain.
+    fn evaluate_listing_alerts(
+        &self,
+        newly_listed: &[(String, String)],
+        delisted: &[ListingChange],
+        notify_enabled: bool,
+    ) {
+        if !notify_enabled {
+            return;
+        }
+        let watch_new = self
+            .settings
+            .alerts
+            .iter()
+            .any(|a| a.enabled && a.mode == AlertMode::NewModelListed);
+        let watch_delisted = self
+            .settings
+            .alerts
+            .iter()
+            .any(|a| a.enabled && a.mode == AlertMode::ModelDelisted);
+
+        if watch_new && !newly_listed.is_empty() {
+            let quotes = self.price_snapshot.as_ref().map(|s| &s.quotes);
+            let lookup =
+                |slug: &str| quotes.and_then(|quotes| quotes.iter().find(|q| q.model == slug));
+            let (summary, body) = if newly_listed.len() == 1 {
+                let (slug, display) = &newly_listed[0];
+                let detail = lookup(slug).map_or_else(String::new, |quote| {
+                    let source = if quote.live_market {
+                        "live market"
+                    } else {
+                        "price matrix"
+                    };
+                    format!(
+                        "{} · {}\nInput ${:.4} · Output ${:.4} · Blend ${:.4}/1M",
+                        quote.creator,
+                        source,
+                        quote.input,
+                        quote.output,
+                        quote.price(
+                            PriceMetric::Blended,
+                            self.settings.input_weight,
+                            self.settings.cache_read_weight,
+                            self.settings.output_weight,
+                        ),
+                    )
+                });
+                (format!("✚ New model listed: {display}"), detail)
+            } else {
+                let lines = newly_listed
+                    .iter()
+                    .map(|(slug, display)| {
+                        let blend = lookup(slug).map_or(f64::NAN, |quote| {
+                            quote.price(
+                                PriceMetric::Blended,
+                                self.settings.input_weight,
+                                self.settings.cache_read_weight,
+                                self.settings.output_weight,
+                            )
+                        });
+                        format!("{display} · blend ${blend:.4}/1M")
+                    })
+                    .collect::<Vec<_>>()
+                    .join("\n");
+                (format!("✚ {} new models listed", newly_listed.len()), lines)
+            };
+            notify(&self.notifications, &summary, &body);
+        }
+
+        if watch_delisted && !delisted.is_empty() {
+            let (summary, body) = if delisted.len() == 1 {
+                (
+                    format!("✖ Model delisted: {}", delisted[0].display_name),
+                    format!(
+                        "No longer in the price feed · last blend ${:.4}/1M",
+                        delisted[0].last_blended
+                    ),
+                )
+            } else {
+                let lines = delisted
+                    .iter()
+                    .map(|d| format!("{} · last blend ${:.4}/1M", d.display_name, d.last_blended))
+                    .collect::<Vec<_>>()
+                    .join("\n");
+                (format!("✖ {} models delisted", delisted.len()), lines)
+            };
+            notify(&self.notifications, &summary, &body);
         }
     }
 
@@ -378,9 +587,10 @@ impl ParetoWatchApp {
 
     /// "Current" column text for every alert row, aligned with
     /// `settings.alerts`. Semantic statuses re-run the whole benchmark join
-    /// and frontier, so they are cached per alert until prices, boards, or
-    /// the workload weights change; threshold/any-change rows are a cheap
-    /// quote lookup and are formatted fresh each call.
+    /// and frontier, and floor statuses walk the history series, so both are
+    /// cached per alert until prices, boards, or the workload weights
+    /// change; threshold/discount/seller rows are a cheap quote lookup and
+    /// are formatted fresh each call.
     fn cached_alert_statuses(&mut self) -> Vec<String> {
         let data_version = self.data_version;
         let (input_weight, cache_read_weight, output_weight) = (
@@ -395,7 +605,8 @@ impl ParetoWatchApp {
             .unwrap_or(&[]);
         let mut statuses = Vec::with_capacity(self.settings.alerts.len());
         for alert in &self.settings.alerts {
-            let status = if alert.mode.benchmark_dependent() {
+            let status = if alert.mode.benchmark_dependent() || alert.mode == AlertMode::PriceFloor
+            {
                 let cached = self
                     .alert_status_cache
                     .get(&alert.id)
@@ -407,14 +618,18 @@ impl ParetoWatchApp {
                 match cached {
                     Some(text) => text,
                     None => {
-                        let text = semantic_alert_status(
-                            alert,
-                            quotes,
-                            &self.benchmark_sets,
-                            input_weight,
-                            cache_read_weight,
-                            output_weight,
-                        );
+                        let text = if alert.mode == AlertMode::PriceFloor {
+                            self.floor_alert_status(alert, quotes)
+                        } else {
+                            semantic_alert_status(
+                                alert,
+                                quotes,
+                                &self.benchmark_sets,
+                                input_weight,
+                                cache_read_weight,
+                                output_weight,
+                            )
+                        };
                         self.alert_status_cache.insert(
                             alert.id,
                             (
@@ -428,6 +643,22 @@ impl ParetoWatchApp {
                         text
                     }
                 }
+            } else if alert.mode.feed_wide() {
+                format!("{} models tracked", quotes.len())
+            } else if alert.mode == AlertMode::Discount {
+                quotes
+                    .iter()
+                    .find(|q| q.model == alert.model)
+                    .and_then(|q| q.discount_pct)
+                    .map(|pct| format!("{pct:.0}% off"))
+                    .unwrap_or_else(|| "—".into())
+            } else if alert.mode == AlertMode::SellerHealth {
+                quotes
+                    .iter()
+                    .find(|q| q.model == alert.model)
+                    .and_then(|q| q.healthy_seller_count)
+                    .map(|count| format!("{count} healthy"))
+                    .unwrap_or_else(|| "—".into())
             } else {
                 quotes
                     .iter()
@@ -445,15 +676,54 @@ impl ParetoWatchApp {
         statuses
     }
 
+    /// Status text for an all-time-low rule: current blended price beside
+    /// the lowest value the history log has ever recorded for the model.
+    fn floor_alert_status(&self, alert: &AlertRule, quotes: &[Quote]) -> String {
+        let (input_weight, cache_read_weight, output_weight) = (
+            self.settings.input_weight,
+            self.settings.cache_read_weight,
+            self.settings.output_weight,
+        );
+        let Some(quote) = quotes.iter().find(|q| q.model == alert.model) else {
+            return "—".into();
+        };
+        let current = quote.price(
+            PriceMetric::Blended,
+            input_weight,
+            cache_read_weight,
+            output_weight,
+        );
+        let Some(series) = self.history.series(&alert.model) else {
+            return format!("${current:.4} · no history yet");
+        };
+        let low = blended_series(series, input_weight, cache_read_weight, output_weight)
+            .into_iter()
+            .map(|(_, value)| value)
+            .fold(f64::INFINITY, f64::min);
+        if low.is_finite() {
+            format!("${current:.4} · low ${low:.4}")
+        } else {
+            format!("${current:.4} · no history yet")
+        }
+    }
+
     fn evaluate_semantic_alerts(&mut self) {
         let Some(snapshot) = self.price_snapshot.clone() else {
             return;
         };
+        let notifications = Arc::clone(&self.notifications);
         let alerts = self.settings.alerts.clone();
         for alert in alerts {
             if !alert.enabled || !alert.mode.benchmark_dependent() {
                 self.semantic_alert_state.remove(&alert.id);
+                self.semantic_frontier_state.remove(&alert.id);
+                self.semantic_leader_state.remove(&alert.id);
                 continue;
+            }
+            let wildcard = alert.model == ANY_MODEL;
+            if !wildcard {
+                self.semantic_frontier_state.remove(&alert.id);
+                self.semantic_leader_state.remove(&alert.id);
             }
             let benchmarks = benchmarks_for_source(
                 alert.benchmark_source,
@@ -491,6 +761,164 @@ impl ParetoWatchApp {
                 self.settings.cache_read_weight,
                 self.settings.output_weight,
             );
+
+            if wildcard {
+                if alert.mode == AlertMode::CheapestAboveScore {
+                    let leader = joined
+                        .iter()
+                        .filter(|point| point.score >= alert.score_threshold)
+                        .min_by(|a, b| a.cost.total_cmp(&b.cost));
+                    let current = leader.map(|best| best.model_id.clone());
+                    let Some(previous) = self.semantic_leader_state.remove(&alert.id) else {
+                        // First sighting only seeds the baseline leader.
+                        self.semantic_leader_state.insert(alert.id, current);
+                        continue;
+                    };
+                    if previous != current {
+                        let context = format!(
+                            "{} · {} · {}",
+                            alert.benchmark_source.short_label(),
+                            alert.comparison_mode.label(),
+                            alert.liquidity_filter.label(),
+                        );
+                        let (summary, body) = match (previous.as_deref(), leader) {
+                            (Some(_), Some(best)) => (
+                                format!(
+                                    "★ {} took the cheapest-≥{:.0} lead",
+                                    best.model, alert.score_threshold
+                                ),
+                                format!(
+                                    "{}: {:.1} · {} ${:.4}{}\nPrevious: {}\n{context}",
+                                    alert.benchmark_source.short_label(),
+                                    best.score,
+                                    alert.metric.label(),
+                                    best.cost,
+                                    alert.cost_basis.unit(),
+                                    previous.as_deref().unwrap_or("?"),
+                                ),
+                            ),
+                            (None, Some(best)) => (
+                                format!(
+                                    "★ {} is now cheapest ≥ {:.0}",
+                                    best.model, alert.score_threshold
+                                ),
+                                format!(
+                                    "{}: {:.1} · {} ${:.4}{}\nNo model cleared the score before.\n{context}",
+                                    alert.benchmark_source.short_label(),
+                                    best.score,
+                                    alert.metric.label(),
+                                    best.cost,
+                                    alert.cost_basis.unit(),
+                                ),
+                            ),
+                            (Some(old), None) => (
+                                format!(
+                                    "◇ No model clears score ≥ {:.0} anymore",
+                                    alert.score_threshold
+                                ),
+                                format!("Previous leader: {old}\n{context}"),
+                            ),
+                            (None, None) => unreachable!("leader unchanged"),
+                        };
+                        notify(&notifications, &summary, &body);
+                    }
+                    self.semantic_leader_state.insert(alert.id, current);
+                    continue;
+                }
+
+                let frontier = pareto_frontier(&joined);
+                let membership: HashMap<String, String> = frontier
+                    .iter()
+                    .map(|p| (p.model_id.clone(), p.model.clone()))
+                    .collect();
+                let Some(previous) = self.semantic_frontier_state.remove(&alert.id) else {
+                    // First sighting only seeds the baseline set.
+                    self.semantic_frontier_state.insert(alert.id, membership);
+                    continue;
+                };
+                let diff = frontier_changes(&previous, &frontier);
+                let fired = match alert.mode {
+                    AlertMode::EntersFrontier => !diff.entered.is_empty(),
+                    AlertMode::LeavesFrontier => !diff.exited.is_empty(),
+                    _ => false,
+                };
+                if fired {
+                    let context = format!(
+                        "{} · {} · {}",
+                        alert.benchmark_source.short_label(),
+                        alert.comparison_mode.label(),
+                        alert.liquidity_filter.label(),
+                    );
+                    const MAX_LINES: usize = 6;
+                    let (summary, body) = match alert.mode {
+                        AlertMode::EntersFrontier => {
+                            let summary = if diff.entered.len() == 1 {
+                                format!("◆ {} entered the Pareto frontier", diff.entered[0].model)
+                            } else {
+                                format!(
+                                    "◆ {} models entered the Pareto frontier",
+                                    diff.entered.len()
+                                )
+                            };
+                            let mut lines = diff
+                                .entered
+                                .iter()
+                                .take(MAX_LINES)
+                                .map(|p| {
+                                    format!(
+                                        "{} · score {:.1} · {} ${:.4}{}",
+                                        p.model,
+                                        p.score,
+                                        alert.metric.label(),
+                                        p.cost,
+                                        alert.cost_basis.unit()
+                                    )
+                                })
+                                .collect::<Vec<_>>();
+                            if diff.entered.len() > MAX_LINES {
+                                lines
+                                    .push(format!("… and {} more", diff.entered.len() - MAX_LINES));
+                            }
+                            (summary, format!("{}\n{context}", lines.join("\n")))
+                        }
+                        AlertMode::LeavesFrontier => {
+                            let summary = if diff.exited.len() == 1 {
+                                format!("◇ {} left the Pareto frontier", diff.exited[0].1)
+                            } else {
+                                format!("{} models left the Pareto frontier", diff.exited.len())
+                            };
+                            let mut lines = diff
+                                .exited
+                                .iter()
+                                .take(MAX_LINES)
+                                .map(
+                                    |(id, name)| match joined.iter().find(|p| &p.model_id == id) {
+                                        Some(p) => format!(
+                                            "{name} · score {:.1} · {} ${:.4}{}",
+                                            p.score,
+                                            alert.metric.label(),
+                                            p.cost,
+                                            alert.cost_basis.unit()
+                                        ),
+                                        // Vanished from the join entirely (delisted or
+                                        // no longer benchmark-matched), not just dominated.
+                                        None => format!("{name} · no longer matched"),
+                                    },
+                                )
+                                .collect::<Vec<_>>();
+                            if diff.exited.len() > MAX_LINES {
+                                lines.push(format!("… and {} more", diff.exited.len() - MAX_LINES));
+                            }
+                            (summary, format!("{}\n{context}", lines.join("\n")))
+                        }
+                        _ => unreachable!("wildcard frontier is only entered for frontier modes"),
+                    };
+                    notify(&notifications, &summary, &body);
+                }
+                self.semantic_frontier_state.insert(alert.id, membership);
+                continue;
+            }
+
             let Some(target) = joined.iter().find(|point| point.model_id == alert.model) else {
                 continue;
             };
@@ -505,7 +933,13 @@ impl ParetoWatchApp {
                     .min_by(|a, b| a.cost.total_cmp(&b.cost))
                     .map(|point| point.model_id == alert.model)
                     .unwrap_or(false),
-                AlertMode::Threshold | AlertMode::AnyChange => continue,
+                AlertMode::Threshold
+                | AlertMode::AnyChange
+                | AlertMode::PriceFloor
+                | AlertMode::Discount
+                | AlertMode::SellerHealth
+                | AlertMode::NewModelListed
+                | AlertMode::ModelDelisted => continue,
             };
 
             let Some(previous) = self.semantic_alert_state.get(&alert.id).copied() else {
@@ -556,9 +990,15 @@ impl ParetoWatchApp {
                             alert.liquidity_filter.label(),
                         ),
                     ),
-                    AlertMode::Threshold | AlertMode::AnyChange => unreachable!(),
+                    AlertMode::Threshold
+                    | AlertMode::AnyChange
+                    | AlertMode::PriceFloor
+                    | AlertMode::Discount
+                    | AlertMode::SellerHealth
+                    | AlertMode::NewModelListed
+                    | AlertMode::ModelDelisted => unreachable!(),
                 };
-                let _ = Notification::new().summary(&summary).body(&body).show();
+                notify(&notifications, &summary, &body);
             }
             self.semantic_alert_state.insert(alert.id, condition);
         }
@@ -587,6 +1027,10 @@ impl ParetoWatchApp {
             .map(|a| a.id)
             .collect::<std::collections::HashSet<_>>();
         self.semantic_alert_state
+            .retain(|id, _| valid_ids.contains(id));
+        self.semantic_frontier_state
+            .retain(|id, _| valid_ids.contains(id));
+        self.semantic_leader_state
             .retain(|id, _| valid_ids.contains(id));
         self.alert_status_cache
             .retain(|id, _| valid_ids.contains(id));

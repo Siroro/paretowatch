@@ -12,8 +12,8 @@ use crate::format::{format_compact_number, format_price_tick};
 use crate::pareto::{JoinedPoint, pareto_search_matches, price_from_plot_x, price_to_plot_x};
 use crate::theme::{creator_color, discount_color, free_offer_badge, group_label};
 use crate::types::{
-    AlertMode, BenchmarkMetric, BenchmarkSource, ComparisonMode, CostBasis, LiquidityFilter,
-    ModalityFilter, PriceMetric,
+    ANY_MODEL, AlertMode, BenchmarkMetric, BenchmarkSource, ComparisonMode, CostBasis,
+    LiquidityFilter, ModalityFilter, PriceMetric,
 };
 use crate::worker::WorkerCommand;
 
@@ -921,6 +921,23 @@ impl ParetoWatchApp {
     }
 
     fn frontier_table(&mut self, ui: &mut egui::Ui, frontier: &[JoinedPoint]) {
+        ui.horizontal(|ui| {
+            ui.strong("Pareto frontier");
+            if ui.small_button("◆ Watch any entry").clicked() {
+                self.alert_model = ANY_MODEL.into();
+                self.alert_mode = AlertMode::EntersFrontier;
+                self.alert_metric = self.price_metric;
+                self.alert_cost_basis = self.cost_basis;
+                self.tab = Tab::Alerts;
+            }
+            if ui.small_button("◇ Watch any exit").clicked() {
+                self.alert_model = ANY_MODEL.into();
+                self.alert_mode = AlertMode::LeavesFrontier;
+                self.alert_metric = self.price_metric;
+                self.alert_cost_basis = self.cost_basis;
+                self.tab = Tab::Alerts;
+            }
+        });
         egui::Grid::new("frontier_table")
             .striped(true)
             .show(ui, |ui| {

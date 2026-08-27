@@ -31,6 +31,7 @@ use serde_json::Value;
 
 use crate::alerts::evaluate_alerts;
 use crate::artificial_analysis_snapshot::artificial_analysis_snapshot;
+use crate::notifications::SharedNotifications;
 use crate::theme::infer_creator;
 use crate::types::{Benchmark, BenchmarkKind, BenchmarkSource, Quote, Settings};
 use crate::worker::{WorkerCommand, WorkerMessage};
@@ -40,6 +41,7 @@ pub(crate) const BENCHMARK_REFRESH_SECS: u64 = 6 * 60 * 60;
 pub(crate) fn start_worker(
     ctx: egui::Context,
     initial_settings: Settings,
+    notifications: SharedNotifications,
 ) -> (Sender<WorkerCommand>, Receiver<WorkerMessage>) {
     let (cmd_tx, cmd_rx) = mpsc::channel::<WorkerCommand>();
     let (msg_tx, msg_rx) = mpsc::channel::<WorkerMessage>();
@@ -58,7 +60,13 @@ pub(crate) fn start_worker(
         loop {
             let price_result = fetch_prices(&client, &settings);
             if let Ok(snapshot) = &price_result {
-                evaluate_alerts(snapshot, &settings, &mut alert_state, &previous_quotes);
+                evaluate_alerts(
+                    snapshot,
+                    &settings,
+                    &mut alert_state,
+                    &previous_quotes,
+                    &notifications,
+                );
                 previous_quotes = snapshot
                     .quotes
                     .iter()

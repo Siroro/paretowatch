@@ -69,12 +69,22 @@ impl HistoryTracker {
     }
 
     /// Records a poll. Cheap when nothing changed: quantized diff finds no
-    /// deltas and the store write is skipped entirely.
-    pub(crate) fn record(&mut self, snapshot: &PriceSnapshot, now: DateTime<Utc>) {
+    /// deltas and the store write is skipped entirely. Returns the (slug,
+    /// display name) pairs of models seen for the first time ever — the
+    /// hook feed-wide "new model listed" alerts hang off.
+    pub(crate) fn record(
+        &mut self,
+        snapshot: &PriceSnapshot,
+        now: DateTime<Utc>,
+    ) -> Vec<(String, String)> {
         let ts = now.timestamp();
         let mut events: Vec<(i64, Frame)> = Vec::new();
+        let mut newly_listed = Vec::new();
 
         for q in &snapshot.quotes {
+            if !self.ids.contains_key(&q.model) && self.next_id < MAX_TRACKED_MODELS {
+                newly_listed.push((q.model.clone(), q.display_name.clone()));
+            }
             let Some(id) = self.ensure_added(&mut events, q, ts) else {
                 continue;
             };
@@ -88,6 +98,7 @@ impl HistoryTracker {
         if !events.is_empty() {
             self.store.append(&events);
         }
+        newly_listed
     }
 
     fn ensure_added(&mut self, events: &mut Vec<(i64, Frame)>, q: &Quote, ts: i64) -> Option<u16> {
@@ -408,6 +419,16 @@ mod tests {
         Utc::now() + chrono::Duration::seconds(secs)
     }
 
+    /// Noon-UTC anchored timestamp so "+1 hour later" offsets can never
+    /// straddle an UTC-midnight boundary; running the suite just before
+    /// midnight made once-per-day telemetry assertions flaky.
+    fn day_offset(secs: i64) -> DateTime<Utc> {
+        let days = Utc::now().timestamp().div_euclid(86_400);
+        chrono::TimeZone::timestamp_opt(&Utc, days * 86_400 + 43_200 + secs, 0)
+            .single()
+            .expect("noon-aligned UTC timestamp")
+    }
+
     #[test]
     fn record_persists_and_reloads_identically() {
         let path = temp_path("reload");
@@ -428,6 +449,36 @@ mod tests {
         assert_eq!(s.input[1].1, 2.0);
         assert_eq!(s.output.len(), 1);
         assert_eq!(s.telemetry.len(), 1);
+        let _ = fs::remove_file(&path);
+    }
+
+    #[test]
+    fn record_reports_first_seen_models_once() {
+        let path = temp_path("newly-listed");
+        let _ = fs::remove_file(&path);
+        let mut t = HistoryTracker::open(&path);
+        let first = t.record(
+            &snapshot(vec![quote("a/one", 1.0, 4.0), quote("a/two", 2.0, 8.0)]),
+            now_plus(0),
+        );
+        assert_eq!(first.len(), 2);
+        let second = t.record(
+            &snapshot(vec![quote("a/one", 1.0, 4.0), quote("a/two", 2.0, 8.0)]),
+            now_plus(60),
+        );
+        assert!(second.is_empty());
+        let third = t.record(
+            &snapshot(vec![quote("a/one", 1.0, 4.0), quote("b/three", 1.0, 4.0)]),
+            now_plus(120),
+        );
+        assert_eq!(third, vec![("b/three".into(), "B/THREE".into())]);
+        // A fresh tracker replays the log, so a restart does not re-report.
+        let mut reopened = HistoryTracker::open(&path);
+        let after = reopened.record(
+            &snapshot(vec![quote("a/one", 1.0, 4.0), quote("b/three", 1.0, 4.0)]),
+            now_plus(180),
+        );
+        assert!(after.is_empty());
         let _ = fs::remove_file(&path);
     }
 
@@ -465,10 +516,10 @@ mod tests {
         let _ = fs::remove_file(&path);
         let mut t = HistoryTracker::open(&path);
         let snap = snapshot(vec![quote("a/b", 1.0, 4.0)]);
-        t.record(&snap, now_plus(0));
-        t.record(&snap, now_plus(3600));
+        t.record(&snap, day_offset(0));
+        t.record(&snap, day_offset(3600));
         assert_eq!(t.series("a/b").unwrap().telemetry.len(), 1);
-        t.record(&snap, now_plus(90_000));
+        t.record(&snap, day_offset(90_000));
         assert_eq!(t.series("a/b").unwrap().telemetry.len(), 2);
         let _ = fs::remove_file(&path);
     }
