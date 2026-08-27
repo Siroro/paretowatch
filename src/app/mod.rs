@@ -7,17 +7,16 @@ mod alerts_tab;
 mod pareto_tab;
 mod settings_tab;
 
-use std::collections::{HashMap, VecDeque};
+use std::collections::HashMap;
 use std::sync::Arc;
 use std::sync::Mutex;
 use std::sync::mpsc::{self, Receiver, Sender, TryRecvError};
 
-use chrono::Utc;
+use chrono::{Duration, Utc};
 use eframe::egui;
 
 use crate::alerts::{
-    ListingChange, PriceChangeEvent, detect_delisted, detect_price_changes, frontier_changes,
-    semantic_alert_status,
+    ListingChange, detect_delisted, detect_price_changes, frontier_changes, semantic_alert_status,
 };
 use crate::artificial_analysis_snapshot::artificial_analysis_snapshot;
 use crate::bench::{
@@ -26,16 +25,18 @@ use crate::bench::{
 use crate::fetch::start_worker;
 use crate::history;
 use crate::history::track::blended_series;
-use crate::notifications::{NotificationLog, SharedNotifications, notify};
+use crate::notifications::{
+    NotificationKind, NotificationLog, PriceMoveRecord, SharedNotifications, notify_alert,
+};
 use crate::pareto::{ParetoCache, ParetoCacheKey, joined_points, pareto_frontier};
 use crate::settings_store::{load_settings, save_settings};
 #[cfg(not(target_os = "linux"))]
 use crate::tray::create_tray;
 use crate::tray::{UiCommand, install_tray_event_handlers};
 use crate::types::{
-    ANY_MODEL, AlertDirection, AlertMode, AlertRule, Benchmark, BenchmarkMetric, BenchmarkSource,
-    ComparisonMode, CostBasis, LiquidityFilter, ModalityFilter, MoveDirection, PriceMetric,
-    PriceSnapshot, Quote, Settings, default_common_scaffold,
+    ANY_MODEL, AlertDirection, AlertMode, AlertRearm, AlertRule, AlertSound, Benchmark,
+    BenchmarkMetric, BenchmarkSource, ComparisonMode, CostBasis, LiquidityFilter, ModalityFilter,
+    MoveDirection, PriceMetric, PriceSnapshot, Quote, Settings, default_common_scaffold,
 };
 use crate::widgets;
 use crate::worker::{WorkerCommand, WorkerMessage};
@@ -65,13 +66,14 @@ pub(crate) struct ParetoWatchApp {
     benchmark_errors: HashMap<BenchmarkSource, String>,
     history: history::HistoryTracker,
     history_ui: history::HistoryUiState,
-    recent_changes: VecDeque<PriceChangeEvent>,
     widgets: widgets::PriceWidgetManager,
     worker_tx: Sender<WorkerCommand>,
     worker_rx: Receiver<WorkerMessage>,
     ui_rx: Receiver<UiCommand>,
     tab: Tab,
     activity_tab: ActivityTab,
+    activity_model_filter: String,
+    activity_kind_filter: Option<NotificationKind>,
     price_metric: PriceMetric,
     cost_basis: CostBasis,
     benchmark_source: BenchmarkSource,
@@ -94,6 +96,10 @@ pub(crate) struct ParetoWatchApp {
     alert_min_move_pct: f64,
     alert_discount_pct: f64,
     alert_healthy_floor: u64,
+    alert_cooldown_minutes: u64,
+    alert_rearm: AlertRearm,
+    alert_sound: AlertSound,
+    editing_alert_id: Option<u64>,
     semantic_alert_state: HashMap<u64, bool>,
     /// Last-known frontier membership (model id → display name) per wildcard
     /// frontier alert, so "any model" rules can diff the set instead of a
@@ -130,7 +136,8 @@ pub(crate) struct ParetoWatchApp {
 impl ParetoWatchApp {
     pub(crate) fn new(cc: &eframe::CreationContext<'_>) -> Self {
         let settings = load_settings().unwrap_or_default();
-        let notifications: SharedNotifications = Arc::new(Mutex::new(NotificationLog::default()));
+        let notifications: SharedNotifications =
+            Arc::new(Mutex::new(NotificationLog::open(&settings)));
         let (worker_tx, worker_rx) = start_worker(
             cc.egui_ctx.clone(),
             settings.clone(),
@@ -159,13 +166,14 @@ impl ParetoWatchApp {
             benchmark_errors: HashMap::new(),
             history: history::HistoryTracker::open(&history::history_log_path()),
             history_ui: history::HistoryUiState::default(),
-            recent_changes: VecDeque::new(),
             widgets: widgets::PriceWidgetManager::default(),
             worker_tx,
             worker_rx,
             ui_rx,
             tab: Tab::Pareto,
             activity_tab: ActivityTab::PriceMoves,
+            activity_model_filter: String::new(),
+            activity_kind_filter: None,
             price_metric: PriceMetric::Blended,
             cost_basis: CostBasis::PerMillion,
             benchmark_source: BenchmarkSource::CompositeAgentic,
@@ -188,6 +196,10 @@ impl ParetoWatchApp {
             alert_min_move_pct: 0.0,
             alert_discount_pct: 50.0,
             alert_healthy_floor: 0,
+            alert_cooldown_minutes: 0,
+            alert_rearm: AlertRearm::ConditionReset,
+            alert_sound: AlertSound::Chime,
+            editing_alert_id: None,
             semantic_alert_state: HashMap::new(),
             semantic_frontier_state: HashMap::new(),
             semantic_leader_state: HashMap::new(),
@@ -224,6 +236,12 @@ impl ParetoWatchApp {
                     let _ = self.worker_tx.send(WorkerCommand::Refresh);
                     self.status = "Refreshing…".into();
                 }
+                UiCommand::MuteOneHour => {
+                    if let Ok(mut log) = self.notifications.lock() {
+                        log.mute_for(Duration::hours(1));
+                    }
+                    self.status = "Alerts muted for 1 hour".into();
+                }
                 UiCommand::Quit => {
                     self.quitting = true;
                     let _ = self.worker_tx.send(WorkerCommand::Quit);
@@ -243,11 +261,22 @@ impl ParetoWatchApp {
                 Ok(WorkerMessage::Prices(Ok(snapshot))) => {
                     first_price_poll = self.price_snapshot.is_none();
                     if let Some(previous) = &self.price_snapshot {
-                        for change in detect_price_changes(previous, &snapshot, &self.settings) {
-                            self.recent_changes.push_front(change);
-                        }
-                        while self.recent_changes.len() > 80 {
-                            self.recent_changes.pop_back();
+                        let changes = detect_price_changes(previous, &snapshot, &self.settings);
+                        if let Ok(mut log) = self.notifications.lock() {
+                            for change in changes {
+                                log.push_price_move(PriceMoveRecord {
+                                    model: change.model,
+                                    display_name: change.display_name,
+                                    at: change.at,
+                                    old_blended: change.old_blended,
+                                    new_blended: change.new_blended,
+                                    old_input: change.old_input,
+                                    new_input: change.new_input,
+                                    old_output: change.old_output,
+                                    new_output: change.new_output,
+                                    source: change.source.to_owned(),
+                                });
+                            }
                         }
                         delisted = detect_delisted(previous, &snapshot, &self.settings);
                     }
@@ -367,8 +396,11 @@ impl ParetoWatchApp {
             } else {
                 String::new()
             };
-            notify(
+            notify_alert(
                 &notifications,
+                alert,
+                NotificationKind::Price,
+                Some(&quote.model),
                 &format!("▽ {} all-time low", quote.display_name),
                 &format!(
                     "Blended ${:.6}/1M — previous low ${:.6}/1M{pct}\nInput ${:.4} · Output ${:.4}",
@@ -394,14 +426,16 @@ impl ParetoWatchApp {
             .settings
             .alerts
             .iter()
-            .any(|a| a.enabled && a.mode == AlertMode::NewModelListed);
+            .filter(|a| a.enabled && a.mode == AlertMode::NewModelListed)
+            .collect::<Vec<_>>();
         let watch_delisted = self
             .settings
             .alerts
             .iter()
-            .any(|a| a.enabled && a.mode == AlertMode::ModelDelisted);
+            .filter(|a| a.enabled && a.mode == AlertMode::ModelDelisted)
+            .collect::<Vec<_>>();
 
-        if watch_new && !newly_listed.is_empty() {
+        if !watch_new.is_empty() && !newly_listed.is_empty() {
             let quotes = self.price_snapshot.as_ref().map(|s| &s.quotes);
             let lookup =
                 |slug: &str| quotes.and_then(|quotes| quotes.iter().find(|q| q.model == slug));
@@ -446,10 +480,20 @@ impl ParetoWatchApp {
                     .join("\n");
                 (format!("✚ {} new models listed", newly_listed.len()), lines)
             };
-            notify(&self.notifications, &summary, &body);
+            let model = (newly_listed.len() == 1).then(|| newly_listed[0].0.as_str());
+            for alert in watch_new {
+                notify_alert(
+                    &self.notifications,
+                    alert,
+                    NotificationKind::Listing,
+                    model,
+                    &summary,
+                    &body,
+                );
+            }
         }
 
-        if watch_delisted && !delisted.is_empty() {
+        if !watch_delisted.is_empty() && !delisted.is_empty() {
             let (summary, body) = if delisted.len() == 1 {
                 (
                     format!("✖ Model delisted: {}", delisted[0].display_name),
@@ -466,7 +510,16 @@ impl ParetoWatchApp {
                     .join("\n");
                 (format!("✖ {} models delisted", delisted.len()), lines)
             };
-            notify(&self.notifications, &summary, &body);
+            for alert in watch_delisted {
+                notify_alert(
+                    &self.notifications,
+                    alert,
+                    NotificationKind::Listing,
+                    None,
+                    &summary,
+                    &body,
+                );
+            }
         }
     }
 
@@ -829,7 +882,14 @@ impl ParetoWatchApp {
                             ),
                             (None, None) => unreachable!("leader unchanged"),
                         };
-                        notify(&notifications, &summary, &body);
+                        notify_alert(
+                            &notifications,
+                            &alert,
+                            NotificationKind::Frontier,
+                            current.as_deref(),
+                            &summary,
+                            &body,
+                        );
                     }
                     self.semantic_leader_state.insert(alert.id, current);
                     continue;
@@ -922,7 +982,14 @@ impl ParetoWatchApp {
                         }
                         _ => unreachable!("wildcard frontier is only entered for frontier modes"),
                     };
-                    notify(&notifications, &summary, &body);
+                    notify_alert(
+                        &notifications,
+                        &alert,
+                        NotificationKind::Frontier,
+                        None,
+                        &summary,
+                        &body,
+                    );
                 }
                 self.semantic_frontier_state.insert(alert.id, membership);
                 continue;
@@ -955,7 +1022,14 @@ impl ParetoWatchApp {
                 self.semantic_alert_state.insert(alert.id, condition);
                 continue;
             };
-            if condition && !previous {
+            let repeat_ready = condition
+                && previous
+                && alert.rearm == AlertRearm::AfterCooldown
+                && notifications
+                    .lock()
+                    .map(|log| log.ready_for_repeat(&alert))
+                    .unwrap_or(false);
+            if condition && (!previous || repeat_ready) {
                 let (summary, body) = match alert.mode {
                     AlertMode::EntersFrontier => (
                         format!("◆ {} entered the Pareto frontier", target.model),
@@ -1007,7 +1081,14 @@ impl ParetoWatchApp {
                     | AlertMode::NewModelListed
                     | AlertMode::ModelDelisted => unreachable!(),
                 };
-                notify(&notifications, &summary, &body);
+                notify_alert(
+                    &notifications,
+                    &alert,
+                    NotificationKind::Frontier,
+                    Some(&alert.model),
+                    &summary,
+                    &body,
+                );
             }
             self.semantic_alert_state.insert(alert.id, condition);
         }
@@ -1043,6 +1124,9 @@ impl ParetoWatchApp {
             .retain(|id, _| valid_ids.contains(id));
         self.alert_status_cache
             .retain(|id, _| valid_ids.contains(id));
+        if let Ok(mut log) = self.notifications.lock() {
+            log.update_settings(&self.settings);
+        }
         let _ = self
             .worker_tx
             .send(WorkerCommand::UpdateSettings(self.settings.clone()));

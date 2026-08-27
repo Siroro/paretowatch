@@ -7,15 +7,16 @@ use std::collections::{HashMap, HashSet};
 use chrono::{DateTime, Utc};
 
 use crate::bench::benchmarks_for_source;
-use crate::notifications::{SharedNotifications, notify};
+use crate::notifications::{NotificationKind, SharedNotifications, notify_alert};
 use crate::pareto::{JoinedPoint, joined_points, pareto_frontier};
 use crate::types::{
-    ANY_MODEL, AlertDirection, AlertMode, AlertRule, Benchmark, BenchmarkMetric, BenchmarkSource,
-    MoveDirection, PriceMetric, PriceSnapshot, Quote, Settings,
+    ANY_MODEL, AlertDirection, AlertMode, AlertRearm, AlertRule, Benchmark, BenchmarkMetric,
+    BenchmarkSource, MoveDirection, PriceMetric, PriceSnapshot, Quote, Settings,
 };
 
 #[derive(Debug, Clone)]
 pub(crate) struct PriceChangeEvent {
+    pub(crate) model: String,
     pub(crate) display_name: String,
     pub(crate) at: DateTime<Utc>,
     pub(crate) old_blended: f64,
@@ -30,14 +31,6 @@ pub(crate) struct PriceChangeEvent {
 impl PriceChangeEvent {
     pub(crate) fn delta(&self) -> f64 {
         self.new_blended - self.old_blended
-    }
-
-    pub(crate) fn percent_delta(&self) -> Option<f64> {
-        if self.old_blended.abs() <= f64::EPSILON {
-            None
-        } else {
-            Some((self.new_blended - self.old_blended) / self.old_blended * 100.0)
-        }
     }
 }
 pub(crate) fn semantic_alert_status(
@@ -212,8 +205,11 @@ pub(crate) fn evaluate_alerts(
             } else {
                 "price matrix fallback"
             };
-            notify(
+            notify_alert(
                 notifications,
+                alert,
+                NotificationKind::Price,
+                Some(&quote.model),
                 &format!(
                     "{arrow} {} {}price {direction}{pct}",
                     quote.display_name, leg
@@ -240,15 +236,18 @@ pub(crate) fn evaluate_alerts(
                 .discount_pct
                 .is_some_and(|pct| pct >= alert.discount_threshold_pct);
             let previous = state.get(&alert.id).copied().unwrap_or(false);
-            if condition && !previous {
+            if should_fire_level(alert, condition, previous, notifications) {
                 let pct = quote.discount_pct.unwrap_or_default();
                 let was = previous_quotes
                     .get(&alert.model)
                     .and_then(|q| q.discount_pct)
                     .map(|old| format!(" · was {old:.0}%"))
                     .unwrap_or_default();
-                notify(
+                notify_alert(
                     notifications,
+                    alert,
+                    NotificationKind::Discount,
+                    Some(&quote.model),
                     &format!("％ {} discount {:.0}%", quote.display_name, pct),
                     &format!(
                         "Live market discount is {:.0}% (alert at {}%).{was}\n{} healthy sellers",
@@ -269,10 +268,13 @@ pub(crate) fn evaluate_alerts(
                 .healthy_seller_count
                 .is_some_and(|count| count <= alert.healthy_seller_floor);
             let previous = state.get(&alert.id).copied().unwrap_or(false);
-            if condition && !previous {
+            if should_fire_level(alert, condition, previous, notifications) {
                 let count = quote.healthy_seller_count.unwrap_or_default();
-                notify(
+                notify_alert(
                     notifications,
+                    alert,
+                    NotificationKind::SellerHealth,
+                    Some(&quote.model),
                     &format!("⚠ {} seller health", quote.display_name),
                     &format!(
                         "Only {count} healthy sellers left (alert at ≤ {}).\n{} total sellers · live market",
@@ -296,14 +298,17 @@ pub(crate) fn evaluate_alerts(
             AlertDirection::AboveOrEqual => price >= alert.threshold,
         };
         let previous = state.get(&alert.id).copied().unwrap_or(false);
-        if condition && !previous {
+        if should_fire_level(alert, condition, previous, notifications) {
             let source = if quote.live_market {
                 "live market"
             } else {
                 "price matrix fallback"
             };
-            notify(
+            notify_alert(
                 notifications,
+                alert,
+                NotificationKind::Price,
+                Some(&quote.model),
                 "ParetoWatch price alert",
                 &format!(
                     "{} {} is ${:.4}/1M — {} ${:.4} ({}).",
@@ -318,6 +323,27 @@ pub(crate) fn evaluate_alerts(
         }
         state.insert(alert.id, condition);
     }
+}
+
+fn should_fire_level(
+    alert: &AlertRule,
+    condition: bool,
+    previous: bool,
+    notifications: &SharedNotifications,
+) -> bool {
+    if !condition {
+        return false;
+    }
+    if !previous {
+        return true;
+    }
+    if alert.rearm != AlertRearm::AfterCooldown {
+        return false;
+    }
+    notifications
+        .lock()
+        .map(|log| log.ready_for_repeat(alert))
+        .unwrap_or(false)
 }
 
 pub(crate) fn prices_differ(a: f64, b: f64) -> bool {
@@ -507,6 +533,7 @@ pub(crate) fn detect_price_changes(
             continue;
         }
         changes.push(PriceChangeEvent {
+            model: new.model.clone(),
             display_name: new.display_name.clone(),
             at: current.fetched_at,
             old_blended: old.price(
@@ -565,6 +592,9 @@ mod tests {
             move_direction,
             discount_threshold_pct: crate::types::default_discount_threshold(),
             healthy_seller_floor: 0,
+            cooldown_minutes: 0,
+            rearm: AlertRearm::ConditionReset,
+            sound: crate::types::AlertSound::Chime,
         }
     }
 
@@ -608,7 +638,9 @@ mod tests {
         let settings = Settings::default();
         let old = snapshot(vec![test_quote("model-a", 1.0, true)], "test");
         let changed = snapshot(vec![test_quote("model-a", 0.9, true)], "test");
-        assert_eq!(detect_price_changes(&old, &changed, &settings).len(), 1);
+        let changes = detect_price_changes(&old, &changed, &settings);
+        assert_eq!(changes.len(), 1);
+        assert_eq!(changes[0].model, "model-a");
         let fallback = snapshot(vec![test_quote("model-a", 0.8, false)], "test");
         assert!(detect_price_changes(&changed, &fallback, &settings).is_empty());
     }

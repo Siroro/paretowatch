@@ -74,6 +74,48 @@ pub(crate) enum MoveDirection {
     Down,
 }
 
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
+pub(crate) enum AlertSound {
+    None,
+    Soft,
+    #[default]
+    Chime,
+    Urgent,
+}
+
+impl AlertSound {
+    pub(crate) const ALL: [Self; 4] = [Self::None, Self::Soft, Self::Chime, Self::Urgent];
+
+    pub(crate) fn label(self) -> &'static str {
+        match self {
+            Self::None => "Silent",
+            Self::Soft => "Soft",
+            Self::Chime => "Chime",
+            Self::Urgent => "Urgent",
+        }
+    }
+}
+
+/// Whether a level-triggered alert must become false before it can fire again,
+/// or may repeat while true once its cooldown has elapsed.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
+pub(crate) enum AlertRearm {
+    #[default]
+    ConditionReset,
+    AfterCooldown,
+}
+
+impl AlertRearm {
+    pub(crate) const ALL: [Self; 2] = [Self::ConditionReset, Self::AfterCooldown];
+
+    pub(crate) fn label(self) -> &'static str {
+        match self {
+            Self::ConditionReset => "After condition resets",
+            Self::AfterCooldown => "After cooldown",
+        }
+    }
+}
+
 impl MoveDirection {
     pub(crate) fn label(self) -> &'static str {
         match self {
@@ -475,6 +517,15 @@ pub(crate) struct AlertRule {
     /// Seller-health mode: fire when healthy sellers fall to or below this.
     #[serde(default)]
     pub(crate) healthy_seller_floor: u64,
+    /// Minimum delay between delivered notifications for this rule.
+    #[serde(default)]
+    pub(crate) cooldown_minutes: u64,
+    /// How a level-triggered condition becomes eligible to fire again.
+    #[serde(default)]
+    pub(crate) rearm: AlertRearm,
+    /// Optional embedded sound played in addition to the desktop toast.
+    #[serde(default)]
+    pub(crate) sound: AlertSound,
 }
 
 pub(crate) fn default_common_scaffold() -> String {
@@ -503,6 +554,13 @@ pub(crate) struct Settings {
     /// Base text size for the floating Pinned Prices window; every size in
     /// that window scales from it (10 is the original hard-coded look).
     pub(crate) pinned_price_font_size: f32,
+    /// Global quiet-hours gate. Alert events are still written to Activity,
+    /// but desktop toasts/audio are suppressed during the configured window.
+    pub(crate) quiet_hours_enabled: bool,
+    /// Local wall-clock hour (0-23) when quiet hours begin.
+    pub(crate) quiet_hours_start: u8,
+    /// Local wall-clock hour (0-23) when quiet hours end.
+    pub(crate) quiet_hours_end: u8,
 }
 
 impl Default for Settings {
@@ -515,6 +573,9 @@ impl Default for Settings {
             include_cache_read_in_discount: false,
             alerts: vec![],
             pinned_price_font_size: 10.0,
+            quiet_hours_enabled: false,
+            quiet_hours_start: 22,
+            quiet_hours_end: 7,
         }
     }
 }
@@ -713,6 +774,9 @@ mod tests {
         assert_eq!(alert.common_scaffold, default_common_scaffold());
         assert_eq!(alert.discount_threshold_pct, default_discount_threshold());
         assert_eq!(alert.healthy_seller_floor, 0);
+        assert_eq!(alert.cooldown_minutes, 0);
+        assert_eq!(alert.rearm, AlertRearm::ConditionReset);
+        assert_eq!(alert.sound, AlertSound::Chime);
     }
 
     #[test]

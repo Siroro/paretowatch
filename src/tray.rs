@@ -11,6 +11,7 @@ use tray_icon::{
 
 const MENU_SHOW: &str = "paretowatch_show";
 const MENU_REFRESH: &str = "paretowatch_refresh";
+const MENU_MUTE_HOUR: &str = "paretowatch_mute_hour";
 const MENU_QUIT: &str = "paretowatch_quit";
 
 #[derive(Debug)]
@@ -18,6 +19,7 @@ pub(crate) enum UiCommand {
     Toggle,
     Show,
     Refresh,
+    MuteOneHour,
     Quit,
 }
 
@@ -45,6 +47,7 @@ pub(crate) fn install_tray_event_handlers(ctx: egui::Context, ui_tx: Sender<UiCo
         let cmd = match id {
             MENU_SHOW => Some(UiCommand::Show),
             MENU_REFRESH => Some(UiCommand::Refresh),
+            MENU_MUTE_HOUR => Some(UiCommand::MuteOneHour),
             MENU_QUIT => Some(UiCommand::Quit),
             _ => None,
         };
@@ -59,9 +62,10 @@ pub(crate) fn create_tray() -> Result<TrayIcon> {
     let menu = Menu::new();
     let show = MenuItem::with_id(MENU_SHOW, "Show ParetoWatch", true, None);
     let refresh = MenuItem::with_id(MENU_REFRESH, "Refresh now", true, None);
+    let mute_hour = MenuItem::with_id(MENU_MUTE_HOUR, "Mute alerts for 1 hour", true, None);
     let separator = PredefinedMenuItem::separator();
     let quit = MenuItem::with_id(MENU_QUIT, "Quit", true, None);
-    menu.append_items(&[&show, &refresh, &separator, &quit])?;
+    menu.append_items(&[&show, &refresh, &mute_hour, &separator, &quit])?;
 
     let tray = TrayIconBuilder::new()
         .with_tooltip("ParetoWatch")

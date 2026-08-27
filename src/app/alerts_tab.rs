@@ -3,9 +3,10 @@
 use eframe::egui;
 
 use crate::alerts::next_alert_id;
+use crate::notifications::test_alert;
 use crate::types::{
-    ANY_MODEL, AlertDirection, AlertMode, AlertRule, BenchmarkMetric, BenchmarkSource,
-    ComparisonMode, CostBasis, LiquidityFilter, MoveDirection, PriceMetric,
+    ANY_MODEL, AlertDirection, AlertMode, AlertRearm, AlertRule, AlertSound, BenchmarkMetric,
+    BenchmarkSource, ComparisonMode, CostBasis, LiquidityFilter, MoveDirection, PriceMetric,
 };
 
 use super::ParetoWatchApp;
@@ -21,6 +22,9 @@ impl ParetoWatchApp {
         // Deferred mutations: performed after the quote borrow below ends.
         let mut add_alert = false;
         let mut remove_id = None;
+        let mut edit_rule = None;
+        let mut duplicate_rule = None;
+        let mut test_rule = None;
         let mut changed = false;
 
         {
@@ -33,7 +37,11 @@ impl ParetoWatchApp {
                 .unwrap_or(&[]);
 
             ui.group(|ui| {
-                ui.strong("New alert");
+                ui.strong(if self.editing_alert_id.is_some() {
+                    "Edit alert"
+                } else {
+                    "New alert"
+                });
                 // The wildcard sentinel only makes sense on the modes that
                 // diff a population (frontier membership, cheapest lead);
                 // switching modes must not leave it selected where no rule
@@ -310,15 +318,52 @@ impl ParetoWatchApp {
                     });
                 }
 
-                if ui
-                    .add_enabled(
-                        !self.alert_model.is_empty() || self.alert_mode.feed_wide(),
-                        egui::Button::new("Add alert"),
-                    )
-                    .clicked()
-                {
-                    add_alert = true;
-                }
+                ui.horizontal_wrapped(|ui| {
+                    ui.label("Sound:");
+                    egui::ComboBox::from_id_salt("alert_sound")
+                        .selected_text(self.alert_sound.label())
+                        .show_ui(ui, |ui| {
+                            for sound in AlertSound::ALL {
+                                ui.selectable_value(&mut self.alert_sound, sound, sound.label());
+                            }
+                        });
+                    ui.separator();
+                    ui.label("Cooldown");
+                    ui.add(
+                        egui::DragValue::new(&mut self.alert_cooldown_minutes)
+                            .speed(1.0)
+                            .range(0..=10_080u64)
+                            .suffix(" min"),
+                    );
+                    ui.separator();
+                    ui.label("Re-arm:");
+                    egui::ComboBox::from_id_salt("alert_rearm")
+                        .selected_text(self.alert_rearm.label())
+                        .show_ui(ui, |ui| {
+                            for rearm in AlertRearm::ALL {
+                                ui.selectable_value(&mut self.alert_rearm, rearm, rearm.label());
+                            }
+                        });
+                });
+
+                ui.horizontal(|ui| {
+                    if ui
+                        .add_enabled(
+                            !self.alert_model.is_empty() || self.alert_mode.feed_wide(),
+                            egui::Button::new(if self.editing_alert_id.is_some() {
+                                "Save changes"
+                            } else {
+                                "Add alert"
+                            }),
+                        )
+                        .clicked()
+                    {
+                        add_alert = true;
+                    }
+                    if self.editing_alert_id.is_some() && ui.button("Cancel edit").clicked() {
+                        self.editing_alert_id = None;
+                    }
+                });
             });
 
             ui.add_space(10.0);
@@ -332,6 +377,8 @@ impl ParetoWatchApp {
                 ui.strong("Model");
                 ui.strong("Rule");
                 ui.strong("Current");
+                ui.strong("Delivery");
+                ui.strong("Actions");
                 ui.end_row();
 
                 for (index, alert) in self.settings.alerts.iter_mut().enumerate() {
@@ -435,17 +482,56 @@ impl ParetoWatchApp {
                         statuses.get(index).cloned().unwrap_or_default()
                     };
                     ui.label(current_text);
-                    if ui.small_button("Delete").clicked() {
-                        remove_id = Some(alert.id);
-                    }
+                    ui.label(format!(
+                        "{} · {}m",
+                        alert.sound.label(),
+                        alert.cooldown_minutes
+                    ));
+                    ui.horizontal(|ui| {
+                        if ui.small_button("Edit").clicked() {
+                            edit_rule = Some(alert.clone());
+                        }
+                        if ui.small_button("Duplicate").clicked() {
+                            duplicate_rule = Some(alert.clone());
+                        }
+                        if ui.small_button("Test").clicked() {
+                            test_rule = Some(alert.clone());
+                        }
+                        if ui.small_button("Delete").clicked() {
+                            remove_id = Some(alert.id);
+                        }
+                    });
                     ui.end_row();
                 }
             });
         }
 
+        if let Some(alert) = edit_rule {
+            self.load_alert_into_editor(&alert);
+        }
+        if let Some(mut alert) = duplicate_rule {
+            alert.id = next_alert_id(&self.settings.alerts);
+            self.settings.alerts.push(alert);
+            changed = true;
+        }
+        if let Some(alert) = test_rule {
+            test_alert(
+                &self.notifications,
+                &alert,
+                (!alert.mode.feed_wide()).then_some(alert.model.as_str()),
+            );
+        }
         if add_alert {
-            self.settings.alerts.push(AlertRule {
-                id: next_alert_id(&self.settings.alerts),
+            let id = self
+                .editing_alert_id
+                .unwrap_or_else(|| next_alert_id(&self.settings.alerts));
+            let enabled = self
+                .editing_alert_id
+                .and_then(|edit_id| self.settings.alerts.iter().find(|a| a.id == edit_id))
+                .map(|alert| alert.enabled)
+                .unwrap_or(true);
+            let new_rule = AlertRule {
+                id,
                 model: if self.alert_mode.feed_wide() {
                     ANY_MODEL.into()
                 } else {
@@ -460,7 +546,7 @@ impl ParetoWatchApp {
                 },
                 direction: self.alert_direction,
                 threshold: self.alert_threshold,
-                enabled: true,
+                enabled,
                 benchmark_source: self.benchmark_source,
                 benchmark_metric: self.benchmark_metric,
                 comparison_mode: self.comparison_mode,
@@ -471,7 +557,18 @@ impl ParetoWatchApp {
                 move_direction: self.alert_move_direction,
                 discount_threshold_pct: self.alert_discount_pct,
                 healthy_seller_floor: self.alert_healthy_floor,
-            });
+                cooldown_minutes: self.alert_cooldown_minutes,
+                rearm: self.alert_rearm,
+                sound: self.alert_sound,
+            };
+            if let Some(edit_id) = self.editing_alert_id {
+                if let Some(slot) = self.settings.alerts.iter_mut().find(|a| a.id == edit_id) {
+                    *slot = new_rule;
+                }
+                self.editing_alert_id = None;
+            } else {
+                self.settings.alerts.push(new_rule);
+            }
             changed = true;
         }
         if let Some(id) = remove_id {
@@ -486,5 +583,28 @@ impl ParetoWatchApp {
         }
 
         ui.add_space(8.0);
+    }
+
+    fn load_alert_into_editor(&mut self, alert: &AlertRule) {
+        self.editing_alert_id = Some(alert.id);
+        self.alert_model = alert.model.clone();
+        self.alert_mode = alert.mode;
+        self.alert_metric = alert.metric;
+        self.alert_cost_basis = alert.cost_basis;
+        self.alert_direction = alert.direction;
+        self.alert_threshold = alert.threshold;
+        self.benchmark_source = alert.benchmark_source;
+        self.benchmark_metric = alert.benchmark_metric;
+        self.comparison_mode = alert.comparison_mode;
+        self.common_scaffold = alert.common_scaffold.clone();
+        self.liquidity_filter = alert.liquidity_filter;
+        self.alert_score_threshold = alert.score_threshold;
+        self.alert_min_move_pct = alert.min_move_pct;
+        self.alert_move_direction = alert.move_direction;
+        self.alert_discount_pct = alert.discount_threshold_pct;
+        self.alert_healthy_floor = alert.healthy_seller_floor;
+        self.alert_cooldown_minutes = alert.cooldown_minutes;
+        self.alert_rearm = alert.rearm;
+        self.alert_sound = alert.sound;
     }
 }

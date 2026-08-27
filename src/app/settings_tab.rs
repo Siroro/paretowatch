@@ -124,6 +124,64 @@ impl ParetoWatchApp {
         }
 
         ui.add_space(10.0);
+        ui.heading("Alert delivery");
+        if ui
+            .checkbox(
+                &mut self.settings.quiet_hours_enabled,
+                "Suppress desktop notifications and audio during quiet hours",
+            )
+            .changed()
+        {
+            self.settings_dirty = true;
+        }
+        ui.horizontal(|ui| {
+            ui.add_enabled_ui(self.settings.quiet_hours_enabled, |ui| {
+                ui.label("Quiet from");
+                if ui
+                    .add(
+                        egui::DragValue::new(&mut self.settings.quiet_hours_start)
+                            .range(0..=23u8)
+                            .suffix(":00"),
+                    )
+                    .changed()
+                {
+                    self.settings_dirty = true;
+                }
+                ui.label("until");
+                if ui
+                    .add(
+                        egui::DragValue::new(&mut self.settings.quiet_hours_end)
+                            .range(0..=23u8)
+                            .suffix(":00"),
+                    )
+                    .changed()
+                {
+                    self.settings_dirty = true;
+                }
+                ui.label("local time");
+            });
+        });
+        ui.small("Alert events are still written to Activity while muted or in quiet hours.");
+        let muted_until = self
+            .notifications
+            .lock()
+            .ok()
+            .and_then(|log| log.muted_until());
+        if let Some(until) = muted_until {
+            ui.horizontal(|ui| {
+                ui.small(format!(
+                    "Temporarily muted until {} local time.",
+                    until.with_timezone(&chrono::Local).format("%H:%M")
+                ));
+                if ui.small_button("Unmute now").clicked()
+                    && let Ok(mut log) = self.notifications.lock()
+                {
+                    log.unmute();
+                }
+            });
+        }
+
+        ui.add_space(10.0);
         ui.heading("Feed status");
         if let Some(snapshot) = &self.price_snapshot {
             ui.label(format!(
