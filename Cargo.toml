@@ -1,6 +1,6 @@
 [package]
 name = "paretowatch"
-version = "0.12.0"
+version = "0.12.1"
 edition = "2024"
 description = "Lightweight native tray dashboard for Surplus Intelligence pricing and AI model Pareto frontiers"
 license = "MIT"
