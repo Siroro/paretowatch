@@ -8,7 +8,7 @@ use eframe::egui;
 use egui::{ViewportClass, ViewportCommand, ViewportId, WindowLevel};
 
 use crate::alerts::prices_differ;
-use crate::theme::{creator_color, discount_color};
+use crate::theme::{PRICE_DOWN, PRICE_UP, creator_color, discount_color};
 use crate::types::{LiquidityFilter, PriceSnapshot, Quote, Settings, blended_price};
 
 /// The pinned row's prices under the active market-quality filter: the
@@ -49,6 +49,9 @@ const DPI_ROUNDING_GUARD: f32 = 2.0;
 const SIZE_MATCH_EPSILON: f32 = 1.0;
 const MAX_VISIBLE_ROWS: usize = 6;
 const FLASH_SECS: f64 = 1.6;
+/// How long a pinned row shows its ▲/▼ last-move arrow next to the price.
+/// Transient on purpose: a permanent arrow would crowd the fixed-width row.
+const MOVE_ARROW_SECS: i64 = 600;
 const RAISE_INTERVAL: Duration = Duration::from_secs(1);
 
 fn font_scale(font_size: f32) -> f32 {
@@ -703,6 +706,21 @@ fn render_row(ui: &mut egui::Ui, row: &RowFeed, font_size: f32, remove: &mut Opt
             );
             // The change trail never owns visible space; it lives on hover so
             // the discount label below cannot be displaced by tiny jitters.
+            // Only the compact direction arrow gets visible space, briefly.
+            if let Some(change) = row.last_change
+                && (Utc::now() - change.at).num_seconds() < MOVE_ARROW_SECS
+            {
+                let (arrow, color) = if change.new_blended > change.old_blended {
+                    ("▲", PRICE_UP)
+                } else {
+                    ("▼", PRICE_DOWN)
+                };
+                ui.label(
+                    egui::RichText::new(arrow)
+                        .size(scaled(8.0, font_size))
+                        .color(color),
+                );
+            }
             if let Some(change) = row.last_change {
                 price.on_hover_text(format!(
                     "${:.4} → ${:.4} · {}",

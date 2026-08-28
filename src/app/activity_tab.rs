@@ -3,6 +3,7 @@
 use eframe::egui;
 
 use crate::notifications::NotificationKind;
+use crate::theme::{PRICE_DOWN, PRICE_UP};
 
 use super::{ActivityTab, ParetoWatchApp};
 
@@ -41,7 +42,7 @@ impl ParetoWatchApp {
                 .hint_text("Filter model…")
                 .desired_width(220.0),
         );
-        if !self.activity_model_filter.is_empty() && ui.small_button("Clear filter").clicked() {
+        if !self.activity_model_filter.is_empty() && ui.small_button("✗ Clear filter").clicked() {
             self.activity_model_filter.clear();
         }
     }
@@ -52,7 +53,7 @@ impl ParetoWatchApp {
             ui.heading("Price moves");
             ui.label(egui::RichText::new("Persistent · newest first · up to 2,000").weak());
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                clear = ui.small_button("Clear price moves").clicked();
+                clear = ui.small_button("✗ Clear price moves").clicked();
             });
         });
         ui.horizontal(|ui| self.activity_model_filter(ui));
@@ -94,9 +95,9 @@ impl ParetoWatchApp {
                 for change in &moves {
                     let delta = change.delta();
                     let (arrow, color) = if delta < 0.0 {
-                        ("↓", egui::Color32::from_rgb(54, 179, 126))
+                        ("↓", PRICE_DOWN)
                     } else if delta > 0.0 {
-                        ("↑", egui::Color32::from_rgb(224, 86, 86))
+                        ("↑", PRICE_UP)
                     } else {
                         ("↔", ui.visuals().text_color())
                     };
@@ -148,7 +149,7 @@ impl ParetoWatchApp {
             ui.heading("Alert activity");
             ui.label(egui::RichText::new("Persistent · newest first · up to 2,000").weak());
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                clear = ui.small_button("Clear alert activity").clicked();
+                clear = ui.small_button("✗ Clear alert activity").clicked();
             });
         });
         ui.horizontal_wrapped(|ui| {

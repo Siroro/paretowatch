@@ -10,7 +10,9 @@ use crate::artificial_analysis_snapshot::ARTIFICIAL_ANALYSIS_SNAPSHOT_DATE;
 use crate::bench::{format_percentile, normalize};
 use crate::format::{format_compact_number, format_price_tick};
 use crate::pareto::{JoinedPoint, pareto_search_matches, price_from_plot_x, price_to_plot_x};
-use crate::theme::{creator_color, discount_color, free_offer_badge, group_label};
+use crate::theme::{
+    PRICE_DOWN, PRICE_UP, creator_color, discount_color, free_offer_badge, group_label,
+};
 use crate::types::{
     ANY_MODEL, AlertMode, BenchmarkMetric, BenchmarkSource, ComparisonMode, CostBasis,
     LiquidityFilter, ModalityFilter, PriceMetric,
@@ -160,8 +162,19 @@ impl ParetoWatchApp {
                 }
                 if self.settings_dirty && ui.button("Apply weights").clicked() {
                     self.save_and_push_settings();
+                    self.weights_applied_at = Some(ui.input(|i| i.time));
                     chart_axes_changed = true;
                     let _ = self.worker_tx.send(WorkerCommand::Refresh);
+                }
+                if let Some(at) = self.weights_applied_at {
+                    const APPLIED_SECS: f64 = 2.5;
+                    let age = ui.input(|i| i.time) - at;
+                    if age < APPLIED_SECS {
+                        ui.colored_label(PRICE_DOWN, "✓ Applied");
+                        ui.ctx().request_repaint_after(std::time::Duration::from_secs_f64(
+                            (APPLIED_SECS - age).max(0.05),
+                        ));
+                    }
                 }
             }
         });
@@ -263,7 +276,7 @@ impl ParetoWatchApp {
                 .desired_width(220.0)
                 .clip_text(true);
             ui.add(search_edit);
-            if !self.pareto_search.trim().is_empty() && ui.small_button("Clear search").clicked() {
+            if !self.pareto_search.trim().is_empty() && ui.small_button("✗ Clear search").clicked() {
                 self.pareto_search.clear();
             }
             ui.separator();
@@ -276,7 +289,7 @@ impl ParetoWatchApp {
             {
                 reset_zoom = true;
             }
-            if self.selected_pareto_model.is_some() && ui.small_button("Clear selection").clicked()
+            if self.selected_pareto_model.is_some() && ui.small_button("✗ Clear selection").clicked()
             {
                 self.selected_pareto_model = None;
             }
@@ -937,6 +950,31 @@ impl ParetoWatchApp {
                 self.tab = Tab::Alerts;
             }
         });
+        // Latest recorded blended-price move per frontier model, for the
+        // ▲/▼ arrows next to prices. The log is newest-first, so the first
+        // entry seen per model wins.
+        let latest_moves: HashMap<String, f64> = {
+            let frontier_ids: std::collections::HashSet<&str> =
+                frontier.iter().map(|p| p.model_id.as_str()).collect();
+            self.notifications
+                .lock()
+                .map(|log| {
+                    let mut map = HashMap::new();
+                    for change in log.price_moves() {
+                        if frontier_ids.contains(change.model.as_str())
+                            && !map.contains_key(&change.model)
+                        {
+                            map.insert(change.model.clone(), change.delta());
+                        }
+                    }
+                    map
+                })
+                .unwrap_or_default()
+        };
+        let cheapest = frontier
+            .iter()
+            .map(|p| p.cost)
+            .fold(f64::INFINITY, f64::min);
         egui::Grid::new("frontier_table")
             .striped(true)
             .show(ui, |ui| {
@@ -956,6 +994,14 @@ impl ParetoWatchApp {
                                 .color(creator_color(&p.creator))
                                 .size(11.0),
                         );
+                        if p.cost <= cheapest {
+                            ui.label(
+                                egui::RichText::new("★")
+                                    .size(10.0)
+                                    .color(egui::Color32::from_rgb(246, 190, 80)),
+                            )
+                            .on_hover_text("Cheapest model on the current frontier");
+                        }
                         let label = if p.free_offer_listed {
                             format!("{}*", p.model)
                         } else {
@@ -974,7 +1020,17 @@ impl ParetoWatchApp {
                             free_offer_badge(ui);
                         }
                     });
-                    ui.label(format!("${:.4}", p.cost));
+                    ui.horizontal(|ui| {
+                        if let Some(delta) = latest_moves.get(&p.model_id) {
+                            let (arrow, color) = if *delta > 0.0 {
+                                ("▲", PRICE_UP)
+                            } else {
+                                ("▼", PRICE_DOWN)
+                            };
+                            ui.label(egui::RichText::new(arrow).size(9.0).color(color));
+                        }
+                        ui.label(format!("${:.4}", p.cost));
+                    });
                     ui.label(format!("{:.1}", p.score));
                     ui.label(if p.live_market {
                         "Surplus market"

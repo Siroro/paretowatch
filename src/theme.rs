@@ -114,6 +114,15 @@ pub(crate) fn group_label(creator: &str) -> &str {
     }
 }
 
+/// Semantic price-move colors (buyer's perspective): a price going up is
+/// red, a price going down is green.
+pub(crate) const PRICE_UP: egui::Color32 = egui::Color32::from_rgb(224, 86, 86);
+pub(crate) const PRICE_DOWN: egui::Color32 = egui::Color32::from_rgb(54, 179, 126);
+
+/// Feed-health colors, reusing the price palette: green healthy, red error.
+pub(crate) const STATUS_OK: egui::Color32 = PRICE_DOWN;
+pub(crate) const STATUS_BAD: egui::Color32 = PRICE_UP;
+
 /// Market-discount label color by magnitude: deep discounts are green,
 /// mid-range ones orange, shallow ones red.
 pub(crate) fn discount_color(discount: f64) -> egui::Color32 {

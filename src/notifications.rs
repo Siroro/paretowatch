@@ -322,23 +322,6 @@ pub(crate) fn notify_alert(
     emit(log, Some(alert), kind, model, summary, body, false);
 }
 
-pub(crate) fn test_alert(log: &SharedNotifications, alert: &AlertRule, model: Option<&str>) {
-    emit(
-        log,
-        Some(alert),
-        NotificationKind::Test,
-        model,
-        "ParetoWatch alert test",
-        &format!(
-            "{} · {} · {} sound",
-            alert.mode.label(),
-            model.unwrap_or("feed-wide"),
-            alert.sound.label()
-        ),
-        true,
-    );
-}
-
 fn emit(
     log: &SharedNotifications,
     alert: Option<&AlertRule>,
@@ -355,7 +338,14 @@ fn emit(
     if !delivered {
         return;
     }
-    let _ = Notification::new().summary(summary).body(body).show();
+    // Windows toasts require an app identity (AUMID); without a registered
+    // Start Menu shortcut this only changes the attribution text, so the
+    // banner reads ParetoWatch instead of the borrowed PowerShell identity.
+    let mut notification = Notification::new();
+    notification.summary(summary).body(body);
+    #[cfg(target_os = "windows")]
+    notification.app_id("ParetoWatch");
+    let _ = notification.show();
     if let Some(alert) = alert {
         play_sound(alert.sound);
     }

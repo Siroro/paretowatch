@@ -3,7 +3,6 @@
 use eframe::egui;
 
 use crate::alerts::next_alert_id;
-use crate::notifications::test_alert;
 use crate::types::{
     ANY_MODEL, AlertDirection, AlertMode, AlertRearm, AlertRule, AlertSound, BenchmarkMetric,
     BenchmarkSource, ComparisonMode, CostBasis, LiquidityFilter, MoveDirection, PriceMetric,
@@ -24,7 +23,6 @@ impl ParetoWatchApp {
         let mut remove_id = None;
         let mut edit_rule = None;
         let mut duplicate_rule = None;
-        let mut test_rule = None;
         let mut changed = false;
 
         {
@@ -40,7 +38,7 @@ impl ParetoWatchApp {
                 ui.strong(if self.editing_alert_id.is_some() {
                     "Edit alert"
                 } else {
-                    "New alert"
+                    "✚ New alert"
                 });
                 // The wildcard sentinel only makes sense on the modes that
                 // diff a population (frontier membership, cheapest lead);
@@ -327,6 +325,13 @@ impl ParetoWatchApp {
                                 ui.selectable_value(&mut self.alert_sound, sound, sound.label());
                             }
                         });
+                    if ui
+                        .small_button("▶")
+                        .on_hover_text("Preview sound")
+                        .clicked()
+                    {
+                        crate::notifications::play_sound(self.alert_sound);
+                    }
                     ui.separator();
                     ui.label("Cooldown");
                     ui.add(
@@ -353,7 +358,7 @@ impl ParetoWatchApp {
                             egui::Button::new(if self.editing_alert_id.is_some() {
                                 "Save changes"
                             } else {
-                                "Add alert"
+                                "✚ Add alert"
                             }),
                         )
                         .clicked()
@@ -494,10 +499,7 @@ impl ParetoWatchApp {
                         if ui.small_button("Duplicate").clicked() {
                             duplicate_rule = Some(alert.clone());
                         }
-                        if ui.small_button("Test").clicked() {
-                            test_rule = Some(alert.clone());
-                        }
-                        if ui.small_button("Delete").clicked() {
+                        if ui.small_button("✗ Delete").clicked() {
                             remove_id = Some(alert.id);
                         }
                     });
@@ -513,13 +515,6 @@ impl ParetoWatchApp {
             alert.id = next_alert_id(&self.settings.alerts);
             self.settings.alerts.push(alert);
             changed = true;
-        }
-        if let Some(alert) = test_rule {
-            test_alert(
-                &self.notifications,
-                &alert,
-                (!alert.mode.feed_wide()).then_some(alert.model.as_str()),
-            );
         }
         if add_alert {
             let id = self

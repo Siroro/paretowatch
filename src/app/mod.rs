@@ -129,12 +129,35 @@ pub(crate) struct ParetoWatchApp {
     is_visible: bool,
     quitting: bool,
     settings_dirty: bool,
+    /// egui clock time of the last "Apply weights" click, for the transient
+    /// ✓ Applied confirmation next to the button.
+    weights_applied_at: Option<f64>,
     #[cfg(not(target_os = "linux"))]
     _tray: Option<TrayIcon>,
 }
 
 impl ParetoWatchApp {
     pub(crate) fn new(cc: &eframe::CreationContext<'_>) -> Self {
+        // egui's default Proportional chain (Ubuntu-Light + emoji fonts) has no
+        // arrows or geometric shapes — those glyphs only exist in Hack, which is
+        // Monospace-only — so ↑ ↓ → ↔ ● ◆ ◇ ▽ rendered as tofu. Append DejaVu
+        // Sans as a last-resort fallback for both families.
+        let mut fonts = egui::FontDefinitions::default();
+        fonts.font_data.insert(
+            "dejavu-sans".to_owned(),
+            std::sync::Arc::new(egui::FontData::from_static(include_bytes!(
+                "../../assets/fonts/DejaVuSans.ttf"
+            ))),
+        );
+        for family in [egui::FontFamily::Proportional, egui::FontFamily::Monospace] {
+            fonts
+                .families
+                .entry(family)
+                .or_default()
+                .push("dejavu-sans".to_owned());
+        }
+        cc.egui_ctx.set_fonts(fonts);
+
         let settings = load_settings().unwrap_or_default();
         let notifications: SharedNotifications =
             Arc::new(Mutex::new(NotificationLog::open(&settings)));
@@ -214,6 +237,7 @@ impl ParetoWatchApp {
             is_visible: true,
             quitting: false,
             settings_dirty: false,
+            weights_applied_at: None,
             #[cfg(not(target_os = "linux"))]
             _tray: tray,
         }
@@ -1139,7 +1163,7 @@ impl ParetoWatchApp {
             ui.separator();
             ui.label(&self.status);
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                if ui.button("Refresh").clicked() {
+                if ui.button("↻").on_hover_text("Refresh now").clicked() {
                     let _ = self.worker_tx.send(WorkerCommand::Refresh);
                     self.status = "Refreshing…".into();
                 }

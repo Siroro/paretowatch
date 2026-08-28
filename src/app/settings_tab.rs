@@ -3,6 +3,7 @@
 use eframe::egui;
 
 use crate::settings_store::config_path;
+use crate::theme::{STATUS_BAD, STATUS_OK};
 use crate::types::BenchmarkSource;
 use crate::widgets::{PINNED_FONT_MAX, PINNED_FONT_MIN};
 use crate::worker::WorkerCommand;
@@ -173,7 +174,7 @@ impl ParetoWatchApp {
                     "Temporarily muted until {} local time.",
                     until.with_timezone(&chrono::Local).format("%H:%M")
                 ));
-                if ui.small_button("Unmute now").clicked()
+                if ui.small_button("🔊 Unmute now").clicked()
                     && let Ok(mut log) = self.notifications.lock()
                 {
                     log.unmute();
@@ -184,33 +185,64 @@ impl ParetoWatchApp {
         ui.add_space(10.0);
         ui.heading("Feed status");
         if let Some(snapshot) = &self.price_snapshot {
-            ui.label(format!(
-                "Base feed: {} · {} priced models",
-                snapshot.base_source,
-                snapshot.quotes.len()
-            ));
-            if snapshot.market_overlay_count > 0 {
-                ui.label(format!(
-                    "Live market: {} quotes",
-                    snapshot.market_overlay_count
-                ));
-            } else if let Some(err) = &snapshot.market_error {
+            ui.horizontal(|ui| {
                 ui.colored_label(
-                    ui.visuals().error_fg_color,
-                    format!("Live market unavailable: {err}"),
+                    if self.last_price_error.is_some() {
+                        STATUS_BAD
+                    } else {
+                        STATUS_OK
+                    },
+                    "●",
                 );
+                ui.label(format!(
+                    "Base feed: {} · {} priced models",
+                    snapshot.base_source,
+                    snapshot.quotes.len()
+                ));
+            });
+            if snapshot.market_overlay_count > 0 {
+                ui.horizontal(|ui| {
+                    ui.colored_label(STATUS_OK, "●");
+                    ui.label(format!(
+                        "Live market: {} quotes",
+                        snapshot.market_overlay_count
+                    ));
+                });
+            } else if let Some(err) = &snapshot.market_error {
+                ui.horizontal(|ui| {
+                    ui.colored_label(STATUS_BAD, "●");
+                    ui.colored_label(
+                        ui.visuals().error_fg_color,
+                        format!("Live market unavailable: {err}"),
+                    );
+                });
             }
         } else {
-            ui.label("Waiting for pricing data…");
+            ui.horizontal(|ui| {
+                ui.colored_label(ui.visuals().weak_text_color(), "○");
+                ui.label("Waiting for pricing data…");
+            });
         }
         if let Some(err) = &self.last_price_error {
-            ui.colored_label(
-                ui.visuals().error_fg_color,
-                format!("Base feed error: {err}"),
-            );
+            ui.horizontal(|ui| {
+                ui.colored_label(STATUS_BAD, "●");
+                ui.colored_label(
+                    ui.visuals().error_fg_color,
+                    format!("Base feed error: {err}"),
+                );
+            });
         }
         for source in BenchmarkSource::display_sources() {
             ui.horizontal(|ui| {
+                // ● green with rows loaded, ● red on fetch error, ○ not
+                // fetched yet.
+                if self.benchmark_errors.get(&source).is_some() {
+                    ui.colored_label(STATUS_BAD, "●");
+                } else if self.benchmark_sets.get(&source).is_some() {
+                    ui.colored_label(STATUS_OK, "●");
+                } else {
+                    ui.colored_label(ui.visuals().weak_text_color(), "○");
+                }
                 ui.hyperlink_to(source.label(), source.source_url());
                 if let Some(rows) = self.benchmark_sets.get(&source) {
                     ui.label(format!("· {} rows", rows.len()));
