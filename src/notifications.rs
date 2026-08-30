@@ -338,14 +338,11 @@ fn emit(
     if !delivered {
         return;
     }
-    // Windows toasts require an app identity (AUMID); without a registered
-    // Start Menu shortcut this only changes the attribution text, so the
-    // banner reads ParetoWatch instead of the borrowed PowerShell identity.
-    let mut notification = Notification::new();
-    notification.summary(summary).body(body);
-    #[cfg(target_os = "windows")]
-    notification.app_id("ParetoWatch");
-    let _ = notification.show();
+    // Windows toasts require a registered app identity (AUMID); passing an
+    // unregistered one like "ParetoWatch" makes the toast silently fail to
+    // display. notify-rust's default borrows PowerShell's registered AUMID,
+    // which works even though the banner says PowerShell.
+    let _ = Notification::new().summary(summary).body(body).show();
     if let Some(alert) = alert {
         play_sound(alert.sound);
     }
