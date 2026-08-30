@@ -16,6 +16,8 @@ mod theme;
 mod tray;
 mod types;
 mod widgets;
+#[cfg(target_os = "windows")]
+mod win_identity;
 mod worker;
 
 use app::ParetoWatchApp;
@@ -24,6 +26,11 @@ use eframe::egui;
 fn main() -> eframe::Result {
     #[cfg(target_os = "linux")]
     tray::spawn_linux_tray();
+
+    // Toast banners need a registered AUMID; register it per-user in the
+    // background so first launch and updates light up without a prompt.
+    #[cfg(target_os = "windows")]
+    std::thread::spawn(win_identity::ensure_registered);
 
     let native_options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()

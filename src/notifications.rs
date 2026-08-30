@@ -338,11 +338,21 @@ fn emit(
     if !delivered {
         return;
     }
-    // Windows toasts require a registered app identity (AUMID); passing an
-    // unregistered one like "ParetoWatch" makes the toast silently fail to
-    // display. notify-rust's default borrows PowerShell's registered AUMID,
-    // which works even though the banner says PowerShell.
-    let _ = Notification::new().summary(summary).body(body).show();
+    // Windows toasts only display for a registered AUMID (app identity).
+    // Startup registers `win_identity::AUMID` per-user, so this is valid from
+    // the first seconds of the first run onward; a toast fired before that
+    // registration lands simply fails to display (silently, by `let _`),
+    // while the alert itself is still recorded and its sound still plays.
+    #[cfg(target_os = "windows")]
+    let notification = {
+        let mut notification = Notification::new();
+        notification.summary(summary).body(body);
+        notification.app_id(crate::win_identity::AUMID);
+        notification
+    };
+    #[cfg(not(target_os = "windows"))]
+    let notification = Notification::new().summary(summary).body(body);
+    let _ = notification.show();
     if let Some(alert) = alert {
         play_sound(alert.sound);
     }
