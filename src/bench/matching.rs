@@ -2,7 +2,7 @@
 //! canonicalization, and the fuzzy join between Surplus quotes and
 //! benchmark rows.
 
-use crate::theme::infer_creator;
+use crate::theme::{canonical_group, infer_creator};
 use crate::types::{Benchmark, Quote};
 
 pub(crate) fn best_benchmark_match<'a>(
@@ -75,34 +75,7 @@ pub(crate) fn creators_compatible(a: &str, b: &str) -> bool {
 }
 
 pub(crate) fn canonical_creator(s: &str) -> String {
-    let n = normalize(s);
-    if n == "z ai" || n == "zai" || n.contains("zhipu") {
-        "zai".into()
-    } else if n == "open ai" || n == "openai" {
-        "openai".into()
-    } else if n == "x ai" || n == "xai" {
-        "xai".into()
-    } else if n.contains("anthropic") {
-        "anthropic".into()
-    } else if n.contains("alibaba") {
-        "alibaba".into()
-    } else if n.contains("moonshot") {
-        "moonshot".into()
-    } else if n.contains("deepseek") {
-        "deepseek".into()
-    } else if n.contains("minimax") {
-        "minimax".into()
-    } else if n.contains("xiaomi") {
-        "xiaomi".into()
-    } else if n.contains("tencent") {
-        "tencent".into()
-    } else if n.contains("mistral") {
-        "mistral".into()
-    } else if n.contains("google") || n.contains("deepmind") {
-        "google".into()
-    } else {
-        n.replace(" ai", "")
-    }
+    normalize(canonical_group(s))
 }
 
 pub(crate) fn token_jaccard(a: &str, b: &str) -> f64 {

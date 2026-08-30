@@ -41,6 +41,8 @@ pub(crate) struct ParetoCacheKey {
     pub(crate) common_scaffold: String,
     pub(crate) liquidity_filter: LiquidityFilter,
     pub(crate) modality_filter: ModalityFilter,
+    /// Canonical group labels currently toggled off in the legend, sorted.
+    pub(crate) hidden_groups: Vec<String>,
     pub(crate) input_weight: f64,
     pub(crate) cache_read_weight: f64,
     pub(crate) output_weight: f64,
@@ -54,8 +56,26 @@ pub(crate) struct ParetoCache {
     pub(crate) key: ParetoCacheKey,
     pub(crate) benchmarks_present: bool,
     pub(crate) filtered_quotes: Vec<Quote>,
+    /// Every joined point, including hidden groups: the legend must keep
+    /// showing hidden groups so they can be re-enabled by clicking.
     pub(crate) joined: Vec<JoinedPoint>,
+    /// The subset of `joined` whose group is enabled — what gets plotted.
+    pub(crate) visible: Vec<JoinedPoint>,
+    /// Pareto frontier of `visible` only, so a hidden group cannot hold a
+    /// frontier spot while its orbs are off the chart.
     pub(crate) frontier: Vec<JoinedPoint>,
+}
+
+/// Drops points whose canonical group label is toggled off in the legend.
+pub(crate) fn filter_hidden_groups(
+    joined: &[JoinedPoint],
+    hidden_groups: &std::collections::HashSet<String>,
+) -> Vec<JoinedPoint> {
+    joined
+        .iter()
+        .filter(|p| !hidden_groups.contains(crate::theme::group_label(&p.creator)))
+        .cloned()
+        .collect()
 }
 
 pub(crate) fn price_to_plot_x(price: f64, log_scale: bool) -> f64 {
@@ -225,5 +245,20 @@ mod tests {
         assert!(pareto_search_matches("anthropic", &p));
         assert!(!pareto_search_matches("gemini", &p));
         assert!(pareto_search_matches("", &p));
+    }
+
+    #[test]
+    fn hidden_group_filter_uses_canonical_labels() {
+        let point = |creator: &str| JoinedPoint {
+            creator: creator.into(),
+            ..crate::testfix::test_joined_point()
+        };
+        let joined = vec![point("xAI"), point("SpaceXAI"), point("Anthropic")];
+        let mut hidden = std::collections::HashSet::new();
+        hidden.insert("xAI".to_owned());
+        let visible = filter_hidden_groups(&joined, &hidden);
+        // Both catalog spellings of the xAI family collapse onto one group.
+        assert_eq!(visible.len(), 1);
+        assert_eq!(visible[0].creator, "Anthropic");
     }
 }

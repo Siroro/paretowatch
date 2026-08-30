@@ -122,6 +122,7 @@ impl ParetoWatchApp {
                     }
                     BenchmarkSource::SWERebench => "Metric: Result@1",
                     BenchmarkSource::TerminalBench3 => "Metric: accuracy",
+                    BenchmarkSource::TerminalBench4 => "Metric: accuracy",
                     BenchmarkSource::DeepSWE11 => "Metric: pass@1",
                     BenchmarkSource::ReveloCodeIndex => "Metric: Code Index",
                     BenchmarkSource::DesignArena => "Metric: Design Elo (blinded votes)",
@@ -303,6 +304,75 @@ impl ParetoWatchApp {
         ui.add_space(2.0);
         ui.small("Wheel: zoom · middle-drag: pan · right-drag: box zoom · double-click: reset · click an orb: inspect · right-click an orb: add to price window");
 
+        // Resolved before the controls so the legend can toggle groups without
+        // borrowing `self` inside the scroll closure; the call is cached, so
+        // the chart body below sees the same view.
+        let view = self.ensure_pareto_view();
+
+        // Clickable colour legend for the model groups (creators) in the
+        // current join. Clicking a chip hides that group's orbs; clicking a
+        // disabled chip brings it back. Hidden chips stay listed (dimmed,
+        // struck through) at the end so they are always re-enableable.
+        if let Some(cache) = view.as_deref() {
+            let mut legend_groups: HashMap<&str, usize> = HashMap::new();
+            for p in &cache.joined {
+                *legend_groups.entry(group_label(&p.creator)).or_insert(0) += 1;
+            }
+            let mut legend: Vec<(&str, usize)> = legend_groups.into_iter().collect();
+            // Enabled groups first, biggest first; hidden chips trail at the
+            // end so a disabled family can always be found again.
+            legend.sort_by(|a, b| {
+                let a_hidden = self.hidden_groups.contains(a.0);
+                let b_hidden = self.hidden_groups.contains(b.0);
+                a_hidden
+                    .cmp(&b_hidden)
+                    .then_with(|| b.1.cmp(&a.1))
+                    .then_with(|| a.0.cmp(b.0))
+            });
+            ui.add_space(4.0);
+            ui.horizontal_wrapped(|ui| {
+                ui.strong("Groups");
+                ui.separator();
+                for (name, count) in legend {
+                    let is_hidden = self.hidden_groups.contains(name);
+                    let base = creator_color(name);
+                    let dot = if is_hidden {
+                        egui::Color32::from_rgba_unmultiplied(base.r(), base.g(), base.b(), 80)
+                    } else {
+                        base
+                    };
+                    let chip = egui::RichText::new(format!("● {name} ({count})"))
+                        .color(dot)
+                        .size(13.0);
+                    let chip = if is_hidden {
+                        chip.strikethrough()
+                    } else {
+                        chip
+                    };
+                    if ui.small_button(chip).clicked() {
+                        if is_hidden {
+                            self.hidden_groups.remove(name);
+                        } else {
+                            self.hidden_groups.insert(name.to_owned());
+                            // A selection hidden along with its group would
+                            // point at an invisible orb; drop it with the
+                            // group.
+                            if let Some(selected_id) = &self.selected_pareto_model
+                                && let Some(p) =
+                                    cache.joined.iter().find(|p| &p.model_id == selected_id)
+                                && group_label(&p.creator) == name
+                            {
+                                self.selected_pareto_model = None;
+                            }
+                        }
+                        reset_zoom = true;
+                    }
+                    ui.add_space(2.0);
+                }
+            });
+            ui.add_space(2.0);
+        }
+
         // The whole chart body scrolls as one page so the detail card and
         // frontier table can never be pushed out of the viewport.
         egui::ScrollArea::vertical()
@@ -322,14 +392,14 @@ impl ParetoWatchApp {
             ui.label("Waiting for pricing data…");
             return;
         }
-        let view = self.ensure_pareto_view();
-        let (joined, frontier, benchmarks_present) = match view.as_deref() {
+        let (joined, visible, frontier, benchmarks_present) = match view.as_deref() {
             Some(cache) => (
                 cache.joined.as_slice(),
+                cache.visible.as_slice(),
                 cache.frontier.as_slice(),
                 cache.benchmarks_present,
             ),
-            None => (&[][..], &[][..], false),
+            None => (&[][..], &[][..], &[][..], false),
         };
 
         if joined.is_empty() {
@@ -377,31 +447,18 @@ impl ParetoWatchApp {
             }
             return;
         }
+        if visible.is_empty() {
+            ui.label("Every group is hidden — click a disabled group chip above to bring models back.");
+            return;
+        }
         let frontier_names: std::collections::HashSet<&str> = frontier.iter().map(|p| p.model_id.as_str()).collect();
         let selected_before = self.selected_pareto_model.clone();
         let search_query = self.pareto_search.clone();
         let search_active = !normalize(&search_query).replace(' ', "").is_empty();
-        let search_matches: Vec<bool> = joined
+        let search_matches: Vec<bool> = visible
             .iter()
             .map(|p| !search_active || pareto_search_matches(&search_query, p))
             .collect();
-
-        // Colour legend for the model groups (creators) currently on the chart.
-        let mut group_counts: HashMap<&str, usize> = HashMap::new();
-        for p in joined {
-            *group_counts.entry(group_label(&p.creator)).or_insert(0) += 1;
-        }
-        let mut group_counts: Vec<(&str, usize)> = group_counts.into_iter().collect();
-        group_counts.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(b.0)));
-        ui.horizontal_wrapped(|ui| {
-            ui.strong("Groups");
-            ui.separator();
-            for (name, count) in group_counts.iter().take(12) {
-                ui.label(egui::RichText::new("●").color(creator_color(name)).size(13.0));
-                ui.small(format!("{name} ({count})"));
-                ui.add_space(8.0);
-            }
-        });
         ui.add_space(4.0);
         if search_active {
             let total = search_matches.iter().filter(|m| **m).count();
@@ -409,7 +466,7 @@ impl ParetoWatchApp {
                 "Search “{}”: {} of {} shown models match (non-matches are dimmed).",
                 search_query.trim(),
                 total,
-                joined.len()
+                visible.len()
             ));
             ui.add_space(4.0);
         }
@@ -457,6 +514,7 @@ impl ParetoWatchApp {
             BenchmarkSource::ArtificialAnalysisSnapshot => format!("AA Intelligence Index snapshot ({ARTIFICIAL_ANALYSIS_SNAPSHOT_DATE})"),
             BenchmarkSource::SWERebench => "SWE-rebench Result@1".to_owned(),
             BenchmarkSource::TerminalBench3 => "Terminal-Bench 3.0 accuracy".to_owned(),
+            BenchmarkSource::TerminalBench4 => "Terminal-Bench 4.0 accuracy".to_owned(),
             BenchmarkSource::DeepSWE11 => "DeepSWE v1.1 pass@1".to_owned(),
             BenchmarkSource::LiveBench => format!("LiveBench {} score", self.benchmark_metric.label()),
             BenchmarkSource::ReveloCodeIndex => "Revelo Code Index".to_owned(),
@@ -526,7 +584,7 @@ impl ParetoWatchApp {
                     plot_ui.set_auto_bounds(true);
                 }
 
-                for (p, matches_search) in joined.iter().zip(search_matches.iter().copied()) {
+                for (p, matches_search) in visible.iter().zip(search_matches.iter().copied()) {
                     let is_frontier = frontier_names.contains(p.model_id.as_str());
                     let is_selected = selected_before.as_deref() == Some(p.model_id.as_str());
                     let base = creator_color(&p.creator);
@@ -592,7 +650,7 @@ impl ParetoWatchApp {
                 // after every bubble and the frontier line because egui_plot paints
                 // elements in insertion order — this keeps text above the geometry
                 // instead of getting overdrawn by it.
-                for (p, matches_search) in joined.iter().zip(search_matches.iter().copied()) {
+                for (p, matches_search) in visible.iter().zip(search_matches.iter().copied()) {
                     if !matches_search && search_active {
                         continue;
                     }
@@ -622,7 +680,7 @@ impl ParetoWatchApp {
                 }
 
                 let nearest_orb = |click_pos: egui::Pos2| {
-                    joined
+                    visible
                         .iter()
                         .filter_map(|p| {
                             let plot_x = price_to_plot_x(p.cost, log_price_axis);
@@ -672,10 +730,17 @@ impl ParetoWatchApp {
         let selected_id = self.selected_pareto_model.clone();
         let selected = selected_id
             .as_deref()
-            .and_then(|id| joined.iter().find(|p| p.model_id.as_str() == id));
+            .and_then(|id| visible.iter().find(|p| p.model_id.as_str() == id));
 
         ui.horizontal(|ui| {
-            ui.strong(format!("{} matched models", joined.len()));
+            ui.strong(format!("{} matched models", visible.len()));
+            if !self.hidden_groups.is_empty() {
+                ui.small(format!(
+                    "{} group{} hidden via legend chips",
+                    self.hidden_groups.len(),
+                    if self.hidden_groups.len() == 1 { "" } else { "s" }
+                ));
+            }
             if self.modality_filter != ModalityFilter::All {
                 ui.small(self.modality_filter.label());
             }

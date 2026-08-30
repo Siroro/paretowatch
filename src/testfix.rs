@@ -1,5 +1,6 @@
 //! Shared fixtures for the crate's #[cfg(test)] modules.
 
+use crate::pareto::JoinedPoint;
 use crate::theme::infer_creator;
 use crate::types::{ProviderMarketQuote, Quote};
 
@@ -29,6 +30,28 @@ pub(crate) fn test_quote(model: &str, input: f64, live_market: bool) -> Quote {
             healthy_seller_count: Some(8),
         }],
         live_market,
+        vision: false,
+    }
+}
+
+/// Minimal joined point for UI-filter tests; every field is inert except the
+/// ones a test overrides.
+pub(crate) fn test_joined_point() -> JoinedPoint {
+    JoinedPoint {
+        model_id: "test-model".into(),
+        model: "Test Model".into(),
+        creator: "Anthropic".into(),
+        provider: "test-provider".into(),
+        benchmark_name: "test row".into(),
+        input: 1.0,
+        output: 2.0,
+        cache_read: None,
+        cost: 1.5,
+        tokens_per_task: None,
+        token_profile: None,
+        score: 80.0,
+        live_market: true,
+        free_offer_listed: false,
         vision: false,
     }
 }

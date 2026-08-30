@@ -8,7 +8,7 @@ mod models_tab;
 mod pareto_tab;
 mod settings_tab;
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 use std::sync::Mutex;
 use std::sync::mpsc::{self, Receiver, Sender, TryRecvError};
@@ -29,7 +29,9 @@ use crate::history::track::blended_series;
 use crate::notifications::{
     NotificationKind, NotificationLog, PriceMoveRecord, SharedNotifications, notify_alert,
 };
-use crate::pareto::{ParetoCache, ParetoCacheKey, joined_points, pareto_frontier};
+use crate::pareto::{
+    ParetoCache, ParetoCacheKey, filter_hidden_groups, joined_points, pareto_frontier,
+};
 use crate::settings_store::{load_settings, save_settings};
 #[cfg(not(target_os = "linux"))]
 use crate::tray::create_tray;
@@ -87,6 +89,10 @@ pub(crate) struct ParetoWatchApp {
     pareto_search: String,
     selected_pareto_model: Option<String>,
     log_price_axis: bool,
+    /// Group labels toggled off via the Pareto legend chips. Canonical labels
+    /// (see `theme::canonical_group`) so catalog spelling variants can't split
+    /// a hidden family back onto the chart.
+    hidden_groups: HashSet<String>,
     // Models tab: table filters/sort plus the calculator's selections. Token
     // volumes are in millions so they pair directly with $/1M rates.
     models_search: String,
@@ -232,6 +238,7 @@ impl ParetoWatchApp {
             pareto_search: String::new(),
             selected_pareto_model: None,
             log_price_axis: true,
+            hidden_groups: HashSet::new(),
             models_search: String::new(),
             models_creator: None,
             models_source: models_tab::ModelsSource::All,
@@ -597,6 +604,8 @@ impl ParetoWatchApp {
     }
 
     fn pareto_cache_key(&self) -> ParetoCacheKey {
+        let mut hidden_groups: Vec<String> = self.hidden_groups.iter().cloned().collect();
+        hidden_groups.sort();
         ParetoCacheKey {
             data_version: self.data_version,
             price_metric: self.price_metric,
@@ -611,6 +620,7 @@ impl ParetoWatchApp {
             common_scaffold: self.common_scaffold.clone(),
             liquidity_filter: self.liquidity_filter,
             modality_filter: self.modality_filter,
+            hidden_groups,
             input_weight: self.settings.input_weight,
             cache_read_weight: self.settings.cache_read_weight,
             output_weight: self.settings.output_weight,
@@ -657,12 +667,16 @@ impl ParetoWatchApp {
             key.benchmark_metric,
             weights,
         );
-        let frontier = pareto_frontier(&joined);
+        // Hidden groups stay in `joined` so the legend can offer them back;
+        // the chart and the frontier only see the enabled subset.
+        let visible = filter_hidden_groups(&joined, &self.hidden_groups);
+        let frontier = pareto_frontier(&visible);
         self.pareto_cache = Some(Arc::new(ParetoCache {
             key,
             benchmarks_present,
             filtered_quotes,
             joined,
+            visible,
             frontier,
         }));
         self.pareto_cache.as_ref().map(Arc::clone)

@@ -371,6 +371,7 @@ pub(crate) fn build_agentic_composite(
         (BenchmarkSource::ArtificialAnalysisSnapshot, 0.25_f64),
         (BenchmarkSource::SWERebench, 0.20_f64),
         (BenchmarkSource::TerminalBench3, 0.15_f64),
+        (BenchmarkSource::TerminalBench4, 0.15_f64),
         (BenchmarkSource::DeepSWE11, 0.15_f64),
         (BenchmarkSource::LiveBench, 0.10_f64),
         (BenchmarkSource::ReveloCodeIndex, 0.05_f64),

@@ -197,6 +197,7 @@ pub(crate) enum BenchmarkSource {
     ArtificialAnalysisSnapshot,
     SWERebench,
     TerminalBench3,
+    TerminalBench4,
     DeepSWE11,
     LiveBench,
     ReveloCodeIndex,
@@ -227,6 +228,7 @@ impl BenchmarkSource {
             Self::ArtificialAnalysisSnapshot => "Artificial Analysis (snapshot)",
             Self::SWERebench => "SWE-rebench",
             Self::TerminalBench3 => "Terminal-Bench 3.0",
+            Self::TerminalBench4 => "Terminal-Bench 4.0",
             Self::DeepSWE11 => "DeepSWE v1.1",
             Self::LiveBench => "LiveBench",
             Self::ReveloCodeIndex => "Revelo Code Index",
@@ -241,6 +243,7 @@ impl BenchmarkSource {
             Self::ArtificialAnalysisSnapshot => "AA snapshot",
             Self::SWERebench => "SWE-rebench",
             Self::TerminalBench3 => "Terminal-Bench 3",
+            Self::TerminalBench4 => "Terminal-Bench 4",
             Self::DeepSWE11 => "DeepSWE",
             Self::LiveBench => "LiveBench",
             Self::ReveloCodeIndex => "Code Index",
@@ -273,14 +276,15 @@ impl BenchmarkSource {
     pub(crate) fn is_harness_specific(self) -> bool {
         matches!(
             self,
-            Self::TerminalBench3 | Self::DeepSWE11 | Self::ReveloCodeIndex
+            Self::TerminalBench3 | Self::TerminalBench4 | Self::DeepSWE11 | Self::ReveloCodeIndex
         )
     }
 
-    pub(crate) fn remote_sources() -> [Self; 6] {
+    pub(crate) fn remote_sources() -> [Self; 7] {
         [
             Self::SWERebench,
             Self::TerminalBench3,
+            Self::TerminalBench4,
             Self::DeepSWE11,
             Self::LiveBench,
             Self::ReveloCodeIndex,
@@ -288,11 +292,12 @@ impl BenchmarkSource {
         ]
     }
 
-    pub(crate) fn consensus_sources() -> [Self; 7] {
+    pub(crate) fn consensus_sources() -> [Self; 8] {
         [
             Self::ArtificialAnalysisSnapshot,
             Self::SWERebench,
             Self::TerminalBench3,
+            Self::TerminalBench4,
             Self::DeepSWE11,
             Self::LiveBench,
             Self::ReveloCodeIndex,
@@ -300,7 +305,7 @@ impl BenchmarkSource {
         ]
     }
 
-    pub(crate) fn display_sources() -> [Self; 7] {
+    pub(crate) fn display_sources() -> [Self; 8] {
         Self::consensus_sources()
     }
 
@@ -311,6 +316,9 @@ impl BenchmarkSource {
             Self::SWERebench => SWE_REBENCH_URL,
             Self::TerminalBench3 => {
                 "https://hub.harborframework.com/datasets/terminal-bench/terminal-bench/latest?tab=leaderboard&leaderboard=3-0-0"
+            }
+            Self::TerminalBench4 => {
+                "https://hub.harborframework.com/datasets/terminal-bench/terminal-bench/latest?tab=leaderboard&leaderboard=4-0-0"
             }
             Self::DeepSWE11 => "https://deepswe.datacurve.ai/",
             Self::LiveBench => "https://livebench.ai/",

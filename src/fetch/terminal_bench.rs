@@ -1,5 +1,6 @@
-//! Terminal-Bench 3.0 leaderboard: Harbor API with a GitHub snapshot
-//! fallback.
+//! Terminal-Bench leaderboards (3.0 and 4.0) via the Harbor API. 3.0 keeps a
+//! GitHub snapshot fallback; 4.0 has no published snapshot yet and is
+//! live-only.
 
 use anyhow::{Context, Result, anyhow};
 use reqwest::blocking::Client;
@@ -13,11 +14,13 @@ use crate::types::{Benchmark, BenchmarkKind};
 pub(crate) const TERMINAL_BENCH_HARBOR_URL: &str =
     "https://ofhuhcpkvzjlejydnvyd.supabase.co/functions/v1/leaderboard-read";
 pub(crate) const TERMINAL_BENCH_PACKAGE: &str = "terminal-bench/terminal-bench";
-pub(crate) const TERMINAL_BENCH_LEADERBOARD: &str = "3-0-0";
+pub(crate) const TERMINAL_BENCH_3_LEADERBOARD: &str = "3-0-0";
+pub(crate) const TERMINAL_BENCH_4_LEADERBOARD: &str = "4-0-0";
 pub(crate) const TERMINAL_BENCH_SNAPSHOT_URL: &str = "https://raw.githubusercontent.com/harbor-framework/frontier-bench-docs/main/lib/announcement-leaderboard-snapshot.ts";
 
 pub(crate) fn fetch_terminal_bench_3(client: &Client) -> Result<Vec<Benchmark>> {
-    match fetch_terminal_bench_harbor(client).and_then(|value| parse_terminal_bench_harbor(&value))
+    match fetch_terminal_bench_version(client, TERMINAL_BENCH_3_LEADERBOARD, "3.0")
+        .and_then(|value| parse_terminal_bench_harbor(&value))
     {
         Ok(rows) if !rows.is_empty() => Ok(rows),
         live_result => {
@@ -41,26 +44,44 @@ pub(crate) fn fetch_terminal_bench_3(client: &Client) -> Result<Vec<Benchmark>> 
     }
 }
 
-pub(crate) fn fetch_terminal_bench_harbor(client: &Client) -> Result<Value> {
+/// Terminal-Bench 4.0: live Harbor leaderboard only. Unlike 3.0 there is no
+/// published GitHub snapshot to fall back to, so failures surface as errors
+/// rather than stale-gen data.
+pub(crate) fn fetch_terminal_bench_4(client: &Client) -> Result<Vec<Benchmark>> {
+    let rows = fetch_terminal_bench_version(client, TERMINAL_BENCH_4_LEADERBOARD, "4.0")
+        .and_then(|value| parse_terminal_bench_harbor(&value))?;
+    if rows.is_empty() {
+        return Err(anyhow!(
+            "Terminal-Bench 4.0 Harbor leaderboard contained no usable rows"
+        ));
+    }
+    Ok(rows)
+}
+
+pub(crate) fn fetch_terminal_bench_version(
+    client: &Client,
+    leaderboard: &str,
+    version_label: &str,
+) -> Result<Value> {
     client
         .post(TERMINAL_BENCH_HARBOR_URL)
         .json(&serde_json::json!({
             "package": TERMINAL_BENCH_PACKAGE,
-            "name": TERMINAL_BENCH_LEADERBOARD,
+            "name": leaderboard,
         }))
         .send()
         .with_context(|| {
-            format!("Terminal-Bench 3.0 Harbor request failed ({TERMINAL_BENCH_HARBOR_URL})")
+            format!("Terminal-Bench {version_label} Harbor request failed ({TERMINAL_BENCH_HARBOR_URL})")
         })?
         .error_for_status()
         .with_context(|| {
             format!(
-                "Terminal-Bench 3.0 Harbor returned an HTTP error ({TERMINAL_BENCH_HARBOR_URL})"
+                "Terminal-Bench {version_label} Harbor returned an HTTP error ({TERMINAL_BENCH_HARBOR_URL})"
             )
         })?
         .json::<Value>()
         .with_context(|| {
-            format!("Terminal-Bench 3.0 Harbor returned invalid JSON ({TERMINAL_BENCH_HARBOR_URL})")
+            format!("Terminal-Bench {version_label} Harbor returned invalid JSON ({TERMINAL_BENCH_HARBOR_URL})")
         })
 }
 
@@ -300,16 +321,30 @@ mod tests {
     #[test]
     fn terminal_bench_preserves_agent_rows_and_hidden_valid_runs() {
         let v = serde_json::json!({"rows": [
-            {"status":"display","metadata":{"model_display":{"label":"GPT-5.6 Sol"},"agent_display":{"label":"Codex"},"reasoning_effort":"max"},"metrics":{"accuracy":34.6}},
+            {"status":"display","metadata":{"model_display":{"label":"GPT-5.6 Sol"},"agent_display":{"label":"[CC]"},"reasoning_effort":"max"},"metrics":{"accuracy":51.82,"total_tokens":6527147637i64,"n_trials":330},"n_trials":330},
             {"status":"hide","metadata":{"model_display":{"label":"GPT-5.6 Sol"},"agent_display":{"label":"mini-SWE-agent"},"reasoning_effort":"max"},"metrics":{"accuracy":34.59}}
         ]});
         let rows = parse_terminal_bench_harbor(&v).unwrap();
         assert_eq!(rows.len(), 2);
-        assert!(
-            rows.iter().any(|row| row.kind == BenchmarkKind::ModelAgent
-                && row.agent.as_deref() == Some("Codex"))
-        );
+        assert!(rows.iter().any(
+            |row| row.kind == BenchmarkKind::ModelAgent && row.agent.as_deref() == Some("[CC]")
+        ));
         assert!(rows.iter().any(|row| row.kind == BenchmarkKind::Model
             && row.agent.as_deref() == Some("mini-SWE-agent")));
+        // 4.0 publishes n_trials both inside metrics and at the row top level;
+        // the tokens-per-task estimate uses it either way.
+        let row = rows.first().unwrap();
+        assert!((row.tokens_per_task.unwrap() - 6527147637f64 / 330.0).abs() < 1e-6);
+    }
+
+    #[test]
+    fn terminal_bench_4_rejects_rows_and_reports_empty() {
+        // The 4.0 board is live-only: an unusable payload must surface as an
+        // error rather than silently handing back zero rows.
+        let v = serde_json::json!({"rows": [
+            {"status":"other","metadata":{"model_display":{"label":"Opus 5"},"metrics":{"accuracy":10.0}}}
+        ]});
+        let rows = parse_terminal_bench_harbor(&v).unwrap();
+        assert!(rows.is_empty());
     }
 }

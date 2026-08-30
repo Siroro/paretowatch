@@ -163,6 +163,7 @@ pub(crate) fn fetch_benchmark_source(
         BenchmarkSource::ArtificialAnalysisSnapshot => Ok(artificial_analysis_snapshot()),
         BenchmarkSource::SWERebench => fetch_swe_rebench(client),
         BenchmarkSource::TerminalBench3 => fetch_terminal_bench_3(client),
+        BenchmarkSource::TerminalBench4 => fetch_terminal_bench_4(client),
         BenchmarkSource::DeepSWE11 => fetch_deepswe(client),
         BenchmarkSource::LiveBench => fetch_livebench(client),
         BenchmarkSource::ReveloCodeIndex => fetch_revelo_code_index(client),

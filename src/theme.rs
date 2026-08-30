@@ -5,6 +5,37 @@ use eframe::egui;
 
 use crate::bench::normalize;
 
+/// One canonical display label per lab. The catalog spells the same lab
+/// inconsistently across model rows (`xAI` vs `SpaceXAI`, `Z.ai` vs
+/// `Zhipu AI`, `Alibaba` vs `Qwen` vs `Alibaba Cloud`), which used to split a
+/// single family into several chart colours and legend groups. Everything
+/// that groups, labels, or colours a creator routes through here. Unknown
+/// labs pass through unchanged so each stays its own group.
+pub(crate) fn canonical_group(creator: &str) -> &str {
+    match normalize(creator).as_str() {
+        "xai" | "x ai" | "spacexai" => "xAI",
+        "z ai" | "zai" | "zhipu" | "zhipu ai" => "Z.AI",
+        "alibaba" | "alibaba cloud" | "qwen" => "Alibaba",
+        "openai" | "open ai" => "OpenAI",
+        "google" | "deepmind" | "google deepmind" => "Google",
+        "moonshot" | "moonshot ai" | "kimi" => "Moonshot",
+        "deepseek" | "deepseek ai" => "DeepSeek",
+        "minimax" | "minimax ai" => "MiniMax",
+        "mistral" | "mistral ai" => "Mistral AI",
+        "arcee" | "arcee ai" => "Arcee AI",
+        "meta" | "meta ai" => "Meta",
+        "venice" | "venice ai" | "api venice ai" => "Venice AI",
+        "anthropic" => "Anthropic",
+        "nvidia" => "NVIDIA",
+        "xiaomi" => "Xiaomi",
+        "tencent" => "Tencent",
+        "microsoft" => "Microsoft",
+        "cohere" => "Cohere",
+        "ai21" => "AI21",
+        _ => creator,
+    }
+}
+
 pub(crate) fn infer_creator(model: &str) -> String {
     let n = normalize(model);
     if n.starts_with("claude ")
@@ -50,7 +81,7 @@ pub(crate) fn infer_creator(model: &str) -> String {
 /// Brand-ish colors for the major labs so model groups read at a glance on
 /// the chart. Everyone else gets a deterministic hue from a hash of the name.
 pub(crate) fn creator_color(creator: &str) -> egui::Color32 {
-    let n = normalize(creator);
+    let n = normalize(canonical_group(creator));
     let known: &[(&str, u8, u8, u8)] = &[
         ("anthropic", 224, 122, 95),
         ("openai", 46, 204, 147),
@@ -110,7 +141,7 @@ pub(crate) fn group_label(creator: &str) -> &str {
     if creator.is_empty() {
         "Unknown"
     } else {
-        creator
+        canonical_group(creator)
     }
 }
 
@@ -147,6 +178,36 @@ pub(crate) fn free_offer_badge(ui: &mut egui::Ui) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn catalog_creator_spelling_variants_share_one_group_and_color() {
+        // Real strings observed in the live Surplus catalog: the same lab is
+        // spelled differently across model rows.
+        for variants in [
+            ["xAI", "SpaceXAI", "X.AI"],
+            ["Z.ai", "Zhipu AI", "Zhipu"],
+            ["Alibaba", "Qwen", "Alibaba Cloud"],
+            ["Moonshot", "Moonshot AI", "Kimi"],
+            ["OpenAI", "Open AI", "openai"],
+            ["Venice AI", "Venice", "api.venice.ai"],
+        ] {
+            let canonical = canonical_group(variants[0]);
+            for variant in variants {
+                assert_eq!(canonical_group(variant), canonical, "{variant}");
+                assert_eq!(group_label(variant), canonical, "{variant}");
+                assert_eq!(
+                    creator_color(variant),
+                    creator_color(canonical),
+                    "{variant}"
+                );
+            }
+        }
+        // Unknown labs stay their own group (no cross-lab bleed).
+        assert_eq!(canonical_group("Kuaishou"), "Kuaishou");
+        assert_ne!(canonical_group("Kuaishou"), canonical_group("ByteDance"));
+        assert_eq!(canonical_group(""), "");
+        assert_eq!(group_label(""), "Unknown");
+    }
 
     #[test]
     fn creator_colors_are_stable_and_distinguish_known_groups() {
