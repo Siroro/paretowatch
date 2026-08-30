@@ -4,6 +4,7 @@
 
 mod activity_tab;
 mod alerts_tab;
+mod models_tab;
 mod pareto_tab;
 mod settings_tab;
 
@@ -47,6 +48,7 @@ use tray_icon::TrayIcon;
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Tab {
     Pareto,
+    Models,
     History,
     Alerts,
     Activity,
@@ -85,6 +87,20 @@ pub(crate) struct ParetoWatchApp {
     pareto_search: String,
     selected_pareto_model: Option<String>,
     log_price_axis: bool,
+    // Models tab: table filters/sort plus the calculator's selections. Token
+    // volumes are in millions so they pair directly with $/1M rates.
+    models_search: String,
+    models_creator: Option<String>,
+    models_source: models_tab::ModelsSource,
+    models_modality: ModalityFilter,
+    models_cache: models_tab::ModelsCacheFilter,
+    models_sort: models_tab::ModelsSort,
+    models_sort_desc: bool,
+    calc_model: Option<String>,
+    calc_provider: Option<String>,
+    calc_input_m: f64,
+    calc_cache_m: f64,
+    calc_output_m: f64,
     alert_model: String,
     alert_mode: AlertMode,
     alert_metric: PriceMetric,
@@ -175,6 +191,14 @@ impl ParetoWatchApp {
 
         let _ = worker_tx.send(WorkerCommand::Refresh);
 
+        // Seed the calculator with an "agentic" session: 10M tokens split by
+        // the configured workload weights.
+        let (agentic_input, agentic_cache, agentic_output) = models_tab::agentic_preset_m(
+            settings.input_weight,
+            settings.cache_read_weight,
+            settings.output_weight,
+        );
+
         Self {
             settings,
             price_snapshot: None,
@@ -208,6 +232,18 @@ impl ParetoWatchApp {
             pareto_search: String::new(),
             selected_pareto_model: None,
             log_price_axis: true,
+            models_search: String::new(),
+            models_creator: None,
+            models_source: models_tab::ModelsSource::All,
+            models_modality: ModalityFilter::All,
+            models_cache: models_tab::ModelsCacheFilter::Any,
+            models_sort: models_tab::ModelsSort::Name,
+            models_sort_desc: false,
+            calc_model: None,
+            calc_provider: None,
+            calc_input_m: agentic_input,
+            calc_cache_m: agentic_cache,
+            calc_output_m: agentic_output,
             alert_model: String::new(),
             alert_mode: AlertMode::Threshold,
             alert_metric: PriceMetric::Blended,
@@ -1173,6 +1209,7 @@ impl ParetoWatchApp {
         ui.horizontal(|ui| {
             for (tab, label) in [
                 (Tab::Pareto, "Pareto"),
+                (Tab::Models, "Models"),
                 (Tab::History, "History"),
                 (Tab::Alerts, "Alerts"),
                 (Tab::Activity, "Activity"),
@@ -1260,6 +1297,7 @@ impl eframe::App for ParetoWatchApp {
             self.top_bar(ui);
             match self.tab {
                 Tab::Pareto => self.pareto_tab(ui),
+                Tab::Models => self.models_tab(ui),
                 Tab::History => self.history_tab(ui),
                 Tab::Alerts => self.alerts_tab(ui),
                 Tab::Activity => self.activity_tab(ui),

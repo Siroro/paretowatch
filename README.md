@@ -9,6 +9,7 @@ A lightweight native Rust tray app that tracks [Surplus Intelligence](https://su
 ![Pareto chart with pinned prices](docs/screenshot.jpg)
 
 - **Pareto chart** — blended price per 1M tokens against your choice of benchmark score, with the efficient frontier labelled. Right-click a model to pin its live prices to a floating always-on-top widget.
+- **Models browser** — every model in the Surplus catalogue with search, creator/source/modality/cache filters, and sortable per-leg prices. A built-in cost calculator prices any token workload (fresh input, cache read, output) at the model's live rates, using Surplus cache-read pricing whenever a provider publishes one and showing what prompt caching saves.
 - **Composite scores** — locally-computed capability and deployment scores that fuse all the benchmark boards instead of trusting any single leaderboard.
 - **Alerts** — desktop notifications on price thresholds, any price move, frontier entries/exits, and cheapest-model-above-score changes.
 - **History** — an append-only event log that records only actual price and market-telemetry changes; composite scores remain live-derived.

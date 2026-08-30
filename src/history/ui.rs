@@ -199,6 +199,12 @@ pub(crate) fn show(
             .unwrap_or_else(|| slug.to_owned())
     };
 
+    // Window start for the active range; `None` for "All".
+    let since = state
+        .range
+        .seconds()
+        .map(|secs| now.timestamp() as f64 - secs as f64);
+
     let mut prepared: Vec<PreparedSeries> = Vec::new();
     for (i, slug) in state.selected.iter().enumerate() {
         let Some(series) = tracker.series(slug) else {
@@ -215,7 +221,7 @@ pub(crate) fn show(
                 *v = *v / anchor * 100.0;
             }
         }
-        let steps = super::track::step_points(&shown, now.timestamp() as f64);
+        let steps = window_steps(&shown, since, now.timestamp() as f64);
         let color = if i == 0 {
             crate::theme::creator_color(&series.creator)
         } else {
@@ -401,6 +407,24 @@ fn window(points: &[(f64, f64)], range: HistoryRange, now: DateTime<Utc>) -> Vec
         .partition_point(|(ts, _)| *ts < since)
         .saturating_sub(1);
     points[start..].to_vec()
+}
+
+/// Step polyline for a windowed series. A series entering the window with a
+/// pre-window anchor draws its entry segment from the window start at the
+/// anchor's value: starting at the anchor's own (older) timestamp stretches
+/// the x-axis past the requested range and leaves a blank left edge for
+/// models whose anchor is newer than the oldest selected one. `points` keeps
+/// the anchor's real timestamp so tooltips and the change log stay truthful.
+fn window_steps(points: &[(f64, f64)], since: Option<f64>, until: f64) -> Vec<[f64; 2]> {
+    if let (Some(since), Some(&(ts, v))) = (since, points.first())
+        && ts < since
+    {
+        let mut pinned = Vec::with_capacity(points.len());
+        pinned.push((since, v));
+        pinned.extend_from_slice(&points[1..]);
+        return super::track::step_points(&pinned, until);
+    }
+    super::track::step_points(points, until)
 }
 
 fn chart(
@@ -780,6 +804,38 @@ mod tests {
         let cutoff = 9_000_000.0 - 2_592_000.0;
         assert!(w[0].0 < cutoff);
         assert!(w.iter().skip(1).all(|(ts, _)| *ts >= cutoff));
+    }
+
+    #[test]
+    fn window_steps_pin_pre_window_anchor_to_window_start() {
+        let since = 1_000.0;
+        // Anchor from well before the window plus in-window changes: the
+        // polyline must enter at the window start carrying the anchor's
+        // value, never at the anchor's own older timestamp.
+        let pts = vec![(-100_000.0, 1.0), (2_000.0, 2.0), (3_000.0, 3.0)];
+        let steps = window_steps(&pts, Some(since), 4_000.0);
+        assert_eq!(steps[0], [since, 1.0]);
+        assert!(
+            steps.iter().all(|[x, _]| *x >= since),
+            "no step left of the window start: {steps:?}"
+        );
+        // Entry segment stays flat at the anchor value until the first change.
+        assert_eq!(steps[1], [2_000.0, 1.0]);
+
+        // Flat series (anchor only): one line from window start to `until`.
+        let flat = vec![(-100_000.0, 1.0)];
+        assert_eq!(
+            window_steps(&flat, Some(since), 4_000.0),
+            vec![[since, 1.0], [4_000.0, 1.0]]
+        );
+
+        // Series that begins inside the window keeps its real first timestamp.
+        let young = vec![(1_500.0, 9.0)];
+        let steps = window_steps(&young, Some(since), 4_000.0);
+        assert_eq!(steps[0], [1_500.0, 9.0]);
+
+        // "All" range has no window start: plain step conversion.
+        assert_eq!(window_steps(&pts, None, 4_000.0)[0], [-100_000.0, 1.0]);
     }
 
     #[test]

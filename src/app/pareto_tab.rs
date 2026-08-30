@@ -2,20 +2,23 @@
 //! card, and the Pareto-efficient table.
 
 use std::collections::HashMap;
+use std::sync::Arc;
 
+use chrono::DateTime;
 use eframe::egui;
 use egui_plot::{HoverPosition, Line, Plot, PlotPoint, PlotPoints, Points, Text};
 
 use crate::artificial_analysis_snapshot::ARTIFICIAL_ANALYSIS_SNAPSHOT_DATE;
 use crate::bench::{format_percentile, normalize};
 use crate::format::{format_compact_number, format_price_tick};
+use crate::history::track::{ModelSeries, historical_low};
 use crate::pareto::{JoinedPoint, pareto_search_matches, price_from_plot_x, price_to_plot_x};
 use crate::theme::{
     PRICE_DOWN, PRICE_UP, creator_color, discount_color, free_offer_badge, group_label,
 };
 use crate::types::{
     ANY_MODEL, AlertMode, BenchmarkMetric, BenchmarkSource, ComparisonMode, CostBasis,
-    LiquidityFilter, ModalityFilter, PriceMetric,
+    LiquidityFilter, ModalityFilter, PriceMetric, Quote, blended_price,
 };
 use crate::worker::WorkerCommand;
 
@@ -171,9 +174,10 @@ impl ParetoWatchApp {
                     let age = ui.input(|i| i.time) - at;
                     if age < APPLIED_SECS {
                         ui.colored_label(PRICE_DOWN, "✓ Applied");
-                        ui.ctx().request_repaint_after(std::time::Duration::from_secs_f64(
-                            (APPLIED_SECS - age).max(0.05),
-                        ));
+                        ui.ctx()
+                            .request_repaint_after(std::time::Duration::from_secs_f64(
+                                (APPLIED_SECS - age).max(0.05),
+                            ));
                     }
                 }
             }
@@ -276,7 +280,8 @@ impl ParetoWatchApp {
                 .desired_width(220.0)
                 .clip_text(true);
             ui.add(search_edit);
-            if !self.pareto_search.trim().is_empty() && ui.small_button("✗ Clear search").clicked() {
+            if !self.pareto_search.trim().is_empty() && ui.small_button("✗ Clear search").clicked()
+            {
                 self.pareto_search.clear();
             }
             ui.separator();
@@ -289,7 +294,8 @@ impl ParetoWatchApp {
             {
                 reset_zoom = true;
             }
-            if self.selected_pareto_model.is_some() && ui.small_button("✗ Clear selection").clicked()
+            if self.selected_pareto_model.is_some()
+                && ui.small_button("✗ Clear selection").clicked()
             {
                 self.selected_pareto_model = None;
             }
@@ -410,20 +416,35 @@ impl ParetoWatchApp {
 
         let log_price_axis = self.log_price_axis;
         let cost_basis = self.cost_basis;
-        // The selection/search halos are separate series that share the data
-        // point, so the formatter can receive their internal name; map ids
-        // back to display names. Only ringed points (the selection plus search
-        // matches) are looked up, so the map stays tiny when no search is
-        // active.
-        let display_names: HashMap<String, String> = joined
+        let weights = (
+            self.settings.input_weight,
+            self.settings.cache_read_weight,
+            self.settings.output_weight,
+        );
+        // Every orb is hoverable, so the tooltip formatter must be able to
+        // resolve any series name back to its model: plain orbs are named
+        // after the display name, while the selection/search halos carry a
+        // `*_ring_{model_id}` prefix.
+        let series_to_id: HashMap<String, String> = joined
             .iter()
-            .zip(search_matches.iter().copied())
-            .filter(|(p, matches)| {
-                selected_before.as_deref() == Some(p.model_id.as_str())
-                    || (search_active && *matches)
-            })
-            .map(|(p, _)| (p.model_id.clone(), p.model.clone()))
+            .map(|p| (p.model.clone(), p.model_id.clone()))
             .collect();
+        let hover_cache = Arc::clone(view.as_ref().expect("joined is non-empty"));
+        let history = &self.history;
+        let score_source = match self.benchmark_source {
+            BenchmarkSource::LiveBench => {
+                format!("LiveBench {}", self.benchmark_metric.label())
+            }
+            source => source.short_label().to_owned(),
+        };
+        // On the per-task basis the plotted price is the blended rate scaled
+        // by the benchmark's token volume, so the historical low must be
+        // blended as well to stay comparable.
+        let low_metric = if cost_basis == CostBasis::EstimatedPerTask {
+            PriceMetric::Blended
+        } else {
+            self.price_metric
+        };
         let x_axis_label = match (self.cost_basis, log_price_axis) {
             (CostBasis::PerMillion, true) => format!("{} price ($ / 1M, log scale)", self.price_metric.label()),
             (CostBasis::PerMillion, false) => format!("{} price ($ / 1M)", self.price_metric.label()),
@@ -475,13 +496,28 @@ impl ParetoWatchApp {
             .set_margin_fraction(egui::vec2(0.04, 0.06))
             .label_formatter(move |pos| match pos {
                 HoverPosition::NearDataPoint { plot_name, position, .. } if !plot_name.is_empty() => {
-                    let name = plot_name
+                    let model_id = plot_name
                         .strip_prefix("sel_ring_")
                         .or_else(|| plot_name.strip_prefix("search_ring_"))
-                        .and_then(|id| display_names.get(id).map(String::as_str))
-                        .unwrap_or(plot_name);
-                    let price = price_from_plot_x(position.x, log_price_axis);
-                    Some(format!("{name}\n${:.6} {} · score {:.1}", price, cost_basis.unit(), position.y))
+                        .map(str::to_owned)
+                        .or_else(|| series_to_id.get(*plot_name).cloned())?;
+                    let p = hover_cache
+                        .joined
+                        .iter()
+                        .find(|p| p.model_id == model_id)?;
+                    let quote = hover_cache
+                        .filtered_quotes
+                        .iter()
+                        .find(|q| q.model == model_id);
+                    let ctx = HoverContext {
+                        quote,
+                        history: history.series(&model_id),
+                        low_metric,
+                        cost_basis,
+                        weights,
+                        score_source: score_source.clone(),
+                    };
+                    Some(pareto_hover_label(p, &ctx, position.y))
                 }
                 _ => None,
             })
@@ -1040,5 +1076,139 @@ impl ParetoWatchApp {
                     ui.end_row();
                 }
             });
+    }
+}
+
+/// Everything the hover tooltip needs beyond the orb itself, resolved once per
+/// frame before the plot is built.
+struct HoverContext<'a> {
+    quote: Option<&'a Quote>,
+    history: Option<&'a ModelSeries>,
+    low_metric: PriceMetric,
+    cost_basis: CostBasis,
+    weights: (f64, f64, f64),
+    score_source: String,
+}
+
+/// Multi-line hover tooltip for a chart orb. The label formatter only gets a
+/// plain string, so everything the user asked for — raw pricing legs, the
+/// all-time low from the history log, liquidity, benchmark source — is folded
+/// into one compact block. The first line is the model name; egui_plot bolds
+/// nothing, so the name carries the structure on its own.
+fn pareto_hover_label(p: &JoinedPoint, ctx: &HoverContext<'_>, score: f64) -> String {
+    let mut lines = vec![p.model.clone()];
+
+    // Headline: the plotted point.
+    lines.push(format!(
+        "{} {} · {} score {}",
+        format_price_tick(p.cost),
+        ctx.cost_basis.unit(),
+        ctx.score_source,
+        score
+    ));
+
+    // Raw per-leg pricing, exactly as the market quotes them.
+    let mut legs = vec![format!("In ${:.4}", p.input)];
+    if let Some(cache_read) = p.cache_read {
+        legs.push(format!("Cache ${:.4}", cache_read));
+    }
+    legs.push(format!("Out ${:.4}", p.output));
+    lines.push(legs.join(" · ") + " /1M");
+
+    // On the per-task basis the benchmark's observed token volume is what
+    // scales the blended rate; surface it so the $/task figure is auditable.
+    if ctx.cost_basis == CostBasis::EstimatedPerTask
+        && let Some(tokens) = p.tokens_per_task
+    {
+        let profile = p
+            .token_profile
+            .as_deref()
+            .map(|profile| format!(" ({profile})"))
+            .unwrap_or_default();
+        lines.push(format!(
+            "Workload: {} tokens/task{profile}",
+            format_compact_number(tokens)
+        ));
+    }
+
+    // All-time low from the persistent history log, on the metric that keeps
+    // it comparable with the plotted price (blended when the chart shows
+    // est. $/task, since that price is the blended rate scaled by token volume).
+    if let Some(series) = ctx.history
+        && let Some((low, low_ts)) = historical_low(
+            series,
+            ctx.low_metric,
+            ctx.weights.0,
+            ctx.weights.1,
+            ctx.weights.2,
+        )
+    {
+        let current = match ctx.low_metric {
+            PriceMetric::Input => p.input,
+            PriceMetric::Output => p.output,
+            PriceMetric::Blended => blended_price(
+                p.input,
+                p.cache_read,
+                p.output,
+                ctx.weights.0,
+                ctx.weights.1,
+                ctx.weights.2,
+            ),
+        };
+        let pct = if low > 0.0 {
+            format!(" · {:.0}% above", (current - low) / low * 100.0)
+        } else {
+            String::new()
+        };
+        lines.push(format!(
+            "Lowest {}: {} · {}{}",
+            ctx.low_metric.label().to_lowercase(),
+            format_price_tick(low),
+            format_short_date(low_ts),
+            pct
+        ));
+    }
+
+    if let Some(q) = ctx.quote {
+        let mut market: Vec<String> = Vec::new();
+        if let Some(count) = q.healthy_seller_count {
+            market.push(format!("{count} healthy sellers"));
+        }
+        if let Some(requests) = q.requests_24h {
+            market.push(format!("{}/24h", format_compact_number(requests as f64)));
+        }
+        if let Some(discount) = q.discount_pct {
+            market.push(format!("{discount:.0}% off"));
+        }
+        if !market.is_empty() {
+            lines.push(market.join(" · "));
+        }
+    }
+
+    let mut badges: Vec<String> = Vec::new();
+    if !p.creator.is_empty() {
+        badges.push(p.creator.clone());
+    }
+    if p.vision {
+        badges.push("vision".into());
+    }
+    if !badges.is_empty() {
+        lines.push(badges.join(" · "));
+    }
+
+    lines.join("\n")
+}
+
+/// Compact date for the historical-low line: month + day, or month + year
+/// when the low predates the current year.
+fn format_short_date(ts: f64) -> String {
+    let Some(dt) = DateTime::from_timestamp(ts as i64, 0) else {
+        return String::new();
+    };
+    let now = chrono::Utc::now();
+    if dt.format("%Y").to_string() == now.format("%Y").to_string() {
+        dt.format("%d %b").to_string()
+    } else {
+        dt.format("%b %Y").to_string()
     }
 }

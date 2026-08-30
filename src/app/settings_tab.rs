@@ -236,9 +236,9 @@ impl ParetoWatchApp {
             ui.horizontal(|ui| {
                 // ● green with rows loaded, ● red on fetch error, ○ not
                 // fetched yet.
-                if self.benchmark_errors.get(&source).is_some() {
+                if self.benchmark_errors.contains_key(&source) {
                     ui.colored_label(STATUS_BAD, "●");
-                } else if self.benchmark_sets.get(&source).is_some() {
+                } else if self.benchmark_sets.contains_key(&source) {
                     ui.colored_label(STATUS_OK, "●");
                 } else {
                     ui.colored_label(ui.visuals().weak_text_color(), "○");

@@ -644,6 +644,22 @@ pub(crate) struct Quote {
 }
 
 impl Quote {
+    /// Cache-read rate a cost calculation should bill when the quote is used
+    /// as-is: the selected provider's own cache ask, else the cheapest cache
+    /// ask anywhere in this model's market. `None` when no provider in the
+    /// market publishes a cache price.
+    pub(crate) fn best_available_cache_read(&self) -> Option<f64> {
+        if let Some(rate) = self.cache_read {
+            return Some(rate);
+        }
+        let best = self
+            .market_options
+            .iter()
+            .filter_map(|option| option.cache_read)
+            .fold(f64::INFINITY, f64::min);
+        best.is_finite().then_some(best)
+    }
+
     pub(crate) fn price(
         &self,
         metric: PriceMetric,
@@ -683,6 +699,61 @@ pub(crate) fn blended_price(
     }
     let cache_price = cache_read.unwrap_or(input);
     (input * input_weight + cache_price * cache_read_weight + output * output_weight) / total_weight
+}
+
+/// Dollar cost of an explicit token workload against one model's per-1M
+/// rates. The cache-read leg is billed at the cache rate when one is known
+/// and at the fresh-input rate otherwise — the same fallback
+/// [`blended_price`] applies, so a cache-less model is never billed as free.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub(crate) struct WorkloadCost {
+    /// Fresh (uncached) input-token cost in dollars.
+    pub(crate) input: f64,
+    /// Cached input-token cost in dollars at the billed cache rate.
+    pub(crate) cache_read: f64,
+    /// Output-token cost in dollars.
+    pub(crate) output: f64,
+    /// What the cached tokens would have cost at the fresh-input rate;
+    /// the difference is what prompt caching saves.
+    pub(crate) cache_read_at_input_rate: f64,
+}
+
+impl WorkloadCost {
+    pub(crate) fn total(&self) -> f64 {
+        self.input + self.cache_read + self.output
+    }
+
+    /// Dollars saved by prompt caching on this workload; zero when the cache
+    /// leg was billed at the input rate anyway or caching is dearer than
+    /// fresh input (some providers price cache reads above input).
+    pub(crate) fn cache_savings(&self) -> f64 {
+        (self.cache_read_at_input_rate - self.cache_read).max(0.0)
+    }
+}
+
+/// Price a concrete token volume. Token counts are in millions and rates in
+/// $/1M tokens, so each leg is simply `tokens × rate` dollars. Negative
+/// token counts clamp to zero.
+pub(crate) fn token_workload_cost(
+    input_tokens_m: f64,
+    cache_read_tokens_m: f64,
+    output_tokens_m: f64,
+    input_price: f64,
+    cache_read_price: Option<f64>,
+    output_price: f64,
+) -> WorkloadCost {
+    let input_tokens_m = input_tokens_m.max(0.0);
+    let cache_read_tokens_m = cache_read_tokens_m.max(0.0);
+    let output_tokens_m = output_tokens_m.max(0.0);
+    let input = input_tokens_m * input_price.max(0.0);
+    let output = output_tokens_m * output_price.max(0.0);
+    let billed_cache_rate = cache_read_price.filter(|rate| *rate >= 0.0);
+    WorkloadCost {
+        input,
+        cache_read: cache_read_tokens_m * billed_cache_rate.unwrap_or(input_price.max(0.0)),
+        output,
+        cache_read_at_input_rate: cache_read_tokens_m * input_price.max(0.0),
+    }
 }
 
 /// Workload-weighted discount of market prices versus list prices, including
@@ -785,6 +856,77 @@ mod tests {
         assert!((price - 0.96).abs() < 1e-12);
         let fallback = blended_price(2.0, None, 10.0, 15.0, 80.0, 5.0);
         assert!((fallback - 2.4).abs() < 1e-12);
+    }
+
+    #[test]
+    fn token_workload_cost_bills_each_leg_and_clamps() {
+        // 2M fresh input at $1.50, 8M cache reads at $0.15, 0.5M output at $8.
+        let cost = token_workload_cost(2.0, 8.0, 0.5, 1.5, Some(0.15), 8.0);
+        assert!((cost.input - 3.0).abs() < 1e-12);
+        assert!((cost.cache_read - 1.2).abs() < 1e-12);
+        assert!((cost.output - 4.0).abs() < 1e-12);
+        assert!((cost.total() - 8.2).abs() < 1e-12);
+        // Prompt caching saved 8M × ($1.50 − $0.15) = $10.80.
+        assert!((cost.cache_read_at_input_rate - 12.0).abs() < 1e-12);
+        assert!((cost.cache_savings() - 10.8).abs() < 1e-12);
+    }
+
+    #[test]
+    fn token_workload_cost_without_cache_price_bills_at_input_rate() {
+        let cost = token_workload_cost(1.0, 4.0, 1.0, 2.0, None, 6.0);
+        assert!((cost.cache_read - 8.0).abs() < 1e-12);
+        assert!((cost.cache_read_at_input_rate - 8.0).abs() < 1e-12);
+        assert!((cost.cache_savings() - 0.0).abs() < 1e-12);
+        // Negative token counts and rates clamp instead of crediting money.
+        let clamped = token_workload_cost(-5.0, -5.0, -5.0, -2.0, Some(-1.0), -6.0);
+        assert!((clamped.total() - 0.0).abs() < 1e-12);
+    }
+
+    #[test]
+    fn token_workload_cost_cache_dearer_than_input_has_no_savings() {
+        let cost = token_workload_cost(0.0, 1.0, 0.0, 1.0, Some(2.5), 1.0);
+        assert!((cost.cache_read - 2.5).abs() < 1e-12);
+        assert!((cost.cache_savings() - 0.0).abs() < 1e-12);
+    }
+
+    #[test]
+    fn best_available_cache_read_prefers_provider_then_market() {
+        let mut q = test_quote("glm-5.3", 1.0, true);
+        q.cache_read = None;
+        q.market_options = vec![
+            ProviderMarketQuote {
+                provider: "no-cache-ask".into(),
+                input: 0.1,
+                output: 0.4,
+                cache_read: None,
+                trusted: Some(true),
+                healthy_seller_count: Some(3),
+            },
+            ProviderMarketQuote {
+                provider: "dearer".into(),
+                input: 0.2,
+                output: 0.8,
+                cache_read: Some(0.03),
+                trusted: Some(true),
+                healthy_seller_count: Some(3),
+            },
+            ProviderMarketQuote {
+                provider: "cheapest-cache".into(),
+                input: 0.3,
+                output: 0.9,
+                cache_read: Some(0.02),
+                trusted: Some(true),
+                healthy_seller_count: Some(3),
+            },
+        ];
+        assert!((q.best_available_cache_read().unwrap() - 0.02).abs() < 1e-12);
+        // The selected provider's own ask always wins over a cheaper other.
+        q.cache_read = Some(0.05);
+        assert!((q.best_available_cache_read().unwrap() - 0.05).abs() < 1e-12);
+        // No cache pricing anywhere.
+        q.cache_read = None;
+        q.market_options.clear();
+        assert_eq!(q.best_available_cache_read(), None);
     }
 
     #[test]

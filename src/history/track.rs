@@ -12,7 +12,7 @@ use std::collections::HashMap;
 use std::path::Path;
 
 use super::store::{EventKind, EventStore, Frame, PriceField, dequantize_price, quantize_price};
-use crate::types::{PriceSnapshot, Quote};
+use crate::types::{PriceMetric, PriceSnapshot, Quote};
 
 #[derive(Debug, Clone, Default)]
 pub(crate) struct ModelSeries {
@@ -344,6 +344,39 @@ pub(crate) fn carry_forward(series: &[(f64, f64)], ts: f64) -> Option<f64> {
     }
 }
 
+/// Lowest value ever recorded for a price metric, with the timestamp of the
+/// change that established it. Blended lows fold the whole merged timeline,
+/// so a low that existed only when input and output were combined counts even
+/// if neither leg alone was at its own minimum.
+pub(crate) fn historical_low(
+    series: &ModelSeries,
+    metric: PriceMetric,
+    input_weight: f64,
+    cache_read_weight: f64,
+    output_weight: f64,
+) -> Option<(f64, f64)> {
+    match metric {
+        PriceMetric::Input => series
+            .input
+            .iter()
+            .copied()
+            .min_by(|a, b| a.1.total_cmp(&b.1))
+            .map(|(ts, v)| (v, ts)),
+        PriceMetric::Output => series
+            .output
+            .iter()
+            .copied()
+            .min_by(|a, b| a.1.total_cmp(&b.1))
+            .map(|(ts, v)| (v, ts)),
+        PriceMetric::Blended => {
+            blended_series(series, input_weight, cache_read_weight, output_weight)
+                .into_iter()
+                .min_by(|a, b| a.1.total_cmp(&b.1))
+                .map(|(ts, v)| (v, ts))
+        }
+    }
+}
+
 /// Converts change points into step polyline points, extending the final
 /// plateau to `until` so the chart reaches the right edge.
 pub(crate) fn step_points(series: &[(f64, f64)], until: f64) -> Vec<[f64; 2]> {
@@ -559,6 +592,39 @@ mod tests {
             ]
         );
         assert_eq!(step_points(&[], 35.0), Vec::<[f64; 2]>::new());
+    }
+
+    #[test]
+    fn historical_low_tracks_each_leg_and_blended() {
+        let mut s = ModelSeries {
+            slug: "a".into(),
+            display: "a".into(),
+            creator: "".into(),
+            added_ts: 0.0,
+            ..Default::default()
+        };
+        s.input = vec![(0.0, 2.0), (100.0, 1.0)];
+        s.output = vec![(0.0, 10.0), (200.0, 4.0)];
+        s.cache_read = vec![(0.0, 0.5)];
+        let (input_low, input_ts) =
+            historical_low(&s, PriceMetric::Input, 25.0, 50.0, 25.0).expect("input low");
+        assert_eq!((input_low, input_ts), (1.0, 100.0));
+        let (output_low, output_ts) =
+            historical_low(&s, PriceMetric::Output, 25.0, 50.0, 25.0).expect("output low");
+        assert_eq!((output_low, output_ts), (4.0, 200.0));
+        // Blended low must consider merged-timeline combinations via
+        // carry-forward, not just each leg's own minimum: at t=200 the legs
+        // are (input 1, cache 0.5, output 4) → (1*25 + 0.5*50 + 4*25)/100 = 1.5.
+        let (blended_low, _) =
+            historical_low(&s, PriceMetric::Blended, 25.0, 50.0, 25.0).expect("blended low");
+        assert!((blended_low - 1.5).abs() < 1e-9);
+    }
+
+    #[test]
+    fn historical_low_is_none_for_empty_series() {
+        let s = ModelSeries::default();
+        assert!(historical_low(&s, PriceMetric::Input, 1.0, 1.0, 1.0).is_none());
+        assert!(historical_low(&s, PriceMetric::Blended, 1.0, 1.0, 1.0).is_none());
     }
 
     #[test]
