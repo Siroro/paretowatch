@@ -11,14 +11,14 @@
 use std::error::Error;
 use std::path::PathBuf;
 
-use windows::core::{Interface, PCWSTR};
 use windows::Win32::Foundation::{ERROR_SUCCESS, PROPERTYKEY};
 use windows::Win32::System::Com::StructuredStorage::PROPVARIANT;
 use windows::Win32::System::Com::{
-    CoCreateInstance, CoInitializeEx, IPersistFile, CLSCTX_INPROC_SERVER, COINIT_APARTMENTTHREADED,
+    CLSCTX_INPROC_SERVER, COINIT_APARTMENTTHREADED, CoCreateInstance, CoInitializeEx, IPersistFile,
 };
 use windows::Win32::UI::Shell::PropertiesSystem::IPropertyStore;
 use windows::Win32::UI::Shell::{IShellLinkW, ShellLink};
+use windows::core::{Interface, PCWSTR};
 
 pub(crate) const AUMID: &str = "io.github.siroro.ParetoWatch";
 const DISPLAY_NAME: &str = "ParetoWatch";
@@ -46,8 +46,8 @@ fn register() -> Result<(), Box<dyn Error>> {
 
 fn write_registry_identity() -> Result<(), Box<dyn Error>> {
     use windows::Win32::System::Registry::{
-        RegCloseKey, RegCreateKeyExW, RegSetValueExW, HKEY, HKEY_CURRENT_USER, KEY_WRITE,
-        REG_OPTION_NON_VOLATILE, REG_SZ,
+        HKEY, HKEY_CURRENT_USER, KEY_WRITE, REG_OPTION_NON_VOLATILE, REG_SZ, RegCloseKey,
+        RegCreateKeyExW, RegSetValueExW,
     };
 
     unsafe {
