@@ -343,15 +343,12 @@ fn emit(
     // the first seconds of the first run onward; a toast fired before that
     // registration lands simply fails to display (silently, by `let _`),
     // while the alert itself is still recorded and its sound still plays.
+    // The builder methods return `&mut Self`, so the notification must be a
+    // named binding first — chaining onto the temporary breaks on Linux.
+    let mut notification = Notification::new();
+    notification.summary(summary).body(body);
     #[cfg(target_os = "windows")]
-    let notification = {
-        let mut notification = Notification::new();
-        notification.summary(summary).body(body);
-        notification.app_id(crate::win_identity::AUMID);
-        notification
-    };
-    #[cfg(not(target_os = "windows"))]
-    let notification = Notification::new().summary(summary).body(body);
+    notification.app_id(crate::win_identity::AUMID);
     let _ = notification.show();
     if let Some(alert) = alert {
         play_sound(alert.sound);
