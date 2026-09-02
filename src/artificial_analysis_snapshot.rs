@@ -63,7 +63,14 @@ pub(crate) const SNAPSHOT_ROWS: &[(&str, f64)] = &[
     ("Qwen3.8 Max", 58.0),
     ("Qwen3.8 2.4T A95B", 58.0),
     ("GPT-5.6 Terra", 57.0),
+    ("Muse Spark 1.3", 61.0),
     ("Muse Spark 1.2", 57.0),
+    // Added 2026-09-02 (later the same day) for the Muse Spark 1.3 and
+    // Gemini 3.8 Flash releases. Muse Spark 1.3 uses the purchasable xhigh
+    // variant (AA 61); the max variant scores 62 but is a limited-preview
+    // partner release with no public pricing, so it gets no row until Surplus
+    // lists it as a SKU. Gemini 3.8 Flash uses AA's headline (high) variant.
+    ("Gemini 3.8 Flash", 59.0),
     ("Gemini 3.7 Flash", 56.0),
     ("Gemini 3.6 Flash", 52.0),
     ("Grok 4.5", 56.0),
@@ -387,6 +394,8 @@ mod tests {
             ("MiMo-V2.5", 38.0),
             ("Muse Glimmer 30B", 35.0),
             ("NVIDIA Nemotron 3.5 Lightning 30B", 24.0),
+            ("Muse Spark 1.3", 61.0),
+            ("Gemini 3.8 Flash", 59.0),
         ] {
             assert_eq!(
                 score_of(name),
