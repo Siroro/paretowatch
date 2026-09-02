@@ -30,7 +30,9 @@
 //! Deliberately unrated (no AA presence as of 2026-08-26): Aion 2.0, Hermes 3
 //! 405B, Palmyra Vision 7B, Qwen 2.5 7B, GPT-OSS Safeguard 20B/120B, Grok 4.20
 //! Multi-Agent Beta, Venice rebrands, and uncensored finetunes such as GLM 4.7
-//! Flash Heretic. Unrated models fall back to the composite's small neutral
+//! Flash Heretic; Aion 3.0, Aion 3.0 Mini, and Seed 2.1 Turbo were checked and
+//! still have no AA presence as of 2026-09-02. Unrated models fall back to the
+//! composite's small neutral
 //! prior for the missing evidence instead of renormalizing it away, so absent
 //! rows cost coverage confidence but never invent capability.
 
@@ -44,6 +46,11 @@ pub(crate) const ARTIFICIAL_ANALYSIS_SNAPSHOT_VERSION: &str = "v4.1.2";
 /// family. Names should mirror Surplus display names so exact-key joins hit
 /// before fuzzy matching has to.
 pub(crate) const SNAPSHOT_ROWS: &[(&str, f64)] = &[
+    // Added 2026-09-02 for the Surplus listings of 2026-08-27..09-01, read from
+    // the same v4.1.2 index. Wrapper SKUs (E2EE/Fast/Preview) and families
+    // already present (Qwen 3.8 27B, GLM 5.2, Kimi K3, DeepSeek V4 Flash,
+    // MiniMax M3) inherit their existing rows via key canonicalization.
+    ("Claude Fable 5.1", 66.0),
     ("Claude Opus 5", 63.0),
     ("Claude Fable 5", 62.0),
     ("GPT-5.6 Sol", 61.0),
@@ -58,12 +65,14 @@ pub(crate) const SNAPSHOT_ROWS: &[(&str, f64)] = &[
     ("GPT-5.6 Terra", 57.0),
     ("Muse Spark 1.2", 57.0),
     ("Gemini 3.7 Flash", 56.0),
+    ("Gemini 3.6 Flash", 52.0),
     ("Grok 4.5", 56.0),
     ("Claude Sonnet 5", 55.0),
     ("GPT-5.5", 55.0),
     ("Claude Opus 4.8", 57.0),
     ("Claude Opus 4.7", 55.0),
     ("Muse Spark 1.1", 53.0),
+    ("Muse Glimmer 30B", 35.0),
     ("DeepSeek V4 Pro 0813", 53.0),
     ("GLM-5.2", 53.0),
     ("GPT-5.4", 53.0),
@@ -74,6 +83,7 @@ pub(crate) const SNAPSHOT_ROWS: &[(&str, f64)] = &[
     ("DeepSeek V4 Flash 0731", 52.0),
     ("GPT-5.6 Luna", 52.0),
     ("Gemini 3.5 Flash", 52.0),
+    ("Gemini 3.5 Flash Lite", 37.0),
     ("Gemini 3.1 Pro Preview", 48.0),
     ("Gemini 3.1 Flash-Lite", 26.0),
     ("Gemini 3 Flash Preview", 39.0),
@@ -87,10 +97,12 @@ pub(crate) const SNAPSHOT_ROWS: &[(&str, f64)] = &[
     ("Kimi K2.6", 45.0),
     ("Claude Opus 4.6", 45.0),
     ("Qwen3.8 27B", 52.0),
+    ("Qwen3.8 Flash", 46.0),
     ("Kimi K2.7 Code", 43.0),
     ("Kimi K2 Thinking", 33.0),
     ("Kimi K2", 20.0),
     ("MiMo-V2.5-Pro", 43.0),
+    ("MiMo-V2.5", 38.0),
     ("Hy3", 42.0),
     ("DeepSeek V4 Flash", 42.0),
     ("GLM-5.1", 41.0),
@@ -108,6 +120,7 @@ pub(crate) const SNAPSHOT_ROWS: &[(&str, f64)] = &[
     ("Grok 4.1 Fast", 31.0),
     ("Grok 4", 34.0),
     ("NVIDIA Nemotron 3 Ultra 550B A55B", 38.0),
+    ("NVIDIA Nemotron 3.5 Lightning 30B", 24.0),
     ("Claude 4.5 Sonnet", 37.0),
     ("Claude Opus 4.5", 36.0),
     ("Kimi K2.5", 36.0),
@@ -353,5 +366,33 @@ mod tests {
         assert_eq!(deepseek_release.agentic_coding, Some(52.0));
         assert_eq!(deepseek_base.agentic_coding, Some(42.0));
         assert_eq!(glm.agentic_coding, Some(60.0));
+    }
+
+    #[test]
+    fn aa_snapshot_covers_september_2026_surplus_listings() {
+        // Rows added 2026-09-02. The Lite/Flash and V2.5/V2.5-Pro pairs must
+        // stay distinct keys so the cheaper variants never inherit the flagship
+        // score (the unique-key test enforces this globally).
+        let rows = artificial_analysis_snapshot();
+        let score_of = |name: &str| {
+            rows.iter()
+                .find(|b| benchmark_model_key(&b.slug) == benchmark_model_key(name))
+                .and_then(|b| b.agentic_coding)
+        };
+        for (name, expected) in [
+            ("Claude Fable 5.1", 66.0),
+            ("Gemini 3.6 Flash", 52.0),
+            ("Gemini 3.5 Flash Lite", 37.0),
+            ("Qwen3.8 Flash", 46.0),
+            ("MiMo-V2.5", 38.0),
+            ("Muse Glimmer 30B", 35.0),
+            ("NVIDIA Nemotron 3.5 Lightning 30B", 24.0),
+        ] {
+            assert_eq!(
+                score_of(name),
+                Some(expected),
+                "{name} missing or wrong in snapshot"
+            );
+        }
     }
 }

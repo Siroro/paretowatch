@@ -27,7 +27,7 @@ pub(crate) fn canonical_group(creator: &str) -> &str {
         "venice" | "venice ai" | "api venice ai" => "Venice AI",
         "anthropic" => "Anthropic",
         "nvidia" => "NVIDIA",
-        "xiaomi" => "Xiaomi",
+        "xiaomi" | "mimo" | "mimo ai" => "Xiaomi",
         "tencent" => "Tencent",
         "microsoft" => "Microsoft",
         "cohere" => "Cohere",
@@ -65,7 +65,7 @@ pub(crate) fn infer_creator(model: &str) -> String {
         "Z.AI".into()
     } else if n.starts_with("minimax ") {
         "MiniMax".into()
-    } else if n.starts_with("mimo ") {
+    } else if n.starts_with("mimo ") || n.starts_with("xiaomi ") {
         "Xiaomi".into()
     } else if n.starts_with("nemotron ") || n.starts_with("nvidia ") {
         "NVIDIA".into()
@@ -190,6 +190,7 @@ mod tests {
             ["Moonshot", "Moonshot AI", "Kimi"],
             ["OpenAI", "Open AI", "openai"],
             ["Venice AI", "Venice", "api.venice.ai"],
+            ["Xiaomi", "MiMo", "MiMo AI"],
         ] {
             let canonical = canonical_group(variants[0]);
             for variant in variants {
@@ -217,6 +218,18 @@ mod tests {
         assert_ne!(creator_color("Anthropic"), creator_color(""));
         // Unknown creators hash deterministically.
         assert_eq!(creator_color("Some New Lab"), creator_color("Some New Lab"));
+    }
+
+    #[test]
+    fn mimo_models_infer_and_color_as_xiaomi() {
+        // Surplus prices rows carry bare IDs like `xiaomi-mimo-v2-5` with no
+        // provider field, and some boards label the creator `MiMo`: both must
+        // land in the Xiaomi group with its brand color, never a hash color.
+        assert_eq!(infer_creator("xiaomi-mimo-v2-5"), "Xiaomi");
+        assert_eq!(infer_creator("MiMo-V2.5"), "Xiaomi");
+        assert_eq!(infer_creator("MiMo-V2.5-Pro"), "Xiaomi");
+        assert_eq!(canonical_group("MiMo"), "Xiaomi");
+        assert_eq!(creator_color("MiMo"), creator_color("Xiaomi"));
     }
 
     #[test]
