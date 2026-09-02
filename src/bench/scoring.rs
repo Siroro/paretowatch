@@ -81,25 +81,25 @@ pub(crate) const PRIOR_WEIGHT: f64 = 0.10;
 /// missing evidence for everyone, not a per-model signal.
 pub(crate) const MISSING_EVIDENCE_FRACTION: f64 = 0.25;
 
-/// Confidence discount for models no board has evaluated yet. Their score is
-/// pure AA prior; without this discount a newcomer's unverified standing sits
-/// ABOVE models whose boards measurably drag them (a brand-new model with AA
-/// 58 outranked GPT-5.6 Sol, who tops DeepSWE, because Sol's real boards cost
-/// him while the newcomer's absence cost nothing). Ordering among newcomers
-/// is preserved; only the confidence in their standing is reduced.
+/// Confidence floor for the first sliver of board coverage. Models with SOME
+/// board evidence but thin coverage keep a discounted confidence (their thin
+/// measurements may not represent broad capability). Models with NO board row
+/// at all bypass the ramp entirely and enter at their prior: the posterior
+/// mean of an unmeasured model IS its prior mean, and their uncertainty is
+/// disclosed (sparse-evidence tier, pending-board count) rather than paid for
+/// in points — the old neutral-shrink let measured-but-dragged leaders mask
+/// the AA leader (Fable 5.1, AA 66, sat below the AA-63 Opus 5).
 pub(crate) const ZERO_EVIDENCE_CONFIDENCE: f64 = 0.75;
 
 /// Coverage at which evidence confers full confidence — the same threshold
 /// `evidence_tier` uses for "strong evidence".
 pub(crate) const STRONG_EVIDENCE_COVERAGE: f64 = 0.60;
 
-/// Evidence confidence ramps linearly from `ZERO_EVIDENCE_CONFIDENCE` at no
-/// board coverage to 1.0 at strong coverage, and the final score shrinks
-/// toward the neutral midpoint by it. The zero-board case is exactly the
-/// historical discount; partial coverage now gets a proportional version —
-/// a two-board model whose every percentile sits at its prior was carrying
-/// full confidence, which let thin evidence outrank broad measured coverage
-/// (GLM-5.3 above GPT-5.6 Sol on 2-of-7 boards).
+/// Evidence confidence ramps linearly from `ZERO_EVIDENCE_CONFIDENCE` at the
+/// first sliver of coverage to 1.0 at strong coverage, and the final score
+/// shrinks toward the neutral midpoint by it. Callers bypass the ramp for
+/// models with no board contributions at all (they enter at their prior; see
+/// `ZERO_EVIDENCE_CONFIDENCE`).
 pub(crate) fn evidence_confidence(coverage: f64) -> f64 {
     ZERO_EVIDENCE_CONFIDENCE
         + (1.0 - ZERO_EVIDENCE_CONFIDENCE) * (coverage / STRONG_EVIDENCE_COVERAGE).min(1.0)
@@ -238,10 +238,12 @@ pub(crate) fn anchored_aa_percentiles(
             .iter()
             .filter(|s| (**s - score).abs() <= 1e-9)
             .count();
-        // Tie-aware midpoint of the newcomer's slot within cohort + itself.
+        // Tie-aware midpoint of the newcomer's slot within cohort + itself,
+        // clamped to the percentile scale: inserting above the whole cohort
+        // is the 100th percentile, not (n+1)/n·100 > 100.
         let first = less + 1;
         let last = less + equal + 1;
-        let pct = ((first + last) as f64 / 2.0) / (total as f64 - 1.0) * 100.0;
+        let pct = (((first + last) as f64 / 2.0) / (total as f64 - 1.0) * 100.0).clamp(0.0, 100.0);
         map.insert(key, pct);
     }
     Some((map, n))
@@ -607,12 +609,21 @@ pub(crate) fn build_agentic_composite(
             })
             .sum();
         let coverage = (covered_base / AGENTIC_EVIDENCE_TOTAL_WEIGHT).min(1.0);
-        // Confidence scales with coverage: zero-board models keep the
-        // historical ZERO_EVIDENCE_CONFIDENCE discount; partial coverage gets
-        // a proportional one. Without the ramp, a thin two-board model whose
-        // every percentile sits near its prior carried full confidence and
-        // outranked broad measured coverage.
-        let score = 50.0 + (adjusted - 50.0) * evidence_confidence(coverage);
+        // Confidence scales with coverage — but only for models the boards
+        // have at least touched. A model with NO board row enters exactly at
+        // its prior: the posterior mean of an unmeasured model is its prior
+        // mean, and its higher variance is disclosed (sparse-evidence tier,
+        // pending-board count) rather than subtracted from the score. The old
+        // neutral-shrink here compressed the AA leader below measured models
+        // the AA scale itself ranks below it (Fable 5.1, AA 66, under Opus 5,
+        // AA 63). Thin partial coverage keeps the proportional discount: a
+        // two-board model whose every percentile sits near its prior must not
+        // outrank broad measured coverage.
+        let score = if contribs.is_empty() {
+            adjusted
+        } else {
+            50.0 + (adjusted - 50.0) * evidence_confidence(coverage)
+        };
         let measured = if robust_w.iter().any(|w| *w > 0.0) {
             let mut sum = 0.0;
             let mut denom = 0.0;
@@ -1506,6 +1517,118 @@ mod tests {
             newcomer.name,
         );
         assert!(newcomer.name.contains("prior AA"), "{}", newcomer.name);
+    }
+
+    #[test]
+    fn aa_leader_without_board_rows_tops_the_composite() {
+        // Fable 5.1 shape: AA 66 (above every board-covered model's AA), no
+        // board row yet because it just launched. The composite must rank it
+        // first at its anchored prior standing (100th, clamped — never the
+        // raw (n+1)/n insertion overshoot), while Opus 5 (AA 63, top-board
+        // evidence everywhere) stays just below on measured strength.
+        let mk =
+            |name: &str, score: f64| score_benchmark(name, score, None, None, BenchmarkKind::Model);
+        let mut sets = HashMap::new();
+        sets.insert(
+            BenchmarkSource::ArtificialAnalysisSnapshot,
+            vec![
+                mk("Claude Fable 5.1", 66.0),
+                mk("Claude Opus 5", 63.0),
+                mk("GPT-5.6 Sol", 61.0),
+                mk("Grok 4.6", 61.0),
+                mk("GLM-5.3", 60.0),
+                mk("Claude Sonnet 5", 55.0),
+                mk("MiniMax-M3", 45.0),
+                mk("f1", 40.0),
+                mk("f2", 35.0),
+                mk("f3", 30.0),
+                mk("f4", 25.0),
+            ],
+        );
+        sets.insert(
+            BenchmarkSource::SWERebench,
+            vec![
+                mk("GPT-5.6 Sol", 62.3),
+                mk("Grok 4.6", 61.0),
+                mk("Claude Opus 5", 58.0),
+                mk("GLM-5.3", 56.0),
+                mk("Claude Sonnet 5", 50.0),
+                mk("f1", 45.0),
+                mk("f2", 40.0),
+                mk("f3", 35.0),
+                mk("MiniMax-M3", 30.0),
+                mk("f4", 22.0),
+            ],
+        );
+        sets.insert(
+            BenchmarkSource::DeepSWE11,
+            vec![
+                mk("GPT-5.6 Sol", 72.7),
+                mk("GLM-5.3", 66.9),
+                mk("Claude Opus 5", 65.0),
+                mk("Grok 4.6", 63.0),
+                mk("f1", 44.0),
+                mk("f2", 40.0),
+                mk("Claude Sonnet 5", 38.0),
+                mk("f3", 36.0),
+                mk("MiniMax-M3", 33.0),
+                mk("f4", 25.0),
+            ],
+        );
+        sets.insert(
+            BenchmarkSource::LiveBench,
+            vec![
+                mk("GLM-5.3", 80.0),
+                mk("Claude Opus 5", 75.0),
+                mk("GPT-5.6 Sol", 70.0),
+                mk("Grok 4.6", 68.0),
+                mk("Claude Sonnet 5", 60.0),
+                mk("f1", 55.0),
+                mk("f2", 50.0),
+                mk("f3", 45.0),
+                mk("MiniMax-M3", 40.0),
+                mk("f4", 30.0),
+            ],
+        );
+        let composite = build_agentic_composite(
+            &sets,
+            ComparisonMode::ModelCapability,
+            "",
+            CompositeFlavor::Capability,
+        );
+        let fable = composite
+            .iter()
+            .find(|b| benchmark_model_key(&b.slug) == "fable 5 1")
+            .unwrap();
+        let opus = composite
+            .iter()
+            .find(|b| benchmark_model_key(&b.slug) == "opus 5")
+            .unwrap();
+        let fable_score = fable.agentic_coding.unwrap();
+        let opus_score = opus.agentic_coding.unwrap();
+        // Enters at its clamped anchored prior, exactly.
+        assert!(
+            (fable_score - 100.0).abs() < 1e-9,
+            "AA leader should enter at the 100th anchored percentile, got {fable_score}: {}",
+            fable.name
+        );
+        assert!(
+            fable_score > opus_score,
+            "AA 66 leader ({fable_score}) must outrank AA 63 with boards ({opus_score})\nFable: {}\nOpus: {}",
+            fable.name,
+            opus.name,
+        );
+        assert_eq!(
+            benchmark_model_key(&composite[0].slug),
+            "fable 5 1",
+            "composite leader should be Fable 5.1, got {}",
+            composite[0].name
+        );
+        // The unmeasured standing must be disclosed, not silent.
+        assert!(fable.name.contains("0 sources"), "{}", fable.name);
+        assert!(fable.name.contains("prior AA 100th"), "{}", fable.name);
+        assert!(fable.name.contains("sparse evidence"), "{}", fable.name);
+        assert!(fable.name.contains("boards pending"), "{}", fable.name);
     }
 
     #[test]
