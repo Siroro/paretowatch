@@ -81,25 +81,37 @@ pub(crate) const PRIOR_WEIGHT: f64 = 0.10;
 /// missing evidence for everyone, not a per-model signal.
 pub(crate) const MISSING_EVIDENCE_FRACTION: f64 = 0.25;
 
-/// Confidence floor for the first sliver of board coverage. Models with SOME
-/// board evidence but thin coverage keep a discounted confidence (their thin
-/// measurements may not represent broad capability). Models with NO board row
-/// at all bypass the ramp entirely and enter at their prior: the posterior
-/// mean of an unmeasured model IS its prior mean, and their uncertainty is
-/// disclosed (sparse-evidence tier, pending-board count) rather than paid for
-/// in points — the old neutral-shrink let measured-but-dragged leaders mask
-/// the AA leader (Fable 5.1, AA 66, sat below the AA-63 Opus 5).
+/// Confidence floor for the first sliver of board coverage. Thin measurements
+/// move the score only partway from the model's PRIOR standing toward the
+/// measurement: reverting toward the prior — not toward population-neutral —
+/// is what keeps the ordering honest (an AA leader with one thin board row
+/// stays at its standing; Fable 5.1, AA 66, fell to ~90th under the old
+/// neutral shrink, below the AA-63 Opus 5). See also
+/// [`RANK_UNCERTAINTY_PENALTY`].
 pub(crate) const ZERO_EVIDENCE_CONFIDENCE: f64 = 0.75;
+
+/// Ordinal penalty for thin evidence. Reverting toward the prior keeps the
+/// posterior MEAN honest, but two models can land in a dead heat (GLM-5.3 on
+/// 2-of-7 boards vs GPT-5.6 Sol on 4) where the thinner one previously won
+/// ties outright because its narrow evidence could not drag it. Ranking is
+/// ordinal: with symmetric uncertainty the expected rank of a high-variance
+/// standing sits slightly below its mean, so thin-coverage models give up
+/// this many percentile points per unit of missing confidence. Calibrated so
+/// the GLM/Sol regression keeps its ordering while an AA leader's margin
+/// (Fable 5.1 ~99 vs Opus 5 ~97) survives intact.
+pub(crate) const RANK_UNCERTAINTY_PENALTY: f64 = 2.5;
 
 /// Coverage at which evidence confers full confidence — the same threshold
 /// `evidence_tier` uses for "strong evidence".
 pub(crate) const STRONG_EVIDENCE_COVERAGE: f64 = 0.60;
 
 /// Evidence confidence ramps linearly from `ZERO_EVIDENCE_CONFIDENCE` at the
-/// first sliver of coverage to 1.0 at strong coverage, and the final score
-/// shrinks toward the neutral midpoint by it. Callers bypass the ramp for
-/// models with no board contributions at all (they enter at their prior; see
-/// `ZERO_EVIDENCE_CONFIDENCE`).
+/// first sliver of coverage to 1.0 at strong coverage. The final score is
+/// `prior + (posterior - prior) * confidence - RANK_UNCERTAINTY_PENALTY *
+/// (1 - confidence)`: weak evidence moves a model partway from what it
+/// already believed toward the measurement, never all the way, and the
+/// remaining uncertainty costs a small ordinal discount. A model with no
+/// board rows at all degenerates to exactly its prior.
 pub(crate) fn evidence_confidence(coverage: f64) -> f64 {
     ZERO_EVIDENCE_CONFIDENCE
         + (1.0 - ZERO_EVIDENCE_CONFIDENCE) * (coverage / STRONG_EVIDENCE_COVERAGE).min(1.0)
@@ -609,20 +621,23 @@ pub(crate) fn build_agentic_composite(
             })
             .sum();
         let coverage = (covered_base / AGENTIC_EVIDENCE_TOTAL_WEIGHT).min(1.0);
-        // Confidence scales with coverage — but only for models the boards
-        // have at least touched. A model with NO board row enters exactly at
-        // its prior: the posterior mean of an unmeasured model is its prior
-        // mean, and its higher variance is disclosed (sparse-evidence tier,
-        // pending-board count) rather than subtracted from the score. The old
-        // neutral-shrink here compressed the AA leader below measured models
-        // the AA scale itself ranks below it (Fable 5.1, AA 66, under Opus 5,
-        // AA 63). Thin partial coverage keeps the proportional discount: a
-        // two-board model whose every percentile sits near its prior must not
-        // outrank broad measured coverage.
+        // Thin coverage reverts the score toward the model's prior standing,
+        // not toward population-neutral: weak evidence moves a model partway
+        // from what the AA scale already established toward the measurement,
+        // plus a small ordinal discount for the un-shared evidence (see
+        // RANK_UNCERTAINTY_PENALTY). The old neutral shrink compressed the AA
+        // leader below measured models the AA scale itself ranks below it
+        // (Fable 5.1, AA 66 with a single thin board row, sat ~90th under the
+        // AA-63 Opus 5), and with no board rows at all the neutral shrink was
+        // pure penalty. Here the zero-row case degenerates to exactly the
+        // prior, and broad coverage (confidence 1.0) keeps the measured
+        // posterior unchanged.
         let score = if contribs.is_empty() {
             adjusted
         } else {
-            50.0 + (adjusted - 50.0) * evidence_confidence(coverage)
+            let confidence = evidence_confidence(coverage);
+            prior_pct + (adjusted - prior_pct) * confidence
+                - RANK_UNCERTAINTY_PENALTY * (1.0 - confidence)
         };
         let measured = if robust_w.iter().any(|w| *w > 0.0) {
             let mut sum = 0.0;
@@ -1632,6 +1647,118 @@ mod tests {
     }
 
     #[test]
+    fn aa_leader_with_single_thin_board_still_tops_the_composite() {
+        // The production shape the day after launch: the AA leader (Fable 5.1,
+        // AA 66) picks up its FIRST board row — a thin Revelo-weight entry —
+        // while Opus 5 keeps broad top-board evidence. Thin coverage must
+        // revert toward the prior (the standing AA already established), so
+        // the leader stays on top instead of collapsing toward neutral.
+        let mk =
+            |name: &str, score: f64| score_benchmark(name, score, None, None, BenchmarkKind::Model);
+        let mut sets = HashMap::new();
+        sets.insert(
+            BenchmarkSource::ArtificialAnalysisSnapshot,
+            vec![
+                mk("Claude Fable 5.1", 66.0),
+                mk("Claude Opus 5", 63.0),
+                mk("GPT-5.6 Sol", 61.0),
+                mk("Grok 4.6", 61.0),
+                mk("GLM-5.3", 60.0),
+                mk("Claude Sonnet 5", 55.0),
+                mk("MiniMax-M3", 45.0),
+                mk("f1", 40.0),
+                mk("f2", 35.0),
+                mk("f3", 30.0),
+                mk("f4", 25.0),
+            ],
+        );
+        sets.insert(
+            BenchmarkSource::SWERebench,
+            vec![
+                mk("GPT-5.6 Sol", 62.3),
+                mk("Grok 4.6", 61.0),
+                mk("Claude Opus 5", 58.0),
+                mk("GLM-5.3", 56.0),
+                mk("Claude Sonnet 5", 50.0),
+                mk("f1", 45.0),
+                mk("f2", 40.0),
+                mk("f3", 35.0),
+                mk("MiniMax-M3", 30.0),
+                mk("f4", 22.0),
+            ],
+        );
+        sets.insert(
+            BenchmarkSource::DeepSWE11,
+            vec![
+                mk("GPT-5.6 Sol", 72.7),
+                mk("GLM-5.3", 66.9),
+                mk("Claude Opus 5", 65.0),
+                mk("Grok 4.6", 63.0),
+                mk("f1", 44.0),
+                mk("f2", 40.0),
+                mk("Claude Sonnet 5", 38.0),
+                mk("f3", 36.0),
+                mk("MiniMax-M3", 33.0),
+                mk("f4", 25.0),
+            ],
+        );
+        sets.insert(
+            BenchmarkSource::LiveBench,
+            vec![
+                mk("GLM-5.3", 80.0),
+                mk("Claude Opus 5", 75.0),
+                mk("GPT-5.6 Sol", 70.0),
+                mk("Grok 4.6", 68.0),
+                mk("Claude Sonnet 5", 60.0),
+                mk("f1", 55.0),
+                mk("f2", 50.0),
+                mk("f3", 45.0),
+                mk("MiniMax-M3", 40.0),
+                mk("f4", 30.0),
+            ],
+        );
+        // Fable 5.1's only board row: a thin Revelo-shaped field it tops.
+        sets.insert(
+            BenchmarkSource::ReveloCodeIndex,
+            vec![
+                mk("Claude Fable 5.1", 58.0),
+                mk("Claude Opus 5", 48.0),
+                mk("Grok 4.6", 40.0),
+                mk("GLM-5.3", 35.0),
+                mk("Kimi K3", 30.0),
+            ],
+        );
+        let composite = build_agentic_composite(
+            &sets,
+            ComparisonMode::ModelCapability,
+            "",
+            CompositeFlavor::Capability,
+        );
+        let fable = composite
+            .iter()
+            .find(|b| benchmark_model_key(&b.slug) == "fable 5 1")
+            .unwrap();
+        let opus = composite
+            .iter()
+            .find(|b| benchmark_model_key(&b.slug) == "opus 5")
+            .unwrap();
+        let fable_score = fable.agentic_coding.unwrap();
+        let opus_score = opus.agentic_coding.unwrap();
+        assert!(
+            fable_score > opus_score,
+            "AA 66 leader with one thin board ({fable_score}) must outrank AA 63 with broad boards ({opus_score})\nFable: {}\nOpus: {}",
+            fable.name,
+            opus.name,
+        );
+        assert_eq!(
+            benchmark_model_key(&composite[0].slug),
+            "fable 5 1",
+            "composite leader should be Fable 5.1, got {}",
+            composite[0].name
+        );
+    }
+
+    #[test]
     fn consensus_aa_percentile_uses_the_anchored_elite_scale() {
         // Same elite-cohort shape as the Sol/GLM composite regression: boards
         // cover ~10 current frontier models, so AA must be ranked within that
@@ -2104,5 +2231,62 @@ mod tests {
         assert!((evidence_confidence(1.0) - 1.0).abs() < 1e-12);
         let quarter = evidence_confidence(0.15);
         assert!(quarter > ZERO_EVIDENCE_CONFIDENCE && quarter < evidence_confidence(0.45));
+    }
+
+    /// Live-data smoke check: runs the REAL board fetchers and the bundled AA
+    /// snapshot through the composite and prints the top of the chart, so a
+    /// reported ranking can be verified against what a current build actually
+    /// computes (e.g. the Fable 5.1 AA-leader ruling of 2026-09-02). Not part
+    /// of CI: it needs network access and its assertions describe today's
+    /// snapshot leader — update the expected leader when the snapshot's top
+    /// row changes, or when boards have genuinely demoted the leader with
+    /// broad evidence.
+    #[test]
+    #[ignore = "hits live leaderboards; run explicitly with cargo test -- --ignored"]
+    fn live_composite_ranks_aa_leader_first() {
+        use crate::fetch::fetch_benchmark_source;
+        let client = reqwest::blocking::Client::builder()
+            .timeout(std::time::Duration::from_secs(30))
+            .build()
+            .unwrap();
+        let mut sets = HashMap::new();
+        for source in [
+            BenchmarkSource::ArtificialAnalysisSnapshot,
+            BenchmarkSource::SWERebench,
+            BenchmarkSource::TerminalBench3,
+            BenchmarkSource::TerminalBench4,
+            BenchmarkSource::DeepSWE11,
+            BenchmarkSource::LiveBench,
+            BenchmarkSource::ReveloCodeIndex,
+        ] {
+            match fetch_benchmark_source(&client, source) {
+                Ok(rows) => {
+                    println!("{source:?}: {} rows", rows.len());
+                    sets.insert(source, rows);
+                }
+                Err(err) => println!("{source:?}: FAILED {err:#}"),
+            }
+        }
+        let composite = build_agentic_composite(
+            &sets,
+            ComparisonMode::ModelCapability,
+            "mini-SWE-agent",
+            CompositeFlavor::Capability,
+        );
+        println!("--- composite top 10 ---");
+        for row in composite.iter().take(10) {
+            println!(
+                "{:6.1}  {}",
+                row.agentic_coding.unwrap_or(f64::NAN),
+                clean_benchmark_display_name(&row.name),
+            );
+        }
+        let leader = composite.first().expect("composite is non-empty");
+        assert_eq!(
+            benchmark_model_key(&leader.slug),
+            "fable 5 1",
+            "expected the AA leader Claude Fable 5.1 on top, got {}",
+            leader.name
+        );
     }
 }
