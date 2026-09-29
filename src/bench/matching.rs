@@ -230,6 +230,8 @@ pub(crate) fn is_model_modifier(token: &str) -> bool {
             | "nonreasoning"
             | "fast"
             | "highspeed"
+            | "ultraspeed"
+            | "prime"
             | "instruct"
             | "it"
     ) || (token.ends_with('k')
@@ -295,6 +297,20 @@ mod tests {
         assert_eq!(
             benchmark_model_key("deepseek-v4-flash:web"),
             benchmark_model_key("DeepSeek V4 Flash")
+        );
+        // Xiaomi's UltraSpeed serving edition is the same MiMo-V2.6-Pro
+        // checkpoint, so it inherits the base row instead of reading as an
+        // unrated model.
+        assert_eq!(
+            benchmark_model_key("mimo-v2.6-pro-ultraspeed"),
+            benchmark_model_key("MiMo-V2.6-Pro")
+        );
+        // Z.ai's GLM 5.3 Prime is the same GLM-5.3 checkpoint served at higher
+        // speed ("inheriting its full capabilities" per the listing), so it
+        // inherits the base row the same way.
+        assert_eq!(
+            benchmark_model_key("glm-5.3-prime"),
+            benchmark_model_key("GLM-5.3")
         );
     }
 

@@ -465,13 +465,16 @@ mod tests {
     fn record_persists_and_reloads_identically() {
         let path = temp_path("reload");
         let _ = fs::remove_file(&path);
-        let base = Utc::now();
+        // Noon-UTC anchored so base + 1h can never straddle an UTC-midnight
+        // boundary (telemetry is once-per-day and would otherwise record
+        // twice when the suite runs in the hour before midnight).
+        let base = day_offset(0);
         {
             let mut t = HistoryTracker::open(&path);
             t.record(&snapshot(vec![quote("openai/gpt-x", 2.5, 10.0)]), base);
             t.record(
                 &snapshot(vec![quote("openai/gpt-x", 2.0, 10.0)]),
-                base + chrono::Duration::seconds(3600),
+                day_offset(3600),
             );
         }
         let t = HistoryTracker::open(&path);

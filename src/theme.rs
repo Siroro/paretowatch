@@ -101,6 +101,7 @@ pub(crate) fn creator_color(creator: &str) -> egui::Color32 {
         ("microsoft", 130, 181, 255),
         ("cohere", 255, 205, 184),
         ("ai21", 30, 200, 200),
+        ("typesafe", 49, 120, 198),
     ];
     if let Some(&(_, r, g, b)) = known.iter().find(|(name, _, _, _)| *name == n) {
         return egui::Color32::from_rgb(r, g, b);
@@ -173,6 +174,34 @@ pub(crate) fn free_offer_badge(ui: &mut egui::Ui) {
         "This market also has a free (100% off) offer. Prices shown exclude it \
              and are the cheapest ask that actually costs money.",
     );
+}
+
+/// The model's Surplus slug in monospace with a one-click copy button — the
+/// identifier to hand to the Surplus API. The button flips to a checkmark for
+/// a couple of seconds so the copy is visibly acknowledged. The clipboard and
+/// check glyphs are emoji: only egui's bundled Noto Emoji / emoji-icon-font
+/// faces cover them (plain symbol code points like U+29C9 render as tofu).
+pub(crate) fn copyable_slug(ui: &mut egui::Ui, slug: &str) {
+    ui.horizontal(|ui| {
+        ui.label(egui::RichText::new(slug).monospace().weak())
+            .on_hover_text("Model slug as listed on Surplus — click 📋 to copy");
+        let id = egui::Id::new("copyable-slug").with(slug);
+        let copied_at = ui
+            .ctx()
+            .data_mut(|data| data.get_temp::<std::time::Instant>(id));
+        let acknowledged =
+            copied_at.is_some_and(|at| at.elapsed() < std::time::Duration::from_secs(2));
+        if acknowledged {
+            ui.ctx()
+                .request_repaint_after(std::time::Duration::from_millis(250));
+        }
+        let button = if acknowledged { "✔" } else { "📋" };
+        if ui.small_button(button).clicked() {
+            ui.ctx().copy_text(slug.to_owned());
+            ui.ctx()
+                .data_mut(|data| data.insert_temp(id, std::time::Instant::now()));
+        }
+    });
 }
 
 #[cfg(test)]

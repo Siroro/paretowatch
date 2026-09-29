@@ -22,31 +22,49 @@ pub(crate) const MIN_ANCHORED_POPULATION: usize = 10;
 /// Fixed calibration landmarks mapping raw AA Intelligence scores to a stable
 /// 0..100 capability percentile. Empirical within-snapshot ranks throw away
 /// magnitude: because the snapshot is bottom-heavy with legacy models, scores
-/// 42 and 53 both land in the top quartile by rank even though they differ by
-/// 11 points of measured intelligence. Interpolating over these hand-picked
+/// 25 and 40 both land in the top quartile by rank even though they differ by
+/// 15 points of measured intelligence. Interpolating over these hand-picked
 /// anchors keeps AA comparable with the other boards while preserving how far
 /// apart two models actually are. Bump together with snapshot bumps if the
-/// score scale shifts.
+/// score scale shifts: these points are for the v4.3.2 index (the 2026-09-04/07
+/// v4.2+v4.3 revisions compressed the scale — the AA leader moved from 66 to
+/// 53 — and the 2026-09-22 bump moved the top anchor from 50 to 58 when Claude
+/// Opus 5.5 entered as the new leader, which also stopped the old top tier
+/// (Fable 5.1, GPT-6 Astra) from piling onto the 100th-percentile ceiling). The
+/// 2026-09-29 read kept both the index and the anchors: Opus 5.5 still leads
+/// at 58 and Claude Sonnet 5.5 entered at 56, below the anchor. Each landmark
+/// tracks the same reference models as before: the leader tier
+/// ~99th, Gemini-3.x-Flash-class ~90th, Luna/DeepSeek-refresh class ~80th, the
+/// broad frontier mid-pack ~68th.
 pub(crate) const AA_CALIBRATION_POINTS: &[(f64, f64)] = &[
-    (63.0, 99.0),
-    (55.0, 90.0),
-    (50.0, 80.0),
-    (45.0, 68.0),
-    (40.0, 55.0),
-    (35.0, 42.0),
-    (30.0, 30.0),
-    (25.0, 22.0),
-    (20.0, 15.0),
-    (15.0, 10.0),
-    (10.0, 6.0),
-    (5.0, 3.0),
+    (58.0, 99.0),
+    (39.0, 90.0),
+    (35.0, 80.0),
+    (28.0, 68.0),
+    (23.0, 55.0),
+    (20.0, 42.0),
+    (15.0, 30.0),
+    (12.0, 22.0),
+    (10.0, 15.0),
+    (7.0, 10.0),
+    (5.0, 6.0),
+    (2.0, 3.0),
     (0.0, 0.5),
 ];
 
 pub(crate) fn calibrated_aa_percentile(score: f64) -> f64 {
     let points = AA_CALIBRATION_POINTS;
     if score >= points[0].0 {
-        return points[0].1;
+        // Above the top anchor, keep climbing along the top segment's slope
+        // (clamped at the scale ceiling) instead of flattening out at the
+        // anchor's percentile: a flat clamp tied every above-anchor model at
+        // 99.0, so in the pure-AA fallback (boards not loaded yet) the leader
+        // order fell to HashMap iteration — Fable 5.1 (AA 53) and Opus 5
+        // (AA 51) swapped places between runs.
+        let (hi_score, hi_pct) = points[0];
+        let (lo_score, lo_pct) = points[1];
+        let slope = (hi_pct - lo_pct) / (hi_score - lo_score);
+        return (hi_pct + (score - hi_score) * slope).clamp(0.0, 100.0);
     }
     for window in points.windows(2) {
         let (hi_score, hi_pct) = window[0];
@@ -85,8 +103,8 @@ pub(crate) const MISSING_EVIDENCE_FRACTION: f64 = 0.25;
 /// move the score only partway from the model's PRIOR standing toward the
 /// measurement: reverting toward the prior — not toward population-neutral —
 /// is what keeps the ordering honest (an AA leader with one thin board row
-/// stays at its standing; Fable 5.1, AA 66, fell to ~90th under the old
-/// neutral shrink, below the AA-63 Opus 5). See also
+/// stays at its standing; Fable 5.1, AA 53, fell to ~90th under the old
+/// neutral shrink, below the AA-51 Opus 5). See also
 /// [`RANK_UNCERTAINTY_PENALTY`].
 pub(crate) const ZERO_EVIDENCE_CONFIDENCE: f64 = 0.75;
 
@@ -389,6 +407,10 @@ pub(crate) fn build_agentic_composite(
         (BenchmarkSource::DeepSWE11, 0.15_f64),
         (BenchmarkSource::LiveBench, 0.10_f64),
         (BenchmarkSource::ReveloCodeIndex, 0.05_f64),
+        // FrontierCode's maintainer-built mergeability tasks are directly the
+        // agentic construct, but each model runs in its vendor harness, so it
+        // joins the harness-specific family (capability flavor demotes it).
+        (BenchmarkSource::FrontierCode, 0.15_f64),
     ];
     let aliases = execution_mode_aliases();
 
@@ -627,8 +649,8 @@ pub(crate) fn build_agentic_composite(
         // plus a small ordinal discount for the un-shared evidence (see
         // RANK_UNCERTAINTY_PENALTY). The old neutral shrink compressed the AA
         // leader below measured models the AA scale itself ranks below it
-        // (Fable 5.1, AA 66 with a single thin board row, sat ~90th under the
-        // AA-63 Opus 5), and with no board rows at all the neutral shrink was
+        // (Fable 5.1, AA 53 with a single thin board row, sat ~90th under the
+        // AA-51 Opus 5), and with no board rows at all the neutral shrink was
         // pure penalty. Here the zero-row case degenerates to exactly the
         // prior, and broad coverage (confidence 1.0) keeps the measured
         // posterior unchanged.
@@ -944,7 +966,7 @@ mod tests {
         // the neutral prior is the only scale-safe anchor.
         sets.insert(
             BenchmarkSource::ArtificialAnalysisSnapshot,
-            vec![mk("Lucky", 42.0)],
+            vec![mk("Lucky", 27.0)],
         );
         sets.insert(BenchmarkSource::ReveloCodeIndex, vec![mk("Lucky", 19.6)]);
         let composite = build_agentic_composite(
@@ -980,7 +1002,7 @@ mod tests {
         let mut full = HashMap::new();
         full.insert(
             BenchmarkSource::ArtificialAnalysisSnapshot,
-            vec![mk("Steady", 53.0)],
+            vec![mk("Steady", 36.0)],
         );
         full.insert(
             BenchmarkSource::SWERebench,
@@ -1037,7 +1059,7 @@ mod tests {
         // HY3-shaped: weaker AA, elite-looking on one small board, nothing else.
         sets.insert(
             BenchmarkSource::ArtificialAnalysisSnapshot,
-            vec![mk("Lucky", 42.0), mk("Dominant", 53.0)],
+            vec![mk("Lucky", 27.0), mk("Dominant", 36.0)],
         );
         sets.insert(
             BenchmarkSource::ReveloCodeIndex,
@@ -1105,7 +1127,7 @@ mod tests {
         let mut sets = HashMap::new();
         sets.insert(
             BenchmarkSource::ArtificialAnalysisSnapshot,
-            vec![mk("GPT-5.6 Sol", 61.0), mk("GPT-5.6 Sol Pro", 61.0)],
+            vec![mk("GPT-5.6 Sol", 47.1), mk("GPT-5.6 Sol Pro", 47.1)],
         );
         // Only the BASE variant has live harness evidence.
         sets.insert(
@@ -1211,8 +1233,8 @@ mod tests {
 
     #[test]
     fn broad_top_coverage_outranks_selective_evidence_and_higher_aa() {
-        // Regression: GPT-5.6 Sol (AA 61, top of SWE-rebench/TB3/DeepSWE/
-        // SWE-bench Live) must outrank GLM-5.3 (AA 60, strong only on
+        // Regression: GPT-5.6 Sol (AA 47, top of SWE-rebench/TB3/DeepSWE/
+        // SWE-bench Live) must outrank GLM-5.3 (AA 45, strong only on
         // LiveBench, mid elsewhere). Mirrors the real cohort shape: boards
         // rank against an elite AA-covered set of ~10 current frontier models.
         let mk =
@@ -1221,17 +1243,17 @@ mod tests {
         sets.insert(
             BenchmarkSource::ArtificialAnalysisSnapshot,
             vec![
-                mk("Claude Opus 5", 63.0),
-                mk("GPT-5.6 Sol", 61.0),
-                mk("Grok 4.6", 61.0),
-                mk("GLM-5.3", 60.0),
-                mk("Kimi K3", 60.0),
-                mk("Qwen3.8 Max", 58.0),
-                mk("Claude Sonnet 5", 55.0),
-                mk("GPT-5.5", 55.0),
-                mk("DeepSeek V4 Pro 0813", 53.0),
-                mk("GLM-5.2", 53.0),
-                mk("MiniMax-M3", 45.0),
+                mk("Claude Opus 5", 50.7),
+                mk("GPT-5.6 Sol", 47.1),
+                mk("Grok 4.6", 44.4),
+                mk("GLM-5.3", 44.9),
+                mk("Kimi K3", 43.8),
+                mk("Qwen3.8 Max", 45.4),
+                mk("Claude Sonnet 5", 38.4),
+                mk("GPT-5.5", 38.6),
+                mk("DeepSeek V4 Pro 0813", 36.3),
+                mk("GLM-5.2", 34.0),
+                mk("MiniMax-M3", 29.6),
             ],
         );
         sets.insert(
@@ -1309,7 +1331,7 @@ mod tests {
         );
         // The AA prior must be on the anchored elite scale (well under the
         // ~97th percentile the broad calibration curve would give an AA score
-        // of 61), and Sol's higher AA intelligence must keep a higher prior.
+        // of 47), and Sol's higher AA intelligence must keep a higher prior.
         let prior_of = |row: &Benchmark| {
             row.name
                 .split("prior AA ")
@@ -1334,7 +1356,7 @@ mod tests {
     #[test]
     fn hot_two_board_model_cannot_outrank_broad_top_coverage() {
         // Regression: a new model topping the couple of boards it appears on
-        // (Qwen3.8-2.4T-shaped: AA 58, #1 SWE-rebench, #1 DeepSWE, nothing
+        // (Qwen3.8-2.4T-shaped: AA 40, #1 SWE-rebench, #1 DeepSWE, nothing
         // else) must NOT outrank a model with top-tier evidence across five
         // boards (Sol-shaped). Missing boards add pseudo-evidence at the
         // model's prior, so the narrow leader is pulled back toward its AA
@@ -1345,17 +1367,17 @@ mod tests {
         sets.insert(
             BenchmarkSource::ArtificialAnalysisSnapshot,
             vec![
-                mk("Claude Opus 5", 63.0),
-                mk("GPT-5.6 Sol", 61.0),
-                mk("Grok 4.6", 61.0),
-                mk("GLM-5.3", 60.0),
-                mk("Kimi K3", 60.0),
-                mk("Qwen3.8 2.4T A95B", 58.0),
-                mk("Claude Sonnet 5", 55.0),
-                mk("GPT-5.5", 55.0),
-                mk("DeepSeek V4 Pro 0813", 53.0),
-                mk("GLM-5.2", 53.0),
-                mk("MiniMax-M3", 45.0),
+                mk("Claude Opus 5", 50.7),
+                mk("GPT-5.6 Sol", 47.1),
+                mk("Grok 4.6", 44.4),
+                mk("GLM-5.3", 44.9),
+                mk("Kimi K3", 43.8),
+                mk("Qwen3.8 2.4T A95B", 40.0),
+                mk("Claude Sonnet 5", 38.4),
+                mk("GPT-5.5", 38.6),
+                mk("DeepSeek V4 Pro 0813", 36.3),
+                mk("GLM-5.2", 34.0),
+                mk("MiniMax-M3", 29.6),
             ],
         );
         let rebench = vec![
@@ -1448,8 +1470,8 @@ mod tests {
     #[test]
     fn zero_board_aa_model_enters_at_elite_cohort_standing_not_broad_percentile() {
         // Regression: a brand-new model with AA coverage but no board rows
-        // used to inherit the broad calibration percentile (AA 58 → 93rd vs
-        // 130 snapshot models incl. legacy) as its whole score, outranking
+        // used to inherit the broad calibration percentile (AA 40 → 91st vs
+        // 141 snapshot models incl. legacy) as its whole score, outranking
         // models with real top-tier evidence. It must instead enter at its
         // insertion rank among the board-evaluated elite cohort.
         let mk =
@@ -1458,18 +1480,18 @@ mod tests {
         sets.insert(
             BenchmarkSource::ArtificialAnalysisSnapshot,
             vec![
-                mk("Claude Opus 5", 63.0),
-                mk("GPT-5.6 Sol", 61.0),
-                mk("Grok 4.6", 61.0),
-                mk("GLM-5.3", 60.0),
-                mk("Kimi K3", 60.0),
-                mk("Qwen3.8 2.4T A95B", 58.0),
-                mk("Claude Sonnet 5", 55.0),
-                mk("GPT-5.5", 55.0),
-                mk("DeepSeek V4 Pro 0813", 53.0),
-                mk("GLM-5.2", 53.0),
-                mk("MiniMax-M3", 45.0),
-                mk("Brand New Model", 58.0),
+                mk("Claude Opus 5", 50.7),
+                mk("GPT-5.6 Sol", 47.1),
+                mk("Grok 4.6", 44.4),
+                mk("GLM-5.3", 44.9),
+                mk("Kimi K3", 43.8),
+                mk("Qwen3.8 2.4T A95B", 40.0),
+                mk("Claude Sonnet 5", 38.4),
+                mk("GPT-5.5", 38.6),
+                mk("DeepSeek V4 Pro 0813", 36.3),
+                mk("GLM-5.2", 34.0),
+                mk("MiniMax-M3", 29.6),
+                mk("Brand New Model", 40.0),
             ],
         );
         sets.insert(
@@ -1522,7 +1544,7 @@ mod tests {
         // and the 55s) is mid-pack — nowhere near the calibrated 93rd.
         assert!(
             new_score < 75.0,
-            "newcomer {new_score} should enter mid-pack, not near the calibrated 93rd: {}",
+            "newcomer {new_score} should enter mid-pack, not near the calibrated 91st: {}",
             newcomer.name
         );
         assert!(
@@ -1536,10 +1558,10 @@ mod tests {
 
     #[test]
     fn aa_leader_without_board_rows_tops_the_composite() {
-        // Fable 5.1 shape: AA 66 (above every board-covered model's AA), no
+        // Fable 5.1 shape: AA 53 (above every board-covered model's AA), no
         // board row yet because it just launched. The composite must rank it
         // first at its anchored prior standing (100th, clamped — never the
-        // raw (n+1)/n insertion overshoot), while Opus 5 (AA 63, top-board
+        // raw (n+1)/n insertion overshoot), while Opus 5 (AA 51, top-board
         // evidence everywhere) stays just below on measured strength.
         let mk =
             |name: &str, score: f64| score_benchmark(name, score, None, None, BenchmarkKind::Model);
@@ -1547,17 +1569,17 @@ mod tests {
         sets.insert(
             BenchmarkSource::ArtificialAnalysisSnapshot,
             vec![
-                mk("Claude Fable 5.1", 66.0),
-                mk("Claude Opus 5", 63.0),
-                mk("GPT-5.6 Sol", 61.0),
-                mk("Grok 4.6", 61.0),
-                mk("GLM-5.3", 60.0),
-                mk("Claude Sonnet 5", 55.0),
-                mk("MiniMax-M3", 45.0),
-                mk("f1", 40.0),
-                mk("f2", 35.0),
-                mk("f3", 30.0),
-                mk("f4", 25.0),
+                mk("Claude Fable 5.1", 53.4),
+                mk("Claude Opus 5", 50.7),
+                mk("GPT-5.6 Sol", 47.1),
+                mk("Grok 4.6", 44.4),
+                mk("GLM-5.3", 44.9),
+                mk("Claude Sonnet 5", 38.4),
+                mk("MiniMax-M3", 29.6),
+                mk("f1", 26.0),
+                mk("f2", 20.0),
+                mk("f3", 15.0),
+                mk("f4", 12.0),
             ],
         );
         sets.insert(
@@ -1629,7 +1651,7 @@ mod tests {
         );
         assert!(
             fable_score > opus_score,
-            "AA 66 leader ({fable_score}) must outrank AA 63 with boards ({opus_score})\nFable: {}\nOpus: {}",
+            "AA 53 leader ({fable_score}) must outrank AA 51 with boards ({opus_score})\nFable: {}\nOpus: {}",
             fable.name,
             opus.name,
         );
@@ -1649,7 +1671,7 @@ mod tests {
     #[test]
     fn aa_leader_with_single_thin_board_still_tops_the_composite() {
         // The production shape the day after launch: the AA leader (Fable 5.1,
-        // AA 66) picks up its FIRST board row — a thin Revelo-weight entry —
+        // AA 53) picks up its FIRST board row — a thin Revelo-weight entry —
         // while Opus 5 keeps broad top-board evidence. Thin coverage must
         // revert toward the prior (the standing AA already established), so
         // the leader stays on top instead of collapsing toward neutral.
@@ -1659,17 +1681,17 @@ mod tests {
         sets.insert(
             BenchmarkSource::ArtificialAnalysisSnapshot,
             vec![
-                mk("Claude Fable 5.1", 66.0),
-                mk("Claude Opus 5", 63.0),
-                mk("GPT-5.6 Sol", 61.0),
-                mk("Grok 4.6", 61.0),
-                mk("GLM-5.3", 60.0),
-                mk("Claude Sonnet 5", 55.0),
-                mk("MiniMax-M3", 45.0),
-                mk("f1", 40.0),
-                mk("f2", 35.0),
-                mk("f3", 30.0),
-                mk("f4", 25.0),
+                mk("Claude Fable 5.1", 53.4),
+                mk("Claude Opus 5", 50.7),
+                mk("GPT-5.6 Sol", 47.1),
+                mk("Grok 4.6", 44.4),
+                mk("GLM-5.3", 44.9),
+                mk("Claude Sonnet 5", 38.4),
+                mk("MiniMax-M3", 29.6),
+                mk("f1", 26.0),
+                mk("f2", 20.0),
+                mk("f3", 15.0),
+                mk("f4", 12.0),
             ],
         );
         sets.insert(
@@ -1746,7 +1768,7 @@ mod tests {
         let opus_score = opus.agentic_coding.unwrap();
         assert!(
             fable_score > opus_score,
-            "AA 66 leader with one thin board ({fable_score}) must outrank AA 63 with broad boards ({opus_score})\nFable: {}\nOpus: {}",
+            "AA 53 leader with one thin board ({fable_score}) must outrank AA 51 with broad boards ({opus_score})\nFable: {}\nOpus: {}",
             fable.name,
             opus.name,
         );
@@ -1762,25 +1784,26 @@ mod tests {
     fn consensus_aa_percentile_uses_the_anchored_elite_scale() {
         // Same elite-cohort shape as the Sol/GLM composite regression: boards
         // cover ~10 current frontier models, so AA must be ranked within that
-        // cohort (Kimi K3's AA 60 lands mid-pack, ~61st) — not on the broad
-        // calibration curve (95.6th against 130 models incl. legacy ones).
+        // cohort (Kimi K3's AA 44 lands mid-pack — 6th of the v4.3 cohort's ten,
+        // ~44th; the 2026 index tightened the frontier) — not on the broad
+        // calibration curve (~94th against 141 models incl. legacy ones).
         let mk =
             |name: &str, score: f64| score_benchmark(name, score, None, None, BenchmarkKind::Model);
         let mut sets = HashMap::new();
         sets.insert(
             BenchmarkSource::ArtificialAnalysisSnapshot,
             vec![
-                mk("Claude Opus 5", 63.0),
-                mk("GPT-5.6 Sol", 61.0),
-                mk("Grok 4.6", 61.0),
-                mk("GLM-5.3", 60.0),
-                mk("Kimi K3", 60.0),
-                mk("Qwen3.8 Max", 58.0),
-                mk("Claude Sonnet 5", 55.0),
-                mk("GPT-5.5", 55.0),
-                mk("DeepSeek V4 Pro 0813", 53.0),
-                mk("GLM-5.2", 53.0),
-                mk("MiniMax-M3", 45.0),
+                mk("Claude Opus 5", 50.7),
+                mk("GPT-5.6 Sol", 47.1),
+                mk("Grok 4.6", 44.4),
+                mk("GLM-5.3", 44.9),
+                mk("Kimi K3", 43.8),
+                mk("Qwen3.8 Max", 45.4),
+                mk("Claude Sonnet 5", 38.4),
+                mk("GPT-5.5", 38.6),
+                mk("DeepSeek V4 Pro 0813", 36.3),
+                mk("GLM-5.2", 34.0),
+                mk("MiniMax-M3", 29.6),
             ],
         );
         sets.insert(
@@ -1837,7 +1860,7 @@ mod tests {
             aa.percentile,
         );
         assert!(
-            aa.percentile > 50.0,
+            aa.percentile > 35.0,
             "Kimi K3 should sit mid-pack among the elite cohort, got {:.1}",
             aa.percentile
         );
@@ -1886,16 +1909,16 @@ mod tests {
         sets.insert(
             BenchmarkSource::ArtificialAnalysisSnapshot,
             vec![
-                mk("Claude Opus 5", 63.0),
-                mk("GPT-5.6 Sol", 61.0),
-                mk("Grok 4.6", 61.0),
-                mk("GLM-5.3", 60.0),
-                mk("Kimi K3", 60.0),
-                mk("Qwen3.8 Max", 58.0),
-                mk("Claude Sonnet 5", 55.0),
-                mk("GPT-5.5", 55.0),
-                mk("DeepSeek V4 Pro 0813", 53.0),
-                mk("GLM-5.2", 53.0),
+                mk("Claude Opus 5", 50.7),
+                mk("GPT-5.6 Sol", 47.1),
+                mk("Grok 4.6", 44.4),
+                mk("GLM-5.3", 44.9),
+                mk("Kimi K3", 43.8),
+                mk("Qwen3.8 Max", 45.4),
+                mk("Claude Sonnet 5", 38.4),
+                mk("GPT-5.5", 38.6),
+                mk("DeepSeek V4 Pro 0813", 36.3),
+                mk("GLM-5.2", 34.0),
             ],
         );
         let rebench = vec![
@@ -1982,13 +2005,90 @@ mod tests {
     }
 
     #[test]
+    fn calibrated_aa_percentile_separates_scores_above_the_top_anchor() {
+        // Above-anchor scores must stay strictly ordered (and clamped at the
+        // ceiling), not all flatten onto the top anchor's percentile.
+        let at_anchor = calibrated_aa_percentile(58.0);
+        let above = calibrated_aa_percentile(62.0);
+        assert!((at_anchor - 99.0).abs() < 1e-9);
+        assert!(above > at_anchor, "{above} must exceed {at_anchor}");
+        assert!(above <= 100.0);
+        assert!(calibrated_aa_percentile(66.0) <= 100.0);
+    }
+
+    #[test]
+    fn pure_aa_fallback_ranks_higher_aa_score_first() {
+        // Regression: with no boards loaded (app just started, or every board
+        // fetch failed), the composite is the calibration curve alone, and the
+        // old flat clamp tied Fable 5.1 (AA 53) with Opus 5 (AA 51) at 99.0 —
+        // HashMap iteration order then decided the leader per launch. The
+        // 2026-09-22 leader is Opus 5.5 (AA 58, exactly at the top anchor);
+        // the previous leader tier must now rank strictly below it rather
+        // than piling onto the 100th-percentile ceiling. The 2026-09-29 bump
+        // added Sonnet 5.5 at AA 56: it slots between the leader and the old
+        // tier on the curve alone.
+        let mk =
+            |name: &str, score: f64| score_benchmark(name, score, None, None, BenchmarkKind::Model);
+        let mut sets = HashMap::new();
+        sets.insert(
+            BenchmarkSource::ArtificialAnalysisSnapshot,
+            vec![
+                mk("Claude Opus 5.5", 58.0),
+                mk("Claude Sonnet 5.5", 56.0),
+                mk("Claude Fable 5.1", 53.4),
+                mk("GPT-6 Astra", 52.8),
+                mk("GPT-6 Sol", 48.0),
+                mk("Claude Opus 5", 50.7),
+                mk("Claude Sonnet 5", 38.4),
+                mk("MiniMax-M3", 29.6),
+            ],
+        );
+        let composite = build_agentic_composite(
+            &sets,
+            ComparisonMode::BestAvailableAgent,
+            "mini-SWE-agent",
+            CompositeFlavor::Capability,
+        );
+        let leader = composite.first().expect("composite is non-empty");
+        assert_eq!(
+            benchmark_model_key(&leader.slug),
+            "opus 5 5",
+            "higher AA score must lead the pure-AA fallback, got {}",
+            leader.name
+        );
+        let sonnet = composite
+            .iter()
+            .find(|b| benchmark_model_key(&b.slug) == "sonnet 5 5")
+            .unwrap();
+        let fable = composite
+            .iter()
+            .find(|b| benchmark_model_key(&b.slug) == "fable 5 1")
+            .unwrap();
+        assert!(
+            leader.agentic_coding.unwrap() > sonnet.agentic_coding.unwrap(),
+            "{}",
+            leader.name
+        );
+        assert!(
+            sonnet.agentic_coding.unwrap() > fable.agentic_coding.unwrap(),
+            "Sonnet 5.5 (AA 56) must outrank Fable 5.1 (AA 53) in the pure-AA fallback\nSonnet: {}\nFable: {}",
+            sonnet.name,
+            fable.name,
+        );
+        assert!(
+            fable.agentic_coding.unwrap() < 100.0,
+            "the previous leader tier must spread below the ceiling, not clamp at 100"
+        );
+    }
+
+    #[test]
     fn coverage_first_composite_accepts_a_single_credible_source() {
         let mut sets = HashMap::new();
         sets.insert(
             BenchmarkSource::ArtificialAnalysisSnapshot,
             vec![score_benchmark(
                 "DeepSeek V4 Flash 0731",
-                52.0,
+                34.5,
                 None,
                 None,
                 BenchmarkKind::Model,
@@ -2077,7 +2177,7 @@ mod tests {
     #[test]
     fn thin_two_board_high_prior_model_lands_below_shared_board_superior() {
         // Regression (live 2026-08-26): GLM-5.3 sat ABOVE GPT-5.6 Sol at 86.2
-        // vs 77.7 despite losing the AA prior (60 vs 61), losing the one
+        // vs 77.7 despite losing the AA prior (45 vs 47), losing the one
         // shared agentic board head-to-head (DeepSWE #5/26 vs #2/26), and
         // appearing on only 2 of 7 boards. GLM's single win (LiveBench, a
         // mixed-strength field) plus full confidence in a near-prior
@@ -2085,24 +2185,28 @@ mod tests {
         // confidence ramp must restore the ordering.
         //
         // Fixture mirrors production structure: a wide 50-model AA cohort
-        // (63.5 down to 14), SWE-rebench drawn from the TOP of that cohort,
+        // (50.7 down to 14), SWE-rebench drawn from the TOP of that cohort,
         // LiveBench spanning all of it, DeepSWE the upper-middle, Code Index
         // upper-middle without GLM.
         let mk =
             |name: &str, score: f64| score_benchmark(name, score, None, None, BenchmarkKind::Model);
         let mut sets = HashMap::new();
 
-        // AA world: 6 heroes + 44 fillers stepping down to AA 14.
+        // AA world: 6 heroes + 44 fillers stepping down to AA 14. GLM sits
+        // tied with K3 just behind Grok — the standing structure the 2026-08-26
+        // ruling was calibrated against, re-expressed on the v4.3 scale (the
+        // real snapshot has GLM-5.3 at 44.9, and the live smoke test covers
+        // today's production ordering).
         let mut aa_rows = vec![
-            mk("Claude Fable 5", 63.5),
-            mk("Claude Opus 5", 63.0),
-            mk("GPT-5.6 Sol", 61.0),
-            mk("Grok 4.6", 60.5),
-            mk("GLM-5.3", 60.0),
-            mk("Kimi K3", 60.0),
+            mk("Claude Fable 5", 49.7),
+            mk("Claude Opus 5", 50.7),
+            mk("GPT-5.6 Sol", 47.1),
+            mk("Grok 4.6", 44.4),
+            mk("GLM-5.3", 43.8),
+            mk("Kimi K3", 43.8),
         ];
         for i in 0..44 {
-            aa_rows.push(mk(&format!("aa{i}"), 57.0 - i as f64));
+            aa_rows.push(mk(&format!("aa{i}"), 40.0 - i as f64 * 0.6));
         }
         sets.insert(BenchmarkSource::ArtificialAnalysisSnapshot, aa_rows);
 
@@ -2258,6 +2362,7 @@ mod tests {
             BenchmarkSource::DeepSWE11,
             BenchmarkSource::LiveBench,
             BenchmarkSource::ReveloCodeIndex,
+            BenchmarkSource::FrontierCode,
         ] {
             match fetch_benchmark_source(&client, source) {
                 Ok(rows) => {
@@ -2284,8 +2389,8 @@ mod tests {
         let leader = composite.first().expect("composite is non-empty");
         assert_eq!(
             benchmark_model_key(&leader.slug),
-            "fable 5 1",
-            "expected the AA leader Claude Fable 5.1 on top, got {}",
+            "opus 5 5",
+            "expected the AA leader Claude Opus 5.5 on top, got {}",
             leader.name
         );
     }

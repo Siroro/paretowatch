@@ -1,3 +1,52 @@
+# ParetoWatch v0.17.6
+
+## Updates
+
+- AA Intelligence Index snapshot bumped from v4.3.2 (read 2026-09-22) to v4.3.2 (read 2026-09-29). The index revision and scale are unchanged — Claude Opus 5.5 still leads at 58 and the existing rows still round to their live displays (Fable 5.1 53.4 → 53, GPT-6 Astra 52.8 → 53) — so only the week's new-model rows were read fresh and `AA_CALIBRATION_POINTS` keeps its anchors.
+- New snapshot rows for the Surplus listings of 2026-09-23..09-29, headlined by **Claude Sonnet 5.5** (56, released 2026-09-28 — AA's new #3 of 216 at adaptive reasoning/max effort with default fallback, read at the same page configuration as Opus 5.5; it slots between the leader and the Fable 5.1/Astra tier and LiveBench and FrontierCode already carry live rows for it). **Cohere: Command A+** (13) is the snapshot's first Cohere row — the row name keeps the `Cohere: ` prefix so it exact-joins the Surplus display name (the id `command-a-plus` normalizes differently because `+` collapses away). **Qwen3.8 Omni Flash** ~proxies its text sibling (39.9): AA publishes no omni page, and its sitemap now lists only `qwen3-8-flash-next`, a distinct Aug-26 preview.
+- **GLM 5.3 Prime** (listed 2026-09-24) is a same-checkpoint high-speed serving variant of GLM-5.3 — per the listing it inherits the full capabilities at 1.5–2× throughput — so it gets no row of its own: benchmark matching now strips the `prime` deployment token alongside fast/highspeed/ultraspeed and the SKU joins the GLM-5.3 row exactly, the same inheritance MiMo-V2.6-Pro-UltraSpeed uses (verified against every board and the whole Surplus catalogue: nothing else contains the token). **Fireworks Ember-1** has no AA presence, so it falls back to the composite's neutral prior; it deliberately does not proxy Kimi K3 despite being built on it — it is a derivative build, not the same checkpoint.
+- New Pareto chart toggle: **Hide catalog-only prices**. A "Hide catalog-only prices" checkbox next to "Log price axis" removes every model whose price is only a Surplus catalog/comparison list price (no live-market ask), so list-price orbs can no longer plot against — or hold frontier spots against — live market asks while still using "Market quality: Any pricing". The Models tab's Source filter (All / Live market / Catalog) already covered its table; the chart had no equivalent under "Any pricing". Toggling resets zoom and drops the selection, like the other chart filters, and the empty state names the toggle when it is the reason nothing shows.
+
+## Validation
+
+Formatting, locked check, locked test (130 tests), Clippy with warnings denied, and the live-data smoke test all pass. The smoke run pins the composite leader — Claude Opus 5.5 at 99.3 — with Claude Sonnet 5.5 entering the top tier at 89.4 (#5, between Fable 5 and GPT-6 Astra's 89.3) off its fresh LiveBench and FrontierCode rows, and fetched 41 live FrontierCode rows (Sonnet 5.5 best 52.1 at xhigh on the main subset).
+
+# ParetoWatch v0.17.5
+
+## Updates
+
+- AA Intelligence Index snapshot bumped from v4.3 (read 2026-09-19) to v4.3.2 (read 2026-09-22) for the week's flagship refresh. v4.3.2 is a patch revision on the same scale — the v4.3-read rows round to their live v4.3.2 displays (Fable 5.1 53.4 → 53, Opus 5 50.7 → 51, GPT-5.6 Sol 47.1 → 47) — so only the new-model rows were read fresh; AA's model pages now display integers.
+- New snapshot rows for the Surplus listings of 2026-09-20..09-22: Claude Opus 5.5 (58 — Anthropic's new flagship, which entered as AA's new leader at #1 of 212, adaptive reasoning at max effort with default fallback), the GPT-6 tier fill-out below Astra — GPT-6 Sol (48, the cost-efficient high-end tier) and GPT-6 Luna (37, the fast tier), both read at the max effort the Surplus SKUs expose via `reasoning_effort`, plus their Pro SKUs as inherited execution modes (`reasoning.mode: "pro"`, same weights — GPT-6 Sol Pro 48, GPT-6 Luna Pro 37) — Grok 4.7 (46, xhigh: AA measured no max-effort run), and Xiaomi's 1T flagship MiMo-V2.6-Pro (46). MiMo-V2.6-Flash and TypeSafe's JEV 1.13 decisions model have no AA presence, so they fall back to the composite's neutral prior; MiMo-V2.6-Pro-UltraSpeed is a same-checkpoint speed wrapper and inherits the Pro row via benchmark matching, which now also strips the `ultraspeed` deployment token alongside fast/highspeed.
+- The composite's `AA_CALIBRATION_POINTS` top anchor moved from 50 to 58 with the new AA leader. Under the old anchor the entire old leader tier (Fable 5.1 at 53.4, GPT-6 Astra at 52.8) extrapolated past the 100th-percentile ceiling and would have tied Opus 5.5 there in the pure-AA fallback — the same HashMap-order tie the v0.17.3 fix removed. With the anchor at 58, Opus 5.5 sits exactly at the 99th percentile while Fable 5.1 (96.8) and Astra spread strictly below it. TypeSafe also gets a creator colour so the JEV listing groups readably on the chart.
+
+## Validation
+
+Formatting, locked check, locked test (128 tests), Clippy with warnings denied, and the live-data smoke test all pass. The smoke run pins the new composite leader — Claude Opus 5.5 at 99.3 (already measured on LiveBench 71.7 and FrontierCode 54.6) ahead of Fable 5.1 at 96.8, with MiMo V2.6 Pro entering the top 10 off its live board rows — and fetched 40 live FrontierCode rows.
+
+# ParetoWatch v0.17.4
+
+## Updates
+
+- AA Intelligence Index snapshot rebaselined from v4.1.2 (read 2026-08-26) to v4.3 (read 2026-09-19). AA shipped two index revisions in three days — v4.2 (Sept 4: more complex and realistic tasks, more private test sets) and v4.3 (Sept 7: Terminal-Bench moved to 4.0, 𝜏³-Banking replaced by AutomationBench-AA) — which compressed the whole scale (the leader tier moved from AA 66 to AA 53), so every one of the snapshot's rows was re-read from the current model pages rather than left mixing scales. Ranking order is broadly preserved: Claude Fable 5.1 still leads at 53.4 with GPT-6 Astra (see below) at 52.8 and Claude Opus 5 at 50.7.
+- New snapshot rows for the Surplus listings of 2026-09-03..09-11: GPT-6 Astra (52.8 — OpenAI's new flagship, which AA's own writeup ties with Fable 5.1 at the top of the index at lower cost), DeepSeek V4.1 Flash (39.5, the Sept 10 refresh; AA's base DeepSeek V4 Flash page now tracks the 0731 refresh and the 0420 pages carry the older rows, matching how the snapshot already split them), and Meta: Muse Spark 1.3 Contributor (45.2, ~proxy of the purchasable xhigh variant AA rates, like its base row). The Sakana Fugu Max / Fugu Ultra v2 listings (Sept 11) have no AA presence yet, so they correctly fall back to the composite's neutral prior instead of getting invented scores.
+- AA removed the GLM-4.5 and Llama 3.2 3B model pages between v4.1.2 and v4.3, so those families lost their snapshot rows rather than keeping stale v4.1-scale numbers; the DeepSeek R1 page was folded onto the 0528 refresh, so both Surplus R1 SKUs now read the same measurement. The composite's `AA_CALIBRATION_POINTS` were recalibrated in the same change (same reference models, new scale: top anchor 50 → 99th percentile, down to 2 → 3rd), keeping AA percentiles comparable with the other boards; all scoring fixtures that encoded the old scale were moved with it.
+
+# ParetoWatch v0.17.3
+
+## Additions
+
+- FrontierCode (Cognition) joins the board lineup as the eighth remote source. Cognition publishes the leaderboard as a static JSON export (`/data/frontiercode-leaderboard/data.json`), so the fetcher reads that directly instead of scraping the page: for every model it takes the headline number the site shows — the best `new_score` across reasoning efforts on the 100-task `main` subset of FrontierCode 1.1, as a percentage — plus the vendor harness (claude-code, codex, chisel, grok-build, mini-swe-agent, cursor-cli), the winning effort when it is a named tier (low/medium/high/xhigh/max; `none` and raw parameters like `0.99` are run configs, not efforts), and the published tokens-per-task telemetry, which the cost calculator reprices with live Surplus quotes like every other board. Creators come from the export's own lab palette (so harness-native rows like SWE-1.7 → Cognition, Composer 2.5 → Cursor, Inkling → Thinking Machines are labelled correctly), with the name heuristic as fallback. The board is harness-specific for composite purposes — full 0.15 weight in the deployment flavor, demoted to a third in the capability flavor — and the live smoke test confirms the composite leader is unchanged with it in the mix.
+- Copyable model slug in the Pareto detail card (under the model heading, next to the live-market badges) and in the Models tab's cost calculator (under the model selection). One click on the 📋 button copies the Surplus model id and flips to ✔ for two seconds. The clipboard/check glyphs are deliberately emoji code points: only the egui-bundled Noto Emoji / emoji-icon-font faces cover them, and plain symbols like U+29C9 render as tofu in every bundled font.
+
+## Fixes
+
+- The pure-AA fallback (boards not loaded yet: the first moments after launch, or every board fetch failing) could rank Opus 5 above Claude Fable 5.1. The calibration curve clamped every score at or above its top anchor (AA 63 → 99th percentile) to a flat 99.0, so Fable 5.1 (AA 66) tied Opus 5 there and the composite's HashMap iteration order decided the leader per launch. Above-anchor scores now keep climbing along the top segment's slope, clamped at the 100th percentile, so the tie is broken by the AA scale itself. With boards loaded, nothing changes: Fable 5.1 still tops the composite at 99.5 against Opus 5's 97.0 (re-verified live).
+- `record_persists_and_reloads_identically` used raw `Utc::now()` for a +1h offset, so running the test suite in the hour before UTC midnight failed the once-per-day telemetry count. It now uses the existing noon-UTC `day_offset` anchor like its sibling tests.
+
+## Validation
+
+Formatting, locked check, locked test (127 tests), Clippy with warnings denied, and the live-data smoke test all pass; the smoke run fetched 34 live FrontierCode rows and the composite leader is unchanged.
+
 # ParetoWatch v0.17.2
 
 ## Fixes

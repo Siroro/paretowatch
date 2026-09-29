@@ -14,7 +14,8 @@ use crate::format::{format_compact_number, format_price_tick};
 use crate::history::track::{ModelSeries, historical_low};
 use crate::pareto::{JoinedPoint, pareto_search_matches, price_from_plot_x, price_to_plot_x};
 use crate::theme::{
-    PRICE_DOWN, PRICE_UP, creator_color, discount_color, free_offer_badge, group_label,
+    PRICE_DOWN, PRICE_UP, copyable_slug, creator_color, discount_color, free_offer_badge,
+    group_label,
 };
 use crate::types::{
     ANY_MODEL, AlertMode, BenchmarkMetric, BenchmarkSource, ComparisonMode, CostBasis,
@@ -126,6 +127,7 @@ impl ParetoWatchApp {
                     BenchmarkSource::DeepSWE11 => "Metric: pass@1",
                     BenchmarkSource::ReveloCodeIndex => "Metric: Code Index",
                     BenchmarkSource::DesignArena => "Metric: Design Elo (blinded votes)",
+                    BenchmarkSource::FrontierCode => "Metric: mergeability score",
                     _ => unreachable!(),
                 });
             }
@@ -295,6 +297,17 @@ impl ParetoWatchApp {
             {
                 reset_zoom = true;
             }
+            if ui
+                .checkbox(&mut self.hide_catalog_prices, "Hide catalog-only prices")
+                .on_hover_text(
+                    "Remove models with no live-market ask — their price is only the Surplus \
+                     catalog/comparison list price",
+                )
+                .changed()
+            {
+                reset_zoom = true;
+                self.selected_pareto_model = None;
+            }
             if self.selected_pareto_model.is_some()
                 && ui.small_button("✗ Clear selection").clicked()
             {
@@ -444,6 +457,9 @@ impl ParetoWatchApp {
                         if self.modality_filter == ModalityFilter::Vision { "image-input" } else { "text-only" },
                     ));
                 }
+                if self.hide_catalog_prices {
+                    ui.small("'Hide catalog-only prices' is active — models with no live-market ask are hidden.");
+                }
             }
             return;
         }
@@ -519,6 +535,7 @@ impl ParetoWatchApp {
             BenchmarkSource::LiveBench => format!("LiveBench {} score", self.benchmark_metric.label()),
             BenchmarkSource::ReveloCodeIndex => "Revelo Code Index".to_owned(),
             BenchmarkSource::DesignArena => "Design Arena Elo".to_owned(),
+            BenchmarkSource::FrontierCode => "FrontierCode 1.1 mergeability score".to_owned(),
         };
 
         // The chart body scrolls as one page with the card and table below it,
@@ -834,6 +851,7 @@ impl ParetoWatchApp {
                     .on_hover_text("Add alarm");
                 });
             });
+            copyable_slug(ui, &p.model_id);
             ui.horizontal_wrapped(|ui| {
                 if p.vision {
                     ui.colored_label(egui::Color32::from_rgb(120, 200, 255), "vision");

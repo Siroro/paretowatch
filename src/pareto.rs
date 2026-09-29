@@ -41,6 +41,9 @@ pub(crate) struct ParetoCacheKey {
     pub(crate) common_scaffold: String,
     pub(crate) liquidity_filter: LiquidityFilter,
     pub(crate) modality_filter: ModalityFilter,
+    /// Hide toggle for catalog/comparison-only prices: with it on, models
+    /// without any live-market ask drop off the chart.
+    pub(crate) hide_catalog_prices: bool,
     /// Canonical group labels currently toggled off in the legend, sorted.
     pub(crate) hidden_groups: Vec<String>,
     pub(crate) input_weight: f64,
@@ -76,6 +79,14 @@ pub(crate) fn filter_hidden_groups(
         .filter(|p| !hidden_groups.contains(crate::theme::group_label(&p.creator)))
         .cloned()
         .collect()
+}
+
+/// The chart's pricing-source gate. A quote without a live-market ask is
+/// priced straight from the Surplus catalog/comparison list; with the hide
+/// toggle on those models leave the chart (and the frontier) so list-price
+/// orbs cannot hold a frontier spot against live asks.
+pub(crate) fn pricing_source_allows(hide_catalog_prices: bool, quote: &Quote) -> bool {
+    !hide_catalog_prices || quote.live_market
 }
 
 pub(crate) fn price_to_plot_x(price: f64, log_scale: bool) -> f64 {
@@ -260,5 +271,17 @@ mod tests {
         // Both catalog spellings of the xAI family collapse onto one group.
         assert_eq!(visible.len(), 1);
         assert_eq!(visible[0].creator, "Anthropic");
+    }
+
+    #[test]
+    fn catalog_only_quotes_leave_the_chart_when_hidden() {
+        let live = test_quote("live-model", 1.0, true);
+        let catalog = test_quote("catalog-model", 1.0, false);
+        // Off: everything stays, matching the pre-toggle behavior.
+        assert!(pricing_source_allows(false, &live));
+        assert!(pricing_source_allows(false, &catalog));
+        // On: only live-market asks remain.
+        assert!(pricing_source_allows(true, &live));
+        assert!(!pricing_source_allows(true, &catalog));
     }
 }

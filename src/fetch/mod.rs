@@ -4,6 +4,7 @@
 
 pub(crate) mod deepswe;
 pub(crate) mod design_arena;
+pub(crate) mod frontiercode;
 pub(crate) mod livebench;
 pub(crate) mod prices;
 pub(crate) mod revelo;
@@ -12,6 +13,7 @@ pub(crate) mod terminal_bench;
 
 pub(crate) use deepswe::*;
 pub(crate) use design_arena::*;
+pub(crate) use frontiercode::*;
 pub(crate) use livebench::*;
 pub(crate) use prices::*;
 pub(crate) use revelo::*;
@@ -168,6 +170,7 @@ pub(crate) fn fetch_benchmark_source(
         BenchmarkSource::LiveBench => fetch_livebench(client),
         BenchmarkSource::ReveloCodeIndex => fetch_revelo_code_index(client),
         BenchmarkSource::DesignArena => fetch_design_arena(client),
+        BenchmarkSource::FrontierCode => fetch_frontiercode(client),
         BenchmarkSource::CompositeAgentic | BenchmarkSource::CompositeDeployment => {
             Err(anyhow!("Composite is derived locally and is not fetched"))
         }

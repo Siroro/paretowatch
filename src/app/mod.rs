@@ -31,6 +31,7 @@ use crate::notifications::{
 };
 use crate::pareto::{
     ParetoCache, ParetoCacheKey, filter_hidden_groups, joined_points, pareto_frontier,
+    pricing_source_allows,
 };
 use crate::settings_store::{load_settings, save_settings};
 #[cfg(not(target_os = "linux"))]
@@ -86,6 +87,9 @@ pub(crate) struct ParetoWatchApp {
     common_scaffold: String,
     liquidity_filter: LiquidityFilter,
     modality_filter: ModalityFilter,
+    /// Pareto chart toggle: drop models whose prices are only Surplus
+    /// catalog/comparison list prices (no live-market ask).
+    hide_catalog_prices: bool,
     pareto_search: String,
     selected_pareto_model: Option<String>,
     log_price_axis: bool,
@@ -235,6 +239,7 @@ impl ParetoWatchApp {
             common_scaffold: default_common_scaffold(),
             liquidity_filter: LiquidityFilter::Any,
             modality_filter: ModalityFilter::All,
+            hide_catalog_prices: false,
             pareto_search: String::new(),
             selected_pareto_model: None,
             log_price_axis: true,
@@ -620,6 +625,7 @@ impl ParetoWatchApp {
             common_scaffold: self.common_scaffold.clone(),
             liquidity_filter: self.liquidity_filter,
             modality_filter: self.modality_filter,
+            hide_catalog_prices: self.hide_catalog_prices,
             hidden_groups,
             input_weight: self.settings.input_weight,
             cache_read_weight: self.settings.cache_read_weight,
@@ -647,6 +653,7 @@ impl ParetoWatchApp {
             .quotes
             .iter()
             .filter(|quote| self.modality_filter.allows(quote.vision))
+            .filter(|quote| pricing_source_allows(self.hide_catalog_prices, quote))
             .filter_map(|quote| {
                 self.liquidity_filter
                     .apply(quote, weights.0, weights.1, weights.2)

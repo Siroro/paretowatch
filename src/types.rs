@@ -7,6 +7,7 @@ use serde::{Deserialize, Serialize};
 
 pub(crate) const SWE_REBENCH_URL: &str = "https://swe-rebench.com/";
 pub(crate) const REVELO_CODE_INDEX_URL: &str = "https://research.revelo.com/code-index/";
+pub(crate) const FRONTIERCODE_URL: &str = "https://cognition.com/frontiercode";
 pub(crate) const ARTIFICIAL_ANALYSIS_URL: &str =
     "https://artificialanalysis.ai/leaderboards/models";
 
@@ -202,6 +203,7 @@ pub(crate) enum BenchmarkSource {
     LiveBench,
     ReveloCodeIndex,
     DesignArena,
+    FrontierCode,
 }
 
 /// Which question a composite answers. Capability/value asks "how good is the
@@ -233,6 +235,7 @@ impl BenchmarkSource {
             Self::LiveBench => "LiveBench",
             Self::ReveloCodeIndex => "Revelo Code Index",
             Self::DesignArena => "Frontend Design Elo (Design Arena)",
+            Self::FrontierCode => "FrontierCode (Cognition)",
         }
     }
 
@@ -248,6 +251,7 @@ impl BenchmarkSource {
             Self::LiveBench => "LiveBench",
             Self::ReveloCodeIndex => "Code Index",
             Self::DesignArena => "Design Elo",
+            Self::FrontierCode => "FrontierCode",
         }
     }
 
@@ -276,11 +280,15 @@ impl BenchmarkSource {
     pub(crate) fn is_harness_specific(self) -> bool {
         matches!(
             self,
-            Self::TerminalBench3 | Self::TerminalBench4 | Self::DeepSWE11 | Self::ReveloCodeIndex
+            Self::TerminalBench3
+                | Self::TerminalBench4
+                | Self::DeepSWE11
+                | Self::ReveloCodeIndex
+                | Self::FrontierCode
         )
     }
 
-    pub(crate) fn remote_sources() -> [Self; 7] {
+    pub(crate) fn remote_sources() -> [Self; 8] {
         [
             Self::SWERebench,
             Self::TerminalBench3,
@@ -289,10 +297,11 @@ impl BenchmarkSource {
             Self::LiveBench,
             Self::ReveloCodeIndex,
             Self::DesignArena,
+            Self::FrontierCode,
         ]
     }
 
-    pub(crate) fn consensus_sources() -> [Self; 8] {
+    pub(crate) fn consensus_sources() -> [Self; 9] {
         [
             Self::ArtificialAnalysisSnapshot,
             Self::SWERebench,
@@ -302,10 +311,11 @@ impl BenchmarkSource {
             Self::LiveBench,
             Self::ReveloCodeIndex,
             Self::DesignArena,
+            Self::FrontierCode,
         ]
     }
 
-    pub(crate) fn display_sources() -> [Self; 8] {
+    pub(crate) fn display_sources() -> [Self; 9] {
         Self::consensus_sources()
     }
 
@@ -324,6 +334,7 @@ impl BenchmarkSource {
             Self::LiveBench => "https://livebench.ai/",
             Self::ReveloCodeIndex => REVELO_CODE_INDEX_URL,
             Self::DesignArena => "https://designarena.ai/leaderboard",
+            Self::FrontierCode => FRONTIERCODE_URL,
         }
     }
 }

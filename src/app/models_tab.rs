@@ -11,7 +11,9 @@ use eframe::egui;
 
 use crate::bench::normalize;
 use crate::format::{format_price_tick, format_usd};
-use crate::theme::{PRICE_DOWN, creator_color, discount_color, free_offer_badge, group_label};
+use crate::theme::{
+    PRICE_DOWN, copyable_slug, creator_color, discount_color, free_offer_badge, group_label,
+};
 use crate::types::{
     AlertMode, CostBasis, ModalityFilter, PriceMetric, Quote, blended_price, token_workload_cost,
 };
@@ -604,6 +606,11 @@ impl ParetoWatchApp {
             }
             return;
         };
+
+        ui.horizontal(|ui| {
+            ui.label("Slug:");
+            copyable_slug(ui, &quote.model);
+        });
 
         // Drop a provider selection that vanished from the market.
         if let Some(provider) = self.calc_provider.clone()
