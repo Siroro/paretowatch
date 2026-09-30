@@ -1,3 +1,14 @@
+# ParetoWatch v0.17.8
+
+## Updates
+
+- AA Intelligence Index snapshot stays on v4.3.2 (read 2026-09-30, second same-day bump). The leader (Claude Opus 5.5, 58) and the scale are unchanged — Argon ties GPT-6 Astra's live display rather than challenging the leader — so only the new-model row was read fresh and `AA_CALIBRATION_POINTS` keeps its anchors.
+- New snapshot row: **Gemini 4 Argon** (53 — Google DeepMind's first proprietary model above the Flash class in over seven months, read at high reasoning, the highest effort it exposes). It ties GPT-6 Astra's live integer display (the stored Astra row keeps its 52.8 v4.3 decimal read), sits one point over GPT-6.1 Sol (52), 12 over Gemini 3.8 Flash (41) and 23 over the last pre-Flash flagship Gemini 3.1 Pro Preview (30), putting Google back among the top three labs by intelligence. The model is rolling out to selected users only behind a 50% launch pricing discount ($2/$10 per 1M tokens; $1.99 per Intelligence Index task at the discount, rising to $3.98 after), so the row lands ahead of a general Surplus listing; `argon` is a codename rather than a stripped deployment token, so the key joins nothing else. Its agentic headline results — #1 on AutomationBench-AA at 77.5, Terminal-Bench 4 at 57, AA-Briefcase 1494 Elo, and the lowest AA-Omniscience hallucination rate (15%) of any model scoring 45+ — live on boards the app already fetches rather than in this snapshot.
+
+## Validation
+
+Formatting, locked check, locked test (132 tests), Clippy with warnings denied, and the live-data smoke test all pass. The smoke run pins the composite leader — Claude Opus 5.5 at 99.3, unchanged — with Gemini 4 Argon entering at #2 (96.8, between Opus 5.5 and Fable 5.1) off its fresh AA row plus the live rows boards already publish for it (Terminal-Bench 4 measures it at 57), and all eight sources fetched (42 live FrontierCode rows, 27 Terminal-Bench 4 rows).
+
 # ParetoWatch v0.17.7
 
 ## Updates

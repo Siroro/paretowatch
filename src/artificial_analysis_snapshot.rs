@@ -75,6 +75,20 @@
 //! matching strips. ByteDance's Seed-2.0-Code has no AA page (404, and the
 //! sitemap lists no Seed URL) and joins the unrated list below.
 //!
+//! A second 2026-09-30 bump the same day added Gemini 4 Argon, Google
+//! DeepMind's first proprietary model above the Flash class in over seven
+//! months (the last was Gemini 3.1 Pro Preview). Read at high reasoning — the
+//! highest effort Argon exposes — it entered at 53, tying GPT-6 Astra's live
+//! display (the stored Astra row keeps its 52.8 v4.3 decimal read), one point
+//! over GPT-6.1 Sol, 12 over Gemini 3.8 Flash and 23 over Gemini 3.1 Pro
+//! Preview, which puts Google back among the top three labs by intelligence.
+//! The leader (Claude Opus 5.5, 58) and the scale are unchanged, so the index
+//! stays v4.3.2 and the calibration keeps its anchors. Argon is rolling out
+//! to selected users only, behind a 50% launch pricing discount on $4/$20
+//! pricing, so the row lands ahead of a general Surplus listing; its agentic
+//! results (AutomationBench-AA 77.5, Terminal-Bench 4 at 57, AA-Briefcase
+//! 1494 Elo) live on boards the app fetches live, not in this snapshot.
+//!
 //! Deliberately unrated (no AA presence as of 2026-09-30): Aion 2.0/3.0/3.0
 //! Mini, Hermes 3 405B, Palmyra Vision 7B, Qwen 2.5 7B, GPT-OSS Safeguard
 //! 20B/120B, Grok 4.20 Multi-Agent Beta, Venice rebrands, uncensored finetunes
@@ -104,6 +118,17 @@ pub(crate) const ARTIFICIAL_ANALYSIS_SNAPSHOT_VERSION: &str = "v4.3.2";
 /// family. Names should mirror Surplus display names so exact-key joins hit
 /// before fuzzy matching has to.
 pub(crate) const SNAPSHOT_ROWS: &[(&str, f64)] = &[
+    // Added 2026-09-30 (second same-day bump), read from the still-v4.3.2
+    // index: Gemini 4 Argon, Google DeepMind's first proprietary model above
+    // the Flash class in over seven months. Read at high reasoning — the
+    // highest effort Argon exposes — it entered at 53, tying GPT-6 Astra's
+    // live display (the stored Astra row keeps its 52.8 v4.3 read), one point
+    // over GPT-6.1 Sol and 12 over Gemini 3.8 Flash, putting Google back
+    // among the top three labs. Argon is rolling out to selected users only
+    // (50% launch discount on $4/$20 pricing), so the row lands ahead of the
+    // general Surplus listing; `argon` is a codename, not a stripped
+    // deployment token, so the key joins nothing else.
+    ("Gemini 4 Argon", 53.0),
     // Added 2026-09-30 for the Surplus listings of 2026-09-29..09-30, read
     // from the still-v4.3.2 index (leader and scale unchanged). GPT-6.1 Sol is
     // OpenAI's Sol-tier upgrade over GPT-6 Sol, still below flagship GPT-6
@@ -626,6 +651,44 @@ mod tests {
         assert!(
             score_of("Seed-2.0-Code").is_none(),
             "Seed-2.0-Code is unrated and must not have a row"
+        );
+    }
+
+    #[test]
+    fn aa_snapshot_covers_the_2026_09_30_gemini_4_argon_launch() {
+        // Row added 2026-09-30 (second same-day bump) under the still-v4.3.2
+        // index: Gemini 4 Argon at high reasoning — the highest effort it
+        // exposes — ties GPT-6 Astra's live integer display while the stored
+        // Astra row keeps its 52.8 v4.3 decimal read, and stands one point
+        // over GPT-6.1 Sol, putting Google back among the top three labs with
+        // the leader (Opus 5.5, 58) and the calibration anchors unchanged.
+        // The codename must keep the row distinct from both the Flash family
+        // and the last pre-Flash flagship.
+        let rows = artificial_analysis_snapshot();
+        let score_of = |name: &str| {
+            rows.iter()
+                .find(|b| benchmark_model_key(&b.slug) == benchmark_model_key(name))
+                .and_then(|b| b.agentic_coding)
+        };
+        assert_eq!(
+            score_of("Gemini 4 Argon"),
+            Some(53.0),
+            "Gemini 4 Argon missing or wrong in snapshot"
+        );
+        assert_eq!(
+            score_of("GPT-6 Astra"),
+            Some(52.8),
+            "Astra keeps its v4.3 decimal read; Argon ties its live display"
+        );
+        assert_ne!(
+            benchmark_model_key("Gemini 4 Argon"),
+            benchmark_model_key("Gemini 3.8 Flash"),
+            "Argon must not collapse onto the Flash family"
+        );
+        assert_ne!(
+            benchmark_model_key("Gemini 4 Argon"),
+            benchmark_model_key("Gemini 3.1 Pro Preview"),
+            "Argon must not collapse onto the last pre-Flash flagship"
         );
     }
 }
