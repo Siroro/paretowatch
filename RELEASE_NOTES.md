@@ -1,3 +1,15 @@
+# ParetoWatch v0.17.7
+
+## Updates
+
+- AA Intelligence Index snapshot bumped from v4.3.2 (read 2026-09-29) to v4.3.2 (read 2026-09-30). The index revision, scale, and leader are unchanged — Claude Opus 5.5 still leads at 58 — so only the two days' new-model rows were read fresh and `AA_CALIBRATION_POINTS` keeps its anchors.
+- New snapshot rows for the Surplus listings of 2026-09-29..09-30: **GPT-6.1 Sol** (52 — OpenAI's Sol-tier upgrade over GPT-6 Sol, still positioned below the flagship GPT-6 Astra; read at the max effort the Surplus SKU exposes via `reasoning_effort`, it entered at #10 of 222, between the Fable 5.1/Astra tier and GPT-6 Sol's 48) and **GPT-6.1 Sol Pro** (52, inherited: the same weights served with `reasoning.mode: "pro"`, resolved through `INHERITED_EXECUTION_MODES` like the GPT-6 pro SKUs). **Inception: Mercury 2.5** (12) — the diffusion-LLM refresh of Mercury 2 — keeps the `Inception: ` prefix in its row name so it exact-joins the Surplus display name, the same treatment the Cohere row uses, because `inception` is not a creator prefix benchmark matching strips.
+- **ByteDance Seed: Seed-2.0-Code** (listed 2026-09-29) has no AA presence — the model page 404s and the sitemap lists no Seed URL — so it falls back to the composite's neutral prior alongside Seed 2.1 Turbo instead of proxying an invented score.
+
+## Validation
+
+Formatting, locked check, locked test (131 tests), Clippy with warnings denied, and the live-data smoke test all pass. The smoke run pins the composite leader — Claude Opus 5.5 at 99.3 — with GPT-6.1 Sol entering the top 10 at 86.2 (between Sonnet 5.5 and MiMo V2.6 Pro) off its fresh AA row plus the xhigh rows the live boards already publish for it, and fetched 42 live FrontierCode rows. The base+Pro pair renders in the composite exactly like the established GPT-5.6 Sol pair (verified against the pre-change smoke run, which shows the same doubled display line for GPT-5.6 Sol).
+
 # ParetoWatch v0.17.6
 
 ## Updates

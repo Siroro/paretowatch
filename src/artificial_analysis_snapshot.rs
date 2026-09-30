@@ -61,10 +61,25 @@
 //! fast/highspeed/ultraspeed) and the SKU joins the GLM-5.3 row exactly, the
 //! same inheritance MiMo-V2.6-Pro-UltraSpeed uses.
 //!
-//! Deliberately unrated (no AA presence as of 2026-09-29): Aion 2.0/3.0/3.0
+//! The 2026-09-30 bump stayed on v4.3.2 again: the leader (Claude Opus 5.5,
+//! 58) and the scale are unchanged, so only the two days' new-model rows were
+//! read fresh. GPT-6.1 Sol — OpenAI's Sol-tier upgrade over GPT-6 Sol, still
+//! positioned below the flagship GPT-6 Astra — entered at 52 (#10 of 222, read
+//! at the max effort the Surplus SKU exposes via `reasoning_effort`), landing
+//! between the Fable 5.1/Astra tier and GPT-6 Sol's 48. GPT-6.1 Sol Pro is
+//! the same weights served with `reasoning.mode: "pro"`, so it inherits the
+//! row through [`INHERITED_EXECUTION_MODES`] like the GPT-6 pro SKUs.
+//! Inception's Mercury 2.5 (12) is the diffusion-LLM refresh of Mercury 2; its
+//! row carries the `Inception: ` prefix so it exact-joins the Surplus display
+//! name — `inception`, like `cohere`, is not a creator prefix that benchmark
+//! matching strips. ByteDance's Seed-2.0-Code has no AA page (404, and the
+//! sitemap lists no Seed URL) and joins the unrated list below.
+//!
+//! Deliberately unrated (no AA presence as of 2026-09-30): Aion 2.0/3.0/3.0
 //! Mini, Hermes 3 405B, Palmyra Vision 7B, Qwen 2.5 7B, GPT-OSS Safeguard
 //! 20B/120B, Grok 4.20 Multi-Agent Beta, Venice rebrands, uncensored finetunes
-//! such as GLM 4.7 Flash Heretic, Seed 2.1 Turbo, the 2026-09-11 Sakana
+//! such as GLM 4.7 Flash Heretic, Seed 2.1 Turbo and Seed-2.0-Code, the
+//! 2026-09-11 Sakana
 //! listings (Fugu Max, Fugu Ultra v2), MiMo-V2.6-Flash (the Pro sibling is
 //! rated; AA has no Flash page yet), TypeSafe's JEV 1.13 decisions model, and
 //! Fireworks Ember-1 (a Kimi-K3-derived reasoning model; AA has no page, and
@@ -82,13 +97,27 @@
 use crate::fetch::score_benchmark;
 use crate::types::{Benchmark, BenchmarkKind};
 
-pub(crate) const ARTIFICIAL_ANALYSIS_SNAPSHOT_DATE: &str = "2026-09-29";
+pub(crate) const ARTIFICIAL_ANALYSIS_SNAPSHOT_DATE: &str = "2026-09-30";
 pub(crate) const ARTIFICIAL_ANALYSIS_SNAPSHOT_VERSION: &str = "v4.3.2";
 
 /// `(model name, AA Intelligence score)` pairs, one representative row per
 /// family. Names should mirror Surplus display names so exact-key joins hit
 /// before fuzzy matching has to.
 pub(crate) const SNAPSHOT_ROWS: &[(&str, f64)] = &[
+    // Added 2026-09-30 for the Surplus listings of 2026-09-29..09-30, read
+    // from the still-v4.3.2 index (leader and scale unchanged). GPT-6.1 Sol is
+    // OpenAI's Sol-tier upgrade over GPT-6 Sol, still below flagship GPT-6
+    // Astra; read at max effort — the effort the Surplus SKU exposes via
+    // `reasoning_effort` — it entered at #10 of 222, between the Fable 5.1/
+    // Astra tier and GPT-6 Sol's 48. Its Pro SKU is a `reasoning.mode: "pro"`
+    // execution mode of the same weights (see INHERITED_EXECUTION_MODES).
+    // Mercury 2.5 is Inception's diffusion-LLM refresh of Mercury 2; the name
+    // carries the `Inception: ` prefix so it exact-joins the Surplus display
+    // name (`inception` is not a stripped creator prefix, same as Cohere).
+    // Seed-2.0-Code has no AA page and is unrated — see the header notes.
+    ("GPT-6.1 Sol", 52.0),
+    ("GPT-6.1 Sol Pro", 52.0), // same weights as GPT-6.1 Sol; see INHERITED_EXECUTION_MODES
+    ("Inception: Mercury 2.5", 12.0),
     // Added 2026-09-29 for the Surplus listings of 2026-09-23..09-29, read
     // from the still-v4.3.2 index (leader and scale unchanged). Claude Sonnet
     // 5.5 (released 2026-09-28) entered at #3 of 216, adaptive reasoning at
@@ -299,6 +328,7 @@ pub(crate) const SNAPSHOT_ROWS: &[(&str, f64)] = &[
 /// to the base variant when joining live leaderboard rows, and the builder
 /// appends an inheritance note to the rendered row name.
 pub(crate) const INHERITED_EXECUTION_MODES: &[(&str, &str)] = &[
+    ("GPT-6.1 Sol Pro", "GPT-6.1 Sol"),
     ("GPT-6 Sol Pro", "GPT-6 Sol"),
     ("GPT-6 Luna Pro", "GPT-6 Luna"),
     ("GPT-5.6 Sol Pro", "GPT-5.6 Sol"),
@@ -555,6 +585,47 @@ mod tests {
         assert!(
             score_of("Ember-1").is_none(),
             "Fireworks Ember-1 is unrated and must not have a row"
+        );
+    }
+
+    #[test]
+    fn aa_snapshot_covers_the_2026_09_30_gpt_6_1_refresh() {
+        // Rows added 2026-09-30 under the still-v4.3.2 index: GPT-6.1 Sol
+        // (OpenAI's Sol-tier upgrade, read at max effort, #10 of 222) plus its
+        // pro execution-mode SKU, and Inception's Mercury 2.5 refresh. The 6.1
+        // keys must stay distinct from the GPT-6 family (version digits are
+        // never stripped), Mercury 2.5 must not collapse onto Mercury 2, and
+        // Seed-2.0-Code is unrated with no row of its own.
+        let rows = artificial_analysis_snapshot();
+        let score_of = |name: &str| {
+            rows.iter()
+                .find(|b| benchmark_model_key(&b.slug) == benchmark_model_key(name))
+                .and_then(|b| b.agentic_coding)
+        };
+        for (name, expected) in [
+            ("GPT-6.1 Sol", 52.0),
+            ("GPT-6.1 Sol Pro", 52.0),
+            ("Inception: Mercury 2.5", 12.0),
+        ] {
+            assert_eq!(
+                score_of(name),
+                Some(expected),
+                "{name} missing or wrong in snapshot"
+            );
+        }
+        assert_ne!(
+            benchmark_model_key("GPT-6.1 Sol"),
+            benchmark_model_key("GPT-6 Sol"),
+            "GPT-6.1 must not collapse onto GPT-6"
+        );
+        assert_ne!(
+            benchmark_model_key("Inception: Mercury 2.5"),
+            benchmark_model_key("Mercury 2"),
+            "Mercury 2.5 must not collapse onto Mercury 2"
+        );
+        assert!(
+            score_of("Seed-2.0-Code").is_none(),
+            "Seed-2.0-Code is unrated and must not have a row"
         );
     }
 }
