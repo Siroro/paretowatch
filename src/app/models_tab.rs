@@ -1,7 +1,7 @@
 //! Models tab: every model in the price snapshot — not just the
 //! benchmark-matched ones the Pareto chart can plot — with search, filters,
-//! sortable price columns, and a workload cost calculator that bills the
-//! Surplus cache-read rate when one is published.
+//! sortable price and usage columns, and a workload cost calculator that bills
+//! the Surplus cache-read rate when one is published.
 //!
 //! The tab clones the quote list once per frame so the whole render pass can
 //! mutate UI state (selections, filters, pinned widgets) without holding the
@@ -10,7 +10,7 @@
 use eframe::egui;
 
 use crate::bench::normalize;
-use crate::format::{format_price_tick, format_usd};
+use crate::format::{format_compact_number, format_price_tick, format_usd};
 use crate::theme::{
     PRICE_DOWN, copyable_slug, creator_color, discount_color, free_offer_badge, group_label,
 };
@@ -84,6 +84,8 @@ pub(super) enum ModelsSort {
     Output,
     Blended,
     Discount,
+    Requests24h,
+    Volume24h,
 }
 
 /// Where the cache-read rate a calculation bills came from.
@@ -422,6 +424,8 @@ impl ParetoWatchApp {
                     header(ui, "Out $/1M", ModelsSort::Output);
                     header(ui, "Blend $/1M", ModelsSort::Blended);
                     ui.strong("Provider");
+                    header(ui, "Req /24h", ModelsSort::Requests24h);
+                    header(ui, "Vol /24h", ModelsSort::Volume24h);
                     header(ui, "Disc", ModelsSort::Discount);
                     ui.strong("");
                     ui.end_row();
@@ -525,6 +529,26 @@ impl ParetoWatchApp {
         }
         if !market_info.is_empty() {
             provider_label.on_hover_text(market_info.join(" · "));
+        }
+        match quote.requests_24h {
+            Some(requests) => {
+                ui.label(format_compact_number(requests as f64))
+                    .on_hover_text("Requests routed through this market in the last 24h");
+            }
+            None => {
+                ui.label(egui::RichText::new("—").weak())
+                    .on_hover_text("Market telemetry only; catalog rows carry none");
+            }
+        }
+        match quote.volume_24h {
+            Some(volume) => {
+                ui.label(format_compact_number(volume))
+                    .on_hover_text("Dollars traded through this market in the last 24h");
+            }
+            None => {
+                ui.label(egui::RichText::new("—").weak())
+                    .on_hover_text("Market telemetry only; catalog rows carry none");
+            }
         }
         match quote.discount_pct {
             Some(pct) => {
@@ -853,9 +877,10 @@ impl ParetoWatchApp {
     }
 }
 
-/// Order the table rows by the active sort. Missing cache prices sort as the
-/// most expensive cache rate so they sink in cheapest-first order; every key
-/// tie-breaks on display name so the order is stable across polls.
+/// Order the table rows by the active sort. Missing cache prices and usage
+/// telemetry sort as the largest key so they sink in the default ascending
+/// order; every key tie-breaks on display name so the order is stable across
+/// polls.
 fn sort_models_rows(rows: &mut [ModelsRow<'_>], sort: ModelsSort, desc: bool) {
     let by_name = |a: &ModelsRow<'_>, b: &ModelsRow<'_>| {
         a.quote
@@ -865,6 +890,9 @@ fn sort_models_rows(rows: &mut [ModelsRow<'_>], sort: ModelsSort, desc: bool) {
     };
     let cache_key = |row: &ModelsRow<'_>| row.cache_read.unwrap_or(f64::INFINITY);
     let discount_key = |row: &ModelsRow<'_>| row.quote.discount_pct.unwrap_or(f64::NEG_INFINITY);
+    let requests_key =
+        |row: &ModelsRow<'_>| row.quote.requests_24h.map_or(f64::INFINITY, |r| r as f64);
+    let volume_key = |row: &ModelsRow<'_>| row.quote.volume_24h.unwrap_or(f64::INFINITY);
     rows.sort_by(|a, b| {
         let ordering = match sort {
             ModelsSort::Name => by_name(a, b),
@@ -884,6 +912,12 @@ fn sort_models_rows(rows: &mut [ModelsRow<'_>], sort: ModelsSort, desc: bool) {
             ModelsSort::Blended => a.blended.total_cmp(&b.blended).then_with(|| by_name(a, b)),
             ModelsSort::Discount => discount_key(a)
                 .total_cmp(&discount_key(b))
+                .then_with(|| by_name(a, b)),
+            ModelsSort::Requests24h => requests_key(a)
+                .total_cmp(&requests_key(b))
+                .then_with(|| by_name(a, b)),
+            ModelsSort::Volume24h => volume_key(a)
+                .total_cmp(&volume_key(b))
                 .then_with(|| by_name(a, b)),
         };
         if desc { ordering.reverse() } else { ordering }
@@ -1013,5 +1047,54 @@ mod tests {
         no_cache.market_options.clear();
         assert!(!ModelsCacheFilter::Priced.allows(&no_cache));
         assert!(ModelsCacheFilter::NoCachePrice.allows(&no_cache));
+    }
+
+    #[test]
+    fn usage_sorts_order_reported_values_and_sink_missing_telemetry() {
+        let mut busy = test_quote("busy-model", 1.0, true);
+        busy.requests_24h = Some(14_000);
+        busy.volume_24h = Some(6_200_000.0);
+        let mut quiet = test_quote("quiet-model", 1.0, true);
+        quiet.requests_24h = Some(200);
+        quiet.volume_24h = Some(900.0);
+        let mut unreported = test_quote("unreported-model", 1.0, true);
+        unreported.requests_24h = None;
+        unreported.volume_24h = None;
+        let mut rows = vec![
+            ModelsRow {
+                quote: &unreported,
+                blended: 0.0,
+                cache_read: None,
+            },
+            ModelsRow {
+                quote: &busy,
+                blended: 0.0,
+                cache_read: None,
+            },
+            ModelsRow {
+                quote: &quiet,
+                blended: 0.0,
+                cache_read: None,
+            },
+        ];
+        fn names<'a>(rows: &[ModelsRow<'a>]) -> Vec<&'a str> {
+            rows.iter().map(|row| row.quote.model.as_str()).collect()
+        }
+
+        sort_models_rows(&mut rows, ModelsSort::Requests24h, false);
+        assert_eq!(
+            names(&rows),
+            ["quiet-model", "busy-model", "unreported-model"]
+        );
+        sort_models_rows(&mut rows, ModelsSort::Volume24h, false);
+        assert_eq!(
+            names(&rows),
+            ["quiet-model", "busy-model", "unreported-model"]
+        );
+        sort_models_rows(&mut rows, ModelsSort::Requests24h, true);
+        assert_eq!(
+            names(&rows),
+            ["unreported-model", "busy-model", "quiet-model"]
+        );
     }
 }

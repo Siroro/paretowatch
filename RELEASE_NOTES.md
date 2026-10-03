@@ -1,3 +1,13 @@
+# ParetoWatch v0.17.9
+
+## Updates
+
+- New Models tab columns: **Req /24h** and **Vol /24h**. The live-market telemetry the Pareto chart's inspector already shows — requests routed through the market and dollars traded, both over the last 24h — is now a sortable column pair in the Models table (between Provider and Disc), so the table can rank by market activity rather than price alone. Values use the compact K/M formatting; catalog rows carry no market telemetry and show a dimmed dash with a hover saying why, and missing values sink below every reported one in the default ascending sort — the same convention the cache column documents — with every key still tie-breaking on display name so the order stays stable across polls.
+
+## Validation
+
+Formatting, locked check, locked test (133 tests), Clippy with warnings denied, and the live-data smoke test all pass. The smoke run pins the composite leader — Claude Opus 5.5 at 99.3, unchanged — with all eight sources fetched (AA snapshot 155 rows, LiveBench 66, FrontierCode 42, Terminal-Bench 4 27).
+
 # ParetoWatch v0.17.8
 
 ## Updates
