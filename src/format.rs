@@ -31,6 +31,16 @@ pub(crate) fn format_compact_number(value: f64) -> String {
     }
 }
 
+/// Compact dollars for market volumes: "$962", "$1.2K", "$6.2M" — with two
+/// decimals kept on the sub-$10 tail so small volumes don't round to "$0".
+pub(crate) fn format_compact_usd(value: f64) -> String {
+    if value.abs() < 10.0 {
+        format!("${value:.2}")
+    } else {
+        format!("${}", format_compact_number(value))
+    }
+}
+
 /// Dollar amounts for cost readouts: keeps enough decimals that a cheap
 /// model's cents still show, without float noise.
 pub(crate) fn format_usd(value: f64) -> String {
@@ -63,5 +73,14 @@ mod tests {
         assert_eq!(format_usd(0.01234), "$0.012");
         assert_eq!(format_usd(0.0001234), "$0.000123");
         assert_eq!(format_usd(f64::NAN), "");
+    }
+
+    #[test]
+    fn format_compact_usd_keeps_small_change_visible() {
+        assert_eq!(format_compact_usd(962.0), "$962");
+        assert_eq!(format_compact_usd(205.2), "$205");
+        assert_eq!(format_compact_usd(6_200_000.0), "$6.2M");
+        assert_eq!(format_compact_usd(14_000.0 / 5.0), "$2.8K");
+        assert_eq!(format_compact_usd(0.2), "$0.20");
     }
 }

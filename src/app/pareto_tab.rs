@@ -10,7 +10,7 @@ use egui_plot::{HoverPosition, Line, Plot, PlotPoint, PlotPoints, Points, Text};
 
 use crate::artificial_analysis_snapshot::ARTIFICIAL_ANALYSIS_SNAPSHOT_DATE;
 use crate::bench::{format_percentile, normalize};
-use crate::format::{format_compact_number, format_price_tick};
+use crate::format::{format_compact_number, format_compact_usd, format_price_tick};
 use crate::history::track::{ModelSeries, historical_low};
 use crate::pareto::{JoinedPoint, pareto_search_matches, price_from_plot_x, price_to_plot_x};
 use crate::theme::{
@@ -952,7 +952,7 @@ impl ParetoWatchApp {
                             }
                             if let Some(volume) = quote.volume_24h {
                                 ui.separator();
-                                ui.label(format!("{} volume / 24h", format_compact_number(volume)));
+                                ui.label(format!("{} volume / 24h", format_compact_usd(volume)));
                             }
                             if let Some(discount) = quote.discount_pct {
                                 ui.separator();

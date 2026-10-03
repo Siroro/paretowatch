@@ -15,6 +15,10 @@
 //! is self-delimiting per type). A crash mid-write can only corrupt the tail
 //! frame; replay stops at the first undecodable frame and truncates the file
 //! back to the last good offset.
+//!
+//! Format v2 (2026-10) rescaled `Telemetry` volume into true cents: v1 logs
+//! had stored the feed's micro-USD volume misread as dollars. Opening a v1
+//! log rescales its telemetry and rewrites the file in place.
 
 use serde::{Deserialize, Serialize};
 use std::fs::{self, File, OpenOptions};
@@ -22,7 +26,14 @@ use std::io::{self, Write};
 use std::path::Path;
 
 const MAGIC: [u8; 4] = *b"PWH1";
-const FORMAT_VERSION: u8 = 1;
+/// Format history:
+/// - v1: `Telemetry.volume_cents` stored the feed's micro-USD volume misread
+///   as dollars — 1,000,000× too large.
+/// - v2: `volume_cents` stores true cents. Opening a v1 log rescales its
+///   telemetry and rewrites the file in place.
+const FORMAT_VERSION: u8 = 2;
+/// v1 stored `micro_usd * 100` per cent, so rescaling divides by 1e6.
+const LEGACY_CENTS_PER_MICRO_CENT: u64 = 1_000_000;
 
 /// Price resolution: 0.001 $/M tokens. Also the minimum price movement that
 /// registers as a change.
@@ -120,29 +131,22 @@ impl EventStore {
         let bytes = match fs::read(path) {
             Ok(b) => b,
             Err(err) if err.kind() == io::ErrorKind::NotFound => {
-                let mut file = File::create(path).map_err(|e| e.to_string())?;
-                file.write_all(&MAGIC)
-                    .and_then(|_| file.write_all(&[FORMAT_VERSION]))
-                    .map_err(|e| e.to_string())?;
+                let len = Self::fresh_log(path)?;
                 return Ok(Replay {
                     frames: Vec::new(),
-                    file_bytes: 5,
+                    file_bytes: len,
                 });
             }
             Err(err) => return Err(err.to_string()),
         };
-        if bytes.len() < 5 || bytes[..4] != MAGIC || bytes[4] != FORMAT_VERSION {
-            let aside = path.with_extension("bin.old");
-            let _ = fs::rename(path, &aside);
-            let mut file = File::create(path).map_err(|e| e.to_string())?;
-            file.write_all(&MAGIC)
-                .and_then(|_| file.write_all(&[FORMAT_VERSION]))
-                .map_err(|e| e.to_string())?;
+        if bytes.len() < 5 || bytes[..4] != MAGIC || !matches!(bytes[4], 1..=FORMAT_VERSION) {
+            let len = Self::archive_and_restart(path)?;
             return Ok(Replay {
                 frames: Vec::new(),
-                file_bytes: 5,
+                file_bytes: len,
             });
         }
+        let legacy_volume = bytes[4] == 1;
 
         let mut frames = Vec::new();
         let mut ts: i64 = 0;
@@ -175,7 +179,69 @@ impl EventStore {
         {
             let _ = file.set_len(good as u64);
         }
+        if legacy_volume {
+            for (_, frame) in frames.iter_mut() {
+                if let EventKind::Telemetry { volume_cents, .. } = &mut frame.kind {
+                    *volume_cents = (*volume_cents + LEGACY_CENTS_PER_MICRO_CENT / 2)
+                        / LEGACY_CENTS_PER_MICRO_CENT;
+                }
+            }
+            return match Self::rewrite_current(path, &frames) {
+                Ok(len) => Ok(Replay {
+                    frames,
+                    file_bytes: len,
+                }),
+                // Rewrite failed (disk error, file held by another process):
+                // archive like an unknown format rather than mix v1-scale
+                // frames with new-scale appends.
+                Err(_) => Self::archive_and_restart(path).map(|len| Replay {
+                    frames: Vec::new(),
+                    file_bytes: len,
+                }),
+            };
+        }
         Ok(Replay { frames, file_bytes })
+    }
+
+    /// Create an empty current-format log at `path`.
+    fn fresh_log(path: &Path) -> Result<u64, String> {
+        let mut file = File::create(path).map_err(|e| e.to_string())?;
+        file.write_all(&MAGIC)
+            .and_then(|_| file.write_all(&[FORMAT_VERSION]))
+            .map_err(|e| e.to_string())?;
+        Ok(5)
+    }
+
+    /// Move an unreadable log aside (nothing is deleted) and start fresh.
+    fn archive_and_restart(path: &Path) -> Result<u64, String> {
+        let _ = fs::rename(path, path.with_extension("bin.old"));
+        Self::fresh_log(path)
+    }
+
+    /// Rewrite the whole log at `path` in the current format (v1 migration).
+    /// Encodes to a sibling temp file and renames over the original, so a
+    /// crash mid-rewrite leaves the old log intact.
+    fn rewrite_current(path: &Path, frames: &[(i64, Frame)]) -> Result<u64, String> {
+        let tmp = path.with_extension("bin.tmp");
+        let mut file = File::create(&tmp).map_err(|e| e.to_string())?;
+        file.write_all(&MAGIC)
+            .and_then(|_| file.write_all(&[FORMAT_VERSION]))
+            .map_err(|e| e.to_string())?;
+        let mut last = 0i64;
+        for (ts, frame) in frames {
+            let dt = (*ts - last).clamp(0, u32::MAX as i64) as u32;
+            let encoded = postcard::to_allocvec(&Frame {
+                dt,
+                ..frame.clone()
+            })
+            .map_err(|e| e.to_string())?;
+            file.write_all(&encoded).map_err(|e| e.to_string())?;
+            last = *ts;
+        }
+        file.flush().map_err(|e| e.to_string())?;
+        let len = fs::metadata(&tmp).map_err(|e| e.to_string())?.len();
+        fs::rename(&tmp, path).map_err(|e| e.to_string())?;
+        Ok(len)
     }
 
     /// Appends frames (absolute timestamps), flushing once. Returns bytes
@@ -349,5 +415,78 @@ mod tests {
         assert!(path.with_extension("bin.old").exists() || fs::read(&path).unwrap()[..4] == MAGIC);
         let _ = fs::remove_file(&path);
         let _ = fs::remove_file(path.with_extension("bin.old"));
+    }
+
+    #[test]
+    fn v1_volume_cents_are_rescaled_and_file_rewritten_as_v2() {
+        let path = temp_path("v1migrate");
+        let _ = fs::remove_file(&path);
+        // Hand-built v1 log: its telemetry stored the feed's micro-USD volume
+        // misread as dollars ($962 traded was written as 96_200_000_000
+        // micro-cents) alongside ordinary Added/Price frames.
+        let mut bytes = Vec::new();
+        bytes.extend_from_slice(&MAGIC);
+        bytes.push(1);
+        bytes.extend_from_slice(
+            &postcard::to_allocvec(&added_frame(0, "anthropic/opus-5-5")).unwrap(),
+        );
+        bytes.extend_from_slice(
+            &postcard::to_allocvec(&Frame {
+                id: 0,
+                dt: 86_400,
+                kind: EventKind::Telemetry {
+                    requests: 20_000,
+                    volume_cents: 96_200_000_000,
+                },
+            })
+            .unwrap(),
+        );
+        bytes.extend_from_slice(
+            &postcard::to_allocvec(&Frame {
+                id: 0,
+                dt: 0,
+                kind: EventKind::Price {
+                    field: PriceField::Input,
+                    delta: quantize_price(2.5),
+                },
+            })
+            .unwrap(),
+        );
+        fs::write(&path, bytes).unwrap();
+
+        {
+            let (_, replay) = EventStore::open(&path);
+            assert_eq!(replay.frames.len(), 3);
+            assert_eq!(
+                replay.frames[1].1.kind,
+                EventKind::Telemetry {
+                    requests: 20_000,
+                    volume_cents: 96_200
+                }
+            );
+            assert_eq!(
+                replay.frames[2].1.kind,
+                EventKind::Price {
+                    field: PriceField::Input,
+                    delta: quantize_price(2.5)
+                }
+            );
+            // The file itself is now v2 and exactly the rewritten length.
+            let head = fs::read(&path).unwrap();
+            assert_eq!(head[4], FORMAT_VERSION);
+            assert_eq!(head.len() as u64, replay.file_bytes);
+        }
+        // Reopening the migrated file must not divide again.
+        {
+            let (_, replay) = EventStore::open(&path);
+            assert_eq!(
+                replay.frames[1].1.kind,
+                EventKind::Telemetry {
+                    requests: 20_000,
+                    volume_cents: 96_200
+                }
+            );
+        }
+        let _ = fs::remove_file(&path);
     }
 }

@@ -758,8 +758,11 @@ pub(crate) fn parse_market_overlay(root: &Value, settings: &Settings) -> Vec<Mar
         });
         let requests_24h = first_number_path(entry, &[&["requests_24h"], &["requests24h"]])
             .and_then(|n| (n >= 0.0).then_some(n as u64));
+        // The feed reports volume in micro-USD like every other money field
+        // (e.g. 962_000_000 = $962 traded), not in dollars.
         let volume_24h = first_number_path(entry, &[&["volume_24h"], &["volume24h"]])
-            .filter(|n| n.is_finite() && *n >= 0.0);
+            .filter(|n| n.is_finite() && *n >= 0.0)
+            .map(|v| v / SURPLUS_MARKET_MICRO_USD_PER_USD);
         let discount_pct = first_number_path(
             entry,
             &[
@@ -850,6 +853,7 @@ mod tests {
         assert_eq!(rows[0].provider_trusted, Some(false));
         assert_eq!(rows[0].healthy_seller_count, Some(5));
         assert_eq!(rows[0].requests_24h, Some(641));
+        assert!((rows[0].volume_24h.unwrap() - 0.203913).abs() < 1e-12);
         assert_eq!(rows[0].discount_direction.as_deref(), Some("tightening"));
         assert!(!rows[0].free_offer_listed);
     }

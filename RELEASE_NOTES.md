@@ -1,3 +1,14 @@
+# ParetoWatch v0.17.10
+
+## Fixes
+
+- **24h market volume displayed 1,000,000× too large** everywhere it appeared. The Surplus feed reports every money amount in micro-USD — per-1M prices are divided by `SURPLUS_MARKET_MICRO_USD_PER_USD` at parse — but `volume_24h` had been read raw since market telemetry landed in v0.4.0, so Opus 5.5 showed "962M volume / 24h" when $962 was actually traded (20K requests ≈ $0.05 each, in line with an Opus-class model; DeepSeek V4.1 Flash's "205.2M" was $205 over 900K requests). Volume is now converted to dollars at the parse site, and both displays — the Models tab's Vol /24h column and the Pareto inspector — format it with a new compact-dollar helper that prefixes `$` and keeps two decimals on the sub-$10 tail ($962, $6.2M, $0.20), so volume can no longer read as a token count or a price.
+- History recorded the misread too: once-per-day telemetry events stored `volume_cents` as micro-USD. The log format bumps to v2 (true cents); opening a v1 log rescales every telemetry event ÷1,000,000 and rewrites the file in place — encoded to a temp file and renamed over the original, so a crash mid-migration leaves the old log intact. If the rewrite cannot complete, the v1 file is archived as `.old` exactly like an unknown-format log, never mixed with new-scale appends.
+
+## Validation
+
+Formatting, locked check, locked test (135 tests), Clippy with warnings denied, and the live-data smoke test all pass. The smoke run pins the composite leader — Claude Opus 5.5 at 99.3, unchanged — with all eight sources fetched (AA snapshot 155 rows, LiveBench 66, FrontierCode 42, Terminal-Bench 4 27).
+
 # ParetoWatch v0.17.9
 
 ## Updates

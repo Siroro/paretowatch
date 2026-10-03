@@ -10,7 +10,7 @@
 use eframe::egui;
 
 use crate::bench::normalize;
-use crate::format::{format_compact_number, format_price_tick, format_usd};
+use crate::format::{format_compact_number, format_compact_usd, format_price_tick, format_usd};
 use crate::theme::{
     PRICE_DOWN, copyable_slug, creator_color, discount_color, free_offer_badge, group_label,
 };
@@ -542,7 +542,7 @@ impl ParetoWatchApp {
         }
         match quote.volume_24h {
             Some(volume) => {
-                ui.label(format_compact_number(volume))
+                ui.label(format_compact_usd(volume))
                     .on_hover_text("Dollars traded through this market in the last 24h");
             }
             None => {
