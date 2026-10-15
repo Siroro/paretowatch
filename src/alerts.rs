@@ -630,6 +630,7 @@ mod tests {
             live_market: true,
             free_offer_listed: false,
             vision: false,
+            uncensored: false,
         }
     }
 

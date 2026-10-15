@@ -40,7 +40,8 @@ use crate::tray::{UiCommand, install_tray_event_handlers};
 use crate::types::{
     ANY_MODEL, AlertDirection, AlertMode, AlertRearm, AlertRule, AlertSound, Benchmark,
     BenchmarkMetric, BenchmarkSource, ComparisonMode, CostBasis, LiquidityFilter, ModalityFilter,
-    MoveDirection, PriceMetric, PriceSnapshot, Quote, Settings, default_common_scaffold,
+    MoveDirection, PriceMetric, PriceSnapshot, Quote, Settings, UncensoredFilter,
+    default_common_scaffold,
 };
 use crate::widgets;
 use crate::worker::{WorkerCommand, WorkerMessage};
@@ -87,6 +88,9 @@ pub(crate) struct ParetoWatchApp {
     common_scaffold: String,
     liquidity_filter: LiquidityFilter,
     modality_filter: ModalityFilter,
+    /// Pareto chart safety-tuning filter (e.g. uncensored-only), applied at
+    /// the quote level like the modality filter.
+    uncensored_filter: UncensoredFilter,
     /// Pareto chart toggle: drop models whose prices are only Surplus
     /// catalog/comparison list prices (no live-market ask).
     hide_catalog_prices: bool,
@@ -103,6 +107,7 @@ pub(crate) struct ParetoWatchApp {
     models_creator: Option<String>,
     models_source: models_tab::ModelsSource,
     models_modality: ModalityFilter,
+    models_uncensored: UncensoredFilter,
     models_cache: models_tab::ModelsCacheFilter,
     models_sort: models_tab::ModelsSort,
     models_sort_desc: bool,
@@ -239,6 +244,7 @@ impl ParetoWatchApp {
             common_scaffold: default_common_scaffold(),
             liquidity_filter: LiquidityFilter::Any,
             modality_filter: ModalityFilter::All,
+            uncensored_filter: UncensoredFilter::All,
             hide_catalog_prices: false,
             pareto_search: String::new(),
             selected_pareto_model: None,
@@ -248,6 +254,7 @@ impl ParetoWatchApp {
             models_creator: None,
             models_source: models_tab::ModelsSource::All,
             models_modality: ModalityFilter::All,
+            models_uncensored: UncensoredFilter::All,
             models_cache: models_tab::ModelsCacheFilter::Any,
             models_sort: models_tab::ModelsSort::Name,
             models_sort_desc: false,
@@ -625,6 +632,7 @@ impl ParetoWatchApp {
             common_scaffold: self.common_scaffold.clone(),
             liquidity_filter: self.liquidity_filter,
             modality_filter: self.modality_filter,
+            uncensored_filter: self.uncensored_filter,
             hide_catalog_prices: self.hide_catalog_prices,
             hidden_groups,
             input_weight: self.settings.input_weight,
@@ -653,6 +661,7 @@ impl ParetoWatchApp {
             .quotes
             .iter()
             .filter(|quote| self.modality_filter.allows(quote.vision))
+            .filter(|quote| self.uncensored_filter.allows(quote.uncensored))
             .filter(|quote| pricing_source_allows(self.hide_catalog_prices, quote))
             .filter_map(|quote| {
                 self.liquidity_filter

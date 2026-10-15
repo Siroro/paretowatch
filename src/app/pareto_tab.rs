@@ -19,7 +19,7 @@ use crate::theme::{
 };
 use crate::types::{
     ANY_MODEL, AlertMode, BenchmarkMetric, BenchmarkSource, ComparisonMode, CostBasis,
-    LiquidityFilter, ModalityFilter, PriceMetric, Quote, blended_price,
+    LiquidityFilter, ModalityFilter, PriceMetric, Quote, UncensoredFilter, blended_price,
 };
 use crate::worker::WorkerCommand;
 
@@ -252,8 +252,9 @@ impl ParetoWatchApp {
                 });
         });
 
-        // Chart controls: modality filter (e.g. vision-only), search highlight,
-        // and zoom/selection toggles — pinned above the scrolling chart body.
+        // Chart controls: modality and safety filters (e.g. vision-only,
+        // uncensored-only), search highlight, and zoom/selection toggles —
+        // pinned above the scrolling chart body.
         ui.add_space(4.0);
         let mut reset_zoom = chart_axes_changed;
         ui.horizontal_wrapped(|ui| {
@@ -268,6 +269,26 @@ impl ParetoWatchApp {
                     ] {
                         if ui
                             .selectable_value(&mut self.modality_filter, filter, filter.label())
+                            .changed()
+                        {
+                            chart_axes_changed = true;
+                            reset_zoom = true;
+                            self.selected_pareto_model = None;
+                        }
+                    }
+                });
+            ui.separator();
+            ui.label("Safety:");
+            egui::ComboBox::from_id_salt("uncensored_filter")
+                .selected_text(self.uncensored_filter.label())
+                .show_ui(ui, |ui| {
+                    for filter in [
+                        UncensoredFilter::All,
+                        UncensoredFilter::Uncensored,
+                        UncensoredFilter::SafetyTuned,
+                    ] {
+                        if ui
+                            .selectable_value(&mut self.uncensored_filter, filter, filter.label())
                             .changed()
                         {
                             chart_axes_changed = true;
@@ -455,6 +476,17 @@ impl ParetoWatchApp {
                         "'{}' filter is active — models without matching {} metadata are hidden.",
                         self.modality_filter.label(),
                         if self.modality_filter == ModalityFilter::Vision { "image-input" } else { "text-only" },
+                    ));
+                }
+                if self.uncensored_filter != UncensoredFilter::All {
+                    ui.small(format!(
+                        "'{}' filter is active — {} listings are hidden.",
+                        self.uncensored_filter.label(),
+                        if self.uncensored_filter == UncensoredFilter::Uncensored {
+                            "everything but uncensored"
+                        } else {
+                            "uncensored"
+                        },
                     ));
                 }
                 if self.hide_catalog_prices {
@@ -761,6 +793,9 @@ impl ParetoWatchApp {
             if self.modality_filter != ModalityFilter::All {
                 ui.small(self.modality_filter.label());
             }
+            if self.uncensored_filter != UncensoredFilter::All {
+                ui.small(self.uncensored_filter.label());
+            }
             ui.separator();
             ui.strong(format!("{} Pareto-efficient", frontier.len()));
             if search_active {
@@ -857,6 +892,13 @@ impl ParetoWatchApp {
                     ui.colored_label(egui::Color32::from_rgb(120, 200, 255), "vision");
                 } else {
                     ui.small("text-only");
+                }
+                if p.uncensored {
+                    ui.colored_label(egui::Color32::from_rgb(240, 170, 60), "uncensored")
+                        .on_hover_text(
+                            "Listing presents itself as uncensored — refusal behavior removed \
+                             (abliterated/uncensored finetune)",
+                        );
                 }
                 if p.live_market {
                     ui.strong("live market");
@@ -1274,6 +1316,9 @@ fn pareto_hover_label(p: &JoinedPoint, ctx: &HoverContext<'_>, score: f64) -> St
     }
     if p.vision {
         badges.push("vision".into());
+    }
+    if p.uncensored {
+        badges.push("uncensored".into());
     }
     if !badges.is_empty() {
         lines.push(badges.join(" · "));

@@ -89,10 +89,42 @@
 //! results (AutomationBench-AA 77.5, Terminal-Bench 4 at 57, AA-Briefcase
 //! 1494 Elo) live on boards the app fetches live, not in this snapshot.
 //!
-//! Deliberately unrated (no AA presence as of 2026-09-30): Aion 2.0/3.0/3.0
+//! The 2026-10-15 bump stayed on v4.3.2: the leader (Claude Opus 5.5, 58)
+//! and the scale are unchanged, so only the new-model rows were read fresh —
+//! plus Muse Spark 1.3, whose max-effort page the Wonder launch re-measured
+//! at 48 (the stored 45.2 v4.3 read had drifted well past rounding), so both
+//! of its rows moved with it. Claude Haiku 5.5 — listed 2026-10-07 with a
+//! half-price batch SKU — entered at 43 read at max effort, the same page
+//! configuration its Sonnet/Opus 5.5 siblings use: 26 points over the 4.5
+//! sibling (15.4), between GPT-5.6 Sol (47.1) and GPT-5.6 Terra (42.3), and
+//! above GPT-6 Luna (37). The batch SKU serves the same weights over the
+//! Batch API, so benchmark matching now strips the `batch` deployment token
+//! and the SKU joins the base row exactly, the same inheritance the speed
+//! wrappers use. Abliteration AI's Abliterated Large V2 (listed 2026-10-13)
+//! is GLM-5.3 with the refusal directions ablated out of the weights plus a
+//! post-ablation finetune; AA rates no page, but unlike derivative builds
+//! such as Ember-1 the base checkpoint is explicit, so the row ~proxies
+//! GLM-5.3's 44.9 — the snapshot's first uncensored-model row, and the app
+//! flags uncensored listings separately so they can be filtered without
+//! trusting a proxy as a measurement. Meta's Muse Wonder (listed 2026-10-14)
+//! is the API-available half of the Wonder launch and entered at 52 (#9 of
+//! 216, max effort), between Gemini 4 Argon (53) and GPT-6.1 Sol (52); its
+//! stronger Muse Wonder Full sibling (56, tying Sonnet 5.5) has no public
+//! API and no Surplus listing, so it gets no row. Mistral Large 4 — the
+//! trillion-parameter launch AA's tweet nicknamed "Le Chonk", listed
+//! 2026-10-15 with the Surplus price matrix still unpriced — is read off its
+//! Preview release (2026-10-06, the only version AA rates) at 38: twenty-eight
+//! over Mistral Large 3, and the strongest model on the index from outside
+//! the US and China. Gemini 4 Argon's general Surplus listing landed
+//! 2026-10-14 behind its existing row, and the new "Meta: Muse Spark 1.3"
+//! SKU joins the Spark row through the stripped `meta` creator prefix.
+//!
+//! Deliberately unrated (no AA presence as of 2026-10-15): Aion 2.0/3.0/3.0
 //! Mini, Hermes 3 405B, Palmyra Vision 7B, Qwen 2.5 7B, GPT-OSS Safeguard
 //! 20B/120B, Grok 4.20 Multi-Agent Beta, Venice rebrands, uncensored finetunes
-//! such as GLM 4.7 Flash Heretic, Seed 2.1 Turbo and Seed-2.0-Code, the
+//! such as GLM 4.7 Flash Heretic (Abliterated Large V2 above is the lone
+//! exception — its listing names the base checkpoint, so it proxies instead
+//! of sitting unrated), Seed 2.1 Turbo and Seed-2.0-Code, the
 //! 2026-09-11 Sakana
 //! listings (Fugu Max, Fugu Ultra v2), MiMo-V2.6-Flash (the Pro sibling is
 //! rated; AA has no Flash page yet), TypeSafe's JEV 1.13 decisions model, and
@@ -111,13 +143,39 @@
 use crate::fetch::score_benchmark;
 use crate::types::{Benchmark, BenchmarkKind};
 
-pub(crate) const ARTIFICIAL_ANALYSIS_SNAPSHOT_DATE: &str = "2026-09-30";
+pub(crate) const ARTIFICIAL_ANALYSIS_SNAPSHOT_DATE: &str = "2026-10-15";
 pub(crate) const ARTIFICIAL_ANALYSIS_SNAPSHOT_VERSION: &str = "v4.3.2";
 
 /// `(model name, AA Intelligence score)` pairs, one representative row per
 /// family. Names should mirror Surplus display names so exact-key joins hit
 /// before fuzzy matching has to.
 pub(crate) const SNAPSHOT_ROWS: &[(&str, f64)] = &[
+    // Added 2026-10-15 for the Surplus listings of 2026-10-07..10-15, read
+    // from the still-v4.3.2 index (leader and scale unchanged). Claude Haiku
+    // 5.5 entered at 43 read at max effort — the same page configuration its
+    // Sonnet/Opus 5.5 siblings use — putting the Haiku tier 26 points over
+    // the 4.5 sibling (15.4), between GPT-5.6 Sol and GPT-5.6 Terra and above
+    // GPT-6 Luna (37); its batch SKU is the same weights on the Batch API at
+    // half the interactive price, so it inherits through the stripped
+    // `batch` deployment token rather than a row of its own. Abliteration
+    // AI's Abliterated Large V2 is GLM-5.3 with the refusal directions
+    // ablated out plus a post-ablation finetune; AA rates no page, and
+    // because the listing names the base checkpoint (unlike derivative builds
+    // such as Ember-1) the row ~proxies GLM-5.3 — the app also flags the
+    // listing as uncensored so it can be filtered without reading the proxy
+    // as a measurement. Meta's Muse Wonder is the API-available half of the
+    // Wonder launch (the stronger Full sibling, 56, has no public API): 52 at
+    // max, #9 of 216. Mistral Large 4 — the trillion-parameter launch AA's
+    // tweet nicknamed "Le Chonk" — is read off its Preview release
+    // (2026-10-06, the only version rated): 38, twenty-eight over Mistral
+    // Large 3 and the strongest non-US/China model on the index; the Surplus
+    // price matrix is still unpriced, so the row lands ahead of purchasable
+    // asks. Gemini 4 Argon's general listing (2026-10-14) and the "Meta:
+    // Muse Spark 1.3" SKU join existing rows via creator-prefix stripping.
+    ("Claude Haiku 5.5", 43.0),
+    ("Abliterated Large V2", 44.9), // ~proxy: GLM-5.3 with refusal directions removed; AA rates no page
+    ("Muse Wonder", 52.0),
+    ("Mistral Large 4", 38.0), // Preview read: the only version AA rates
     // Added 2026-09-30 (second same-day bump), read from the still-v4.3.2
     // index: Gemini 4 Argon, Google DeepMind's first proprietary model above
     // the Flash class in over seven months. Read at high reasoning — the
@@ -193,8 +251,8 @@ pub(crate) const SNAPSHOT_ROWS: &[(&str, f64)] = &[
     ("Qwen3.8 Max", 45.4),
     ("Qwen3.8 2.4T A95B", 40.0),
     ("GPT-5.6 Terra", 42.3),
-    ("Muse Spark 1.3", 45.2),
-    ("Meta: Muse Spark 1.3 Contributor", 45.2), // ~proxy: xhigh sibling, AA rates no Contributor page
+    ("Muse Spark 1.3", 48.0), // re-read 2026-10-15: the Wonder launch re-measured max at 48 (was 45.2 v4.3)
+    ("Meta: Muse Spark 1.3 Contributor", 48.0), // ~proxy: Muse Spark 1.3 (max); AA rates no Contributor page
     ("Muse Spark 1.2", 39.8),
     ("DeepSeek V4.1 Flash", 39.5),
     ("Gemini 3.8 Flash", 41.2),
@@ -526,10 +584,12 @@ mod tests {
             ("MiMo-V2.5", 22.3),
             ("Muse Glimmer 30B", 18.1),
             ("NVIDIA Nemotron 3.5 Lightning 30B", 13.6),
-            ("Muse Spark 1.3", 45.2),
+            // Re-read 2026-10-15 (see the refresh test): the Wonder launch
+            // moved the max-effort page from the 45.2 v4.3 read to 48.
+            ("Muse Spark 1.3", 48.0),
             ("Gemini 3.8 Flash", 41.2),
             ("DeepSeek V4.1 Flash", 39.5),
-            ("Meta: Muse Spark 1.3 Contributor", 45.2),
+            ("Meta: Muse Spark 1.3 Contributor", 48.0),
         ] {
             assert_eq!(
                 score_of(name),
@@ -651,6 +711,74 @@ mod tests {
         assert!(
             score_of("Seed-2.0-Code").is_none(),
             "Seed-2.0-Code is unrated and must not have a row"
+        );
+    }
+
+    #[test]
+    fn aa_snapshot_covers_the_2026_10_15_refresh() {
+        // Rows added 2026-10-15 under the still-v4.3.2 index for the Surplus
+        // listings of 2026-10-07..10-15: Claude Haiku 5.5 (read at max, with
+        // the batch SKU inheriting through the stripped `batch` token),
+        // Abliterated Large V2 (~proxied onto GLM-5.3 because the listing
+        // names the base checkpoint even though AA rates no page), Muse
+        // Wonder (the API-available half of the Wonder launch), and Mistral
+        // Large 4 (read off the Preview release, the only version rated).
+        // Muse Spark 1.3 was re-measured at max for the Wonder launch, so its
+        // rows moved 45.2 -> 48 without collapsing onto Spark 1.2 (39.8).
+        let rows = artificial_analysis_snapshot();
+        let score_of = |name: &str| {
+            rows.iter()
+                .find(|b| benchmark_model_key(&b.slug) == benchmark_model_key(name))
+                .and_then(|b| b.agentic_coding)
+        };
+        for (name, expected) in [
+            ("Claude Haiku 5.5", 43.0),
+            ("Abliterated Large V2", 44.9),
+            ("Muse Wonder", 52.0),
+            ("Mistral Large 4", 38.0),
+            ("Muse Spark 1.3", 48.0),
+            ("Meta: Muse Spark 1.3 Contributor", 48.0),
+        ] {
+            assert_eq!(
+                score_of(name),
+                Some(expected),
+                "{name} missing or wrong in snapshot"
+            );
+        }
+        // The batch SKU inherits the base row via key equality, not a row.
+        assert_eq!(
+            benchmark_model_key("Claude Haiku 5.5 (batch)"),
+            benchmark_model_key("Claude Haiku 5.5")
+        );
+        // The abliterated build keeps its own key: the GLM-5.3 proxy is
+        // disclosed, but the SKU never joins the GLM row itself.
+        assert_ne!(
+            benchmark_model_key("Abliterated Large V2"),
+            benchmark_model_key("GLM-5.3")
+        );
+        assert_eq!(
+            score_of("GLM-5.3"),
+            Some(44.9),
+            "the proxy source row itself is unchanged"
+        );
+        // Family keys stay distinct where versions must not bleed.
+        assert_ne!(
+            benchmark_model_key("Mistral Large 4"),
+            benchmark_model_key("Mistral Large 3")
+        );
+        assert_ne!(
+            benchmark_model_key("Muse Wonder"),
+            benchmark_model_key("Muse Spark 1.3")
+        );
+        assert_ne!(
+            benchmark_model_key("Claude Haiku 5.5"),
+            benchmark_model_key("Claude 4.5 Haiku")
+        );
+        // Muse Wonder Full (56) has no public API and no Surplus listing, so
+        // it must not have a row.
+        assert!(
+            score_of("Muse Wonder Full").is_none(),
+            "Muse Wonder Full needs no row"
         );
     }
 

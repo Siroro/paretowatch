@@ -31,6 +31,7 @@ pub(crate) fn test_quote(model: &str, input: f64, live_market: bool) -> Quote {
         }],
         live_market,
         vision: false,
+        uncensored: false,
     }
 }
 
@@ -53,5 +54,6 @@ pub(crate) fn test_joined_point() -> JoinedPoint {
         live_market: true,
         free_offer_listed: false,
         vision: false,
+        uncensored: false,
     }
 }

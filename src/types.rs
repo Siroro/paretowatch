@@ -427,6 +427,56 @@ impl ModalityFilter {
     }
 }
 
+/// Safety-tuning filter, shared by the Pareto chart and the Models tab.
+/// Uncensored detection comes from the listing text (see
+/// [`is_uncensored_model`]); everything else counts as safety-tuned.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub(crate) enum UncensoredFilter {
+    #[default]
+    All,
+    Uncensored,
+    SafetyTuned,
+}
+
+impl UncensoredFilter {
+    pub(crate) fn label(self) -> &'static str {
+        match self {
+            Self::All => "All models",
+            Self::Uncensored => "Uncensored",
+            Self::SafetyTuned => "Safety-tuned",
+        }
+    }
+
+    pub(crate) fn allows(self, uncensored: bool) -> bool {
+        match self {
+            Self::All => true,
+            Self::Uncensored => uncensored,
+            Self::SafetyTuned => !uncensored,
+        }
+    }
+}
+
+/// True when a listing identifies itself as an uncensored deployment: refusal
+/// behavior removed from the weights (abliterated finetunes such as Abliterated
+/// Large V2 or GLM 4.7 Flash Heretic), self-declared uncensored builds, or
+/// creators whose whole catalogue is served without safety tuning (Venice AI,
+/// Abliteration AI, the Dolphin finetune family). Surplus publishes no policy
+/// metadata, so the catalog text is the only signal — matched as substrings
+/// over the id, display name, and creator, case-insensitively.
+pub(crate) fn is_uncensored_model(id: &str, name: &str, creator: &str) -> bool {
+    let haystack = format!("{id} {name} {creator}").to_lowercase();
+    [
+        "abliterated",
+        "abliteration",
+        "uncensored",
+        "heretic",
+        "dolphin",
+        "venice",
+    ]
+    .iter()
+    .any(|token| haystack.contains(token))
+}
+
 impl LiquidityFilter {
     pub(crate) fn label(self) -> &'static str {
         match self {
@@ -660,6 +710,11 @@ pub(crate) struct Quote {
     /// `/v1/models` architecture metadata. Only meaningful when the catalog
     /// feed supplied modality data; the comparison matrix never sets it.
     pub(crate) vision: bool,
+    /// Listing presents itself as uncensored (refusal behavior removed), per
+    /// [`is_uncensored_model`] over the catalog text. The feed publishes no
+    /// policy metadata, so this is name/creator detection, not a claim about
+    /// the weights' internals.
+    pub(crate) uncensored: bool,
 }
 
 impl Quote {
@@ -1086,5 +1141,56 @@ mod tests {
         assert!(!ModalityFilter::Vision.allows(false));
         assert!(!ModalityFilter::TextOnly.allows(true));
         assert!(ModalityFilter::TextOnly.allows(false));
+    }
+
+    #[test]
+    fn uncensored_filter_partitions_by_flag() {
+        assert!(UncensoredFilter::All.allows(true));
+        assert!(UncensoredFilter::All.allows(false));
+        assert!(UncensoredFilter::Uncensored.allows(true));
+        assert!(!UncensoredFilter::Uncensored.allows(false));
+        assert!(!UncensoredFilter::SafetyTuned.allows(true));
+        assert!(UncensoredFilter::SafetyTuned.allows(false));
+    }
+
+    #[test]
+    fn uncensored_detection_matches_listing_text_anywhere() {
+        // The 2026-10-13 Surplus listing: GLM 5.3 weights with refusal
+        // directions removed, id-prefixed with the creator.
+        assert!(is_uncensored_model(
+            "abliteration-abliterated-model-large-v2",
+            "Abliterated Large V2",
+            "Abliteration AI",
+        ));
+        // Known uncensored finetunes and Venice's uncensored rebrands.
+        assert!(is_uncensored_model(
+            "glm-4.7-flash-heretic",
+            "GLM 4.7 Flash Heretic",
+            "Z.AI"
+        ));
+        assert!(is_uncensored_model(
+            "dolphin-mistral-24b",
+            "Dolphin Mistral 24B",
+            ""
+        ));
+        assert!(is_uncensored_model(
+            "venice-llama-4",
+            "Llama 4 (Venice)",
+            "api.venice.ai"
+        ));
+        // Safety-tuned catalogue names must not trip the detector: no
+        // substring of these ids/names/creators matches a marker token.
+        for (id, name, creator) in [
+            ("mistral-large-4-0", "Mistral: Mistral Large 4", "Mistral"),
+            ("glm-5.3", "GLM-5.3", "Z.AI"),
+            ("claude-haiku-5.5", "Claude Haiku 5.5", "Anthropic"),
+            ("gpt-oss-safeguard-20b", "GPT-OSS Safeguard 20B", "OpenAI"),
+            ("meta-muse-wonder", "Meta: Muse Wonder", "Meta"),
+        ] {
+            assert!(
+                !is_uncensored_model(id, name, creator),
+                "{name} must not read as uncensored"
+            );
+        }
     }
 }

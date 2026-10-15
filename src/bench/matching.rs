@@ -232,6 +232,7 @@ pub(crate) fn is_model_modifier(token: &str) -> bool {
             | "highspeed"
             | "ultraspeed"
             | "prime"
+            | "batch"
             | "instruct"
             | "it"
     ) || (token.ends_with('k')
@@ -311,6 +312,13 @@ mod tests {
         assert_eq!(
             benchmark_model_key("glm-5.3-prime"),
             benchmark_model_key("GLM-5.3")
+        );
+        // Anthropic's Batch API SKUs (for example Claude Haiku 5.5 (batch),
+        // listed at half the interactive price) are execution modes of the
+        // same weights, so the batch token strips like the speed wrappers.
+        assert_eq!(
+            benchmark_model_key("Claude Haiku 5.5 (batch)"),
+            benchmark_model_key("Claude Haiku 5.5")
         );
     }
 

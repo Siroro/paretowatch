@@ -433,6 +433,7 @@ mod tests {
             market_options: Vec::new(),
             live_market: false,
             vision: false,
+            uncensored: false,
         }
     }
 

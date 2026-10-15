@@ -5,7 +5,7 @@
 use crate::bench::{best_benchmark_match, normalize};
 use crate::types::{
     Benchmark, BenchmarkMetric, BenchmarkSource, ComparisonMode, CostBasis, LiquidityFilter,
-    ModalityFilter, PriceMetric, Quote,
+    ModalityFilter, PriceMetric, Quote, UncensoredFilter,
 };
 
 #[derive(Debug, Clone)]
@@ -25,6 +25,7 @@ pub(crate) struct JoinedPoint {
     pub(crate) live_market: bool,
     pub(crate) free_offer_listed: bool,
     pub(crate) vision: bool,
+    pub(crate) uncensored: bool,
 }
 
 /// Inputs that fully determine the derived Pareto view. egui redraws on every
@@ -41,6 +42,9 @@ pub(crate) struct ParetoCacheKey {
     pub(crate) common_scaffold: String,
     pub(crate) liquidity_filter: LiquidityFilter,
     pub(crate) modality_filter: ModalityFilter,
+    /// Safety-tuning filter (e.g. uncensored-only), applied at the quote
+    /// level like the modality filter.
+    pub(crate) uncensored_filter: UncensoredFilter,
     /// Hide toggle for catalog/comparison-only prices: with it on, models
     /// without any live-market ask drop off the chart.
     pub(crate) hide_catalog_prices: bool,
@@ -152,6 +156,7 @@ pub(crate) fn joined_points(
                     live_market: q.live_market,
                     free_offer_listed: q.free_offer_listed,
                     vision: q.vision,
+                    uncensored: q.uncensored,
                 });
             }
         }
@@ -249,6 +254,7 @@ mod tests {
             live_market: true,
             free_offer_listed: false,
             vision: true,
+            uncensored: false,
         };
         assert!(pareto_search_matches("opus", &p));
         assert!(pareto_search_matches("CLAUDE OPUS", &p));

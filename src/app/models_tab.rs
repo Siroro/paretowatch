@@ -15,7 +15,8 @@ use crate::theme::{
     PRICE_DOWN, copyable_slug, creator_color, discount_color, free_offer_badge, group_label,
 };
 use crate::types::{
-    AlertMode, CostBasis, ModalityFilter, PriceMetric, Quote, blended_price, token_workload_cost,
+    AlertMode, CostBasis, ModalityFilter, PriceMetric, Quote, UncensoredFilter, blended_price,
+    token_workload_cost,
 };
 
 use super::{ParetoWatchApp, Tab};
@@ -235,6 +236,7 @@ impl ParetoWatchApp {
         let creator = self.models_creator.clone();
         let source = self.models_source;
         let modality = self.models_modality;
+        let safety = self.models_uncensored;
         let cache_filter = self.models_cache;
         let weights = (
             self.settings.input_weight,
@@ -246,6 +248,7 @@ impl ParetoWatchApp {
             .filter(|quote| models_search_matches(&query, quote))
             .filter(|quote| source.allows(quote))
             .filter(|quote| modality.allows(quote.vision))
+            .filter(|quote| safety.allows(quote.uncensored))
             .filter(|quote| cache_filter.allows(quote))
             .filter(|quote| {
                 creator
@@ -274,6 +277,7 @@ impl ParetoWatchApp {
                 self.models_creator = None;
                 self.models_source = ModelsSource::All;
                 self.models_modality = ModalityFilter::All;
+                self.models_uncensored = UncensoredFilter::All;
                 self.models_cache = ModelsCacheFilter::Any;
             }
         });
@@ -367,6 +371,19 @@ impl ParetoWatchApp {
                         ModalityFilter::TextOnly,
                     ] {
                         ui.selectable_value(&mut self.models_modality, filter, filter.label());
+                    }
+                });
+            ui.separator();
+            ui.label("Safety:");
+            egui::ComboBox::from_id_salt("models_uncensored")
+                .selected_text(self.models_uncensored.label())
+                .show_ui(ui, |ui| {
+                    for filter in [
+                        UncensoredFilter::All,
+                        UncensoredFilter::Uncensored,
+                        UncensoredFilter::SafetyTuned,
+                    ] {
+                        ui.selectable_value(&mut self.models_uncensored, filter, filter.label());
                     }
                 });
             ui.separator();
@@ -479,6 +496,16 @@ impl ParetoWatchApp {
                         .color(egui::Color32::from_rgb(120, 200, 255)),
                 )
                 .on_hover_text("Accepts image input (vision LLM)");
+            }
+            if quote.uncensored {
+                ui.label(
+                    egui::RichText::new("🔓")
+                        .size(11.0)
+                        .color(egui::Color32::from_rgb(240, 170, 60)),
+                )
+                .on_hover_text(
+                    "Uncensored — refusal behavior removed (abliterated/uncensored finetune)",
+                );
             }
         });
         ui.small(group_label(&quote.creator));

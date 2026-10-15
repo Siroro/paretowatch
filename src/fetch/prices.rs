@@ -86,6 +86,7 @@ pub(crate) fn fetch_prices(client: &Client, settings: &Settings) -> Result<Price
                 quote.display_name = catalog.display_name.clone();
                 quote.creator = catalog.creator.clone();
                 quote.vision = catalog.vision;
+                quote.uncensored = catalog.uncensored;
             }
         }
 
@@ -296,6 +297,7 @@ pub(crate) fn parse_price_matrix(value: &Value, settings: &Settings) -> Result<V
         }
 
         if let Some((provider, input, output, cache_read, _)) = best {
+            let uncensored = is_uncensored_model(&model_id, &display_name, &creator);
             quotes.push(Quote {
                 model: model_id,
                 display_name,
@@ -315,6 +317,7 @@ pub(crate) fn parse_price_matrix(value: &Value, settings: &Settings) -> Result<V
                 market_options: vec![],
                 live_market: false,
                 vision: false,
+                uncensored,
             });
         }
     }
@@ -356,6 +359,7 @@ pub(crate) fn parse_model_catalog(value: &Value) -> Result<Vec<Quote>> {
         .map(|v| v * 1_000_000.0);
         let creator = string_at(model, &["provider", "creator", "organization"])
             .unwrap_or_else(|| infer_creator(&id));
+        let uncensored = is_uncensored_model(&id, &name, &creator);
         out.push(Quote {
             model: id.clone(),
             display_name: name,
@@ -375,6 +379,7 @@ pub(crate) fn parse_model_catalog(value: &Value) -> Result<Vec<Quote>> {
             market_options: vec![],
             live_market: false,
             vision: catalog_supports_vision(model),
+            uncensored,
         });
     }
     Ok(out)
@@ -1142,5 +1147,25 @@ mod tests {
         assert!(by_id("vision-llm").vision);
         assert!(!by_id("text-llm").vision);
         assert!(by_id("modality-string-only").vision);
+    }
+
+    #[test]
+    fn catalog_uncensored_flag_follows_listing_text() {
+        let v = serde_json::json!({"data": [
+            {
+                "id":"abliteration-abliterated-model-large-v2",
+                "name":"Abliterated Large V2",
+                "provider":"Abliteration AI",
+                "pricing":{"prompt":"0.000003","completion":"0.000005"}
+            },
+            {
+                "id":"meta-muse-wonder", "name":"Meta: Muse Wonder", "provider":"Meta",
+                "pricing":{"prompt":"0.000001","completion":"0.000002"}
+            }
+        ]});
+        let rows = parse_model_catalog(&v).unwrap();
+        let by_id = |id: &str| rows.iter().find(|q| q.model == id).unwrap();
+        assert!(by_id("abliteration-abliterated-model-large-v2").uncensored);
+        assert!(!by_id("meta-muse-wonder").uncensored);
     }
 }
