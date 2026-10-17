@@ -1,3 +1,15 @@
+# ParetoWatch v0.18.1
+
+## Updates
+
+- AA Intelligence Index snapshot bumped from v4.3.2 (read 2026-10-15) to v4.3.2 (read 2026-10-17). The index revision, scale, and leader are unchanged — Claude Opus 5.5 still leads at 58 — so only the new-model rows were read fresh and `AA_CALIBRATION_POINTS` keeps its anchors.
+- New snapshot rows for the Surplus listings of 2026-10-15..10-17: **DeepSeek V4.1 Flash 1017** (40 — the 1017 dated refresh of the V4.1 Flash family, five weeks after the 0910 build the undated row reads; a point over the family's 39.5 v4.3 read and just under Gemini 3.8 Flash, keeping the family the value pick at its $0.15/$0.60 launch pricing. Like the V4 Flash 0731 build, the release tag stays in the key, so the undated family row keeps its own measurement) and **NVIDIA Nemotron 3.5 Super VL** (25 — the 3.5 generation's Super tier with native vision input, listed the evening of 2026-10-15 hours after that day's read; past the Nemotron 3 Ultra 550B's 23.4 as NVIDIA's strongest row on the index. `vl` names the model rather than a deployment wrapper so it survives key normalization, and the `nvidia` creator prefix strips so the "NVIDIA: " Surplus display name joins exactly).
+- **Mistral Large 4** priced its matrix at $0.0000 across the board — a 100%-off launch window for AA's "Le Chonk" — so the existing Preview-read row (38, added in v0.18.0 ahead of purchasable asks) finally carries live asks at literal zero. No code changed for it: the market parser already treats $0 token asks as real free offers (`free_offer_listed`) rather than dropping them, so the model simply anchors the cheap end of the frontier.
+
+## Validation
+
+Formatting, locked check, locked test (140 tests), Clippy with warnings denied, and the live-data smoke test all pass. The smoke run pins the composite leader — Claude Opus 5.5 at 99.3, unchanged — with all eight sources fetched (AA snapshot 161 rows, LiveBench 71, FrontierCode 46, Terminal-Bench 4 35) and both new rows joining below the printed top ten.
+
 # ParetoWatch v0.18.0
 
 ## Updates

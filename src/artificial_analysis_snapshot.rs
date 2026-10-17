@@ -119,7 +119,25 @@
 //! 2026-10-14 behind its existing row, and the new "Meta: Muse Spark 1.3"
 //! SKU joins the Spark row through the stripped `meta` creator prefix.
 //!
-//! Deliberately unrated (no AA presence as of 2026-10-15): Aion 2.0/3.0/3.0
+//! The 2026-10-17 bump stayed on v4.3.2: the leader (Claude Opus 5.5, 58)
+//! and the scale are unchanged, so only the new-model rows were read fresh.
+//! DeepSeek V4.1 Flash 1017 — the 1017 dated refresh of the V4.1 Flash
+//! family, five weeks after the 0910 build the undated row reads — entered
+//! at 40, a point over the family's 39.5 v4.3 read and just under Gemini
+//! 3.8 Flash (41.2), keeping the family the value pick at its $0.15/$0.60
+//! launch pricing. NVIDIA's Nemotron 3.5 Super VL — the 3.5 generation's
+//! Super tier with native vision input, listed the evening of 2026-10-15,
+//! hours after that day's read — entered at 25, past the Nemotron 3 Ultra
+//! 550B (23.4) as NVIDIA's strongest row on the index; `vl` names the model
+//! rather than a deployment wrapper, so it stays in the key, and the
+//! `nvidia` creator prefix strips so the "NVIDIA: " Surplus display name
+//! joins the row exactly. Mistral Large 4's listing priced its matrix at
+//! $0.0000 across the board — a 100%-off launch window for "Le Chonk" — so
+//! the existing Preview-read row (38) finally carries purchasable asks at
+//! literal zero; the market parser's free-offer handling already keeps $0
+//! asks real, so no code changed for it.
+//!
+//! Deliberately unrated (no AA presence as of 2026-10-17): Aion 2.0/3.0/3.0
 //! Mini, Hermes 3 405B, Palmyra Vision 7B, Qwen 2.5 7B, GPT-OSS Safeguard
 //! 20B/120B, Grok 4.20 Multi-Agent Beta, Venice rebrands, uncensored finetunes
 //! such as GLM 4.7 Flash Heretic (Abliterated Large V2 above is the lone
@@ -143,13 +161,28 @@
 use crate::fetch::score_benchmark;
 use crate::types::{Benchmark, BenchmarkKind};
 
-pub(crate) const ARTIFICIAL_ANALYSIS_SNAPSHOT_DATE: &str = "2026-10-15";
+pub(crate) const ARTIFICIAL_ANALYSIS_SNAPSHOT_DATE: &str = "2026-10-17";
 pub(crate) const ARTIFICIAL_ANALYSIS_SNAPSHOT_VERSION: &str = "v4.3.2";
 
 /// `(model name, AA Intelligence score)` pairs, one representative row per
 /// family. Names should mirror Surplus display names so exact-key joins hit
 /// before fuzzy matching has to.
 pub(crate) const SNAPSHOT_ROWS: &[(&str, f64)] = &[
+    // Added 2026-10-17 for the Surplus listings of 2026-10-15..10-17, read
+    // from the still-v4.3.2 index (leader and scale unchanged). DeepSeek V4.1
+    // Flash 1017 is the 1017 dated refresh of the V4.1 Flash family; like the
+    // 0731 build of V4 Flash it keeps its release tag in the key, so the
+    // undated family row (39.5, the 0910 build) stays separate. NVIDIA's
+    // Nemotron 3.5 Super VL is the 3.5 generation's Super tier with native
+    // vision input, listed the evening of 2026-10-15 — hours after that day's
+    // read — and enters past the Nemotron 3 Ultra 550B (23.4) as NVIDIA's
+    // strongest row on the index; `vl` is part of the model name, not a
+    // deployment token, and the `nvidia` creator prefix strips so the
+    // "NVIDIA: " Surplus display name joins exactly. Mistral Large 4's matrix
+    // priced at $0.0000 (100%-off launch window) and joins its existing
+    // Preview-read row above unchanged.
+    ("DeepSeek V4.1 Flash 1017", 40.0),
+    ("NVIDIA Nemotron 3.5 Super VL", 25.0),
     // Added 2026-10-15 for the Surplus listings of 2026-10-07..10-15, read
     // from the still-v4.3.2 index (leader and scale unchanged). Claude Haiku
     // 5.5 entered at 43 read at max effort — the same page configuration its
@@ -779,6 +812,62 @@ mod tests {
         assert!(
             score_of("Muse Wonder Full").is_none(),
             "Muse Wonder Full needs no row"
+        );
+    }
+
+    #[test]
+    fn aa_snapshot_covers_the_2026_10_17_refresh() {
+        // Rows added 2026-10-17 under the still-v4.3.2 index for the Surplus
+        // listings of 2026-10-15..10-17: DeepSeek V4.1 Flash 1017 (the dated
+        // refresh, a point over the undated family row's 39.5 v4.3 read) and
+        // NVIDIA's Nemotron 3.5 Super VL (the 3.5-gen Super tier, past the
+        // Nemotron 3 Ultra 550B as NVIDIA's strongest row). Mistral Large 4's
+        // listing priced its matrix at $0.0000 — a 100%-off launch window —
+        // and must join the existing Preview-read row unchanged rather than
+        // getting a row of its own.
+        let rows = artificial_analysis_snapshot();
+        let score_of = |name: &str| {
+            rows.iter()
+                .find(|b| benchmark_model_key(&b.slug) == benchmark_model_key(name))
+                .and_then(|b| b.agentic_coding)
+        };
+        // The Surplus display name carries the "NVIDIA: " creator prefix the
+        // key strips; assert through it so the exact join is what's covered.
+        for (name, expected) in [
+            ("DeepSeek V4.1 Flash 1017", 40.0),
+            ("NVIDIA: Nemotron 3.5 Super VL", 25.0),
+            ("Mistral Large 4", 38.0),
+            ("DeepSeek V4.1 Flash", 39.5),
+        ] {
+            assert_eq!(
+                score_of(name),
+                Some(expected),
+                "{name} missing or wrong in snapshot"
+            );
+        }
+        // The dated refresh keeps its release tag, so it never collapses onto
+        // the undated family row (or the previous generation's 0731 build).
+        assert_ne!(
+            benchmark_model_key("DeepSeek V4.1 Flash 1017"),
+            benchmark_model_key("DeepSeek V4.1 Flash"),
+            "the 1017 refresh must not collapse onto the undated family row"
+        );
+        assert_ne!(
+            benchmark_model_key("DeepSeek V4.1 Flash 1017"),
+            benchmark_model_key("DeepSeek V4 Flash 0731"),
+            "the 1017 refresh must not collapse onto the V4 generation"
+        );
+        // The Super tier stays distinct from both rated Nemotron siblings;
+        // `vl` names the model, so it survives key normalization.
+        assert_ne!(
+            benchmark_model_key("NVIDIA: Nemotron 3.5 Super VL"),
+            benchmark_model_key("NVIDIA Nemotron 3.5 Lightning 30B"),
+            "Super VL must not collapse onto the Lightning tier"
+        );
+        assert_ne!(
+            benchmark_model_key("NVIDIA: Nemotron 3.5 Super VL"),
+            benchmark_model_key("NVIDIA Nemotron 3 Super 120B"),
+            "the 3.5 generation must not collapse onto the 3 generation"
         );
     }
 
