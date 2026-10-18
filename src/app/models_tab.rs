@@ -15,8 +15,8 @@ use crate::theme::{
     PRICE_DOWN, copyable_slug, creator_color, discount_color, free_offer_badge, group_label,
 };
 use crate::types::{
-    AlertMode, CostBasis, ModalityFilter, PriceMetric, Quote, UncensoredFilter, blended_price,
-    token_workload_cost,
+    AlertMode, CostBasis, ModalityFilter, PriceMetric, Quote, UncensoredFilter,
+    assumed_cache_price, token_workload_cost,
 };
 
 use super::{ParetoWatchApp, Tab};
@@ -97,9 +97,12 @@ enum CacheRateSource {
     /// The headline provider publishes no cache ask, so the cheapest cache
     /// ask among the market's other providers is billed for that leg.
     MarketBest,
-    /// No provider in this market publishes a cache price; cached tokens
-    /// are billed at the fresh-input rate.
-    InputRate,
+    /// No market provider publishes a cache ask; the model's catalogue
+    /// list price is billed instead.
+    CatalogList,
+    /// Nothing published a cache rate; cached tokens are billed at the
+    /// configured assumed share of the fresh-input rate.
+    AssumedShare,
 }
 
 /// The per-1M token legs one calculator run bills for a quote.
@@ -114,26 +117,32 @@ struct CalcLegs {
 
 /// Resolve the calculator's price legs. `provider` names an entry of the
 /// quote's market options (None = the headline cheapest ask). A stale or
-/// unknown provider name falls back to the headline legs, and an explicit
-/// provider without its own cache ask bills cached tokens at its input rate
-/// instead of borrowing another provider's cache ask.
+/// unknown provider name falls back to the headline legs. The cache leg
+/// prefers published numbers — the provider's own ask, else (headline only)
+/// the market-wide best ask, else the model's catalogue list price — and
+/// only falls to the assumed input share when nothing is published. An
+/// explicit provider never borrows another provider's cache ask.
 fn resolve_calc_legs(quote: &Quote, provider: Option<&str>) -> CalcLegs {
+    let from_rate = |rate: Option<f64>| match rate {
+        Some(_) => CacheRateSource::ProviderAsk,
+        None => match quote.catalog_cache_read {
+            Some(_) => CacheRateSource::CatalogList,
+            None => CacheRateSource::AssumedShare,
+        },
+    };
     if let Some(option) = provider.and_then(|name| {
         quote
             .market_options
             .iter()
             .find(|option| option.provider == name)
     }) {
+        let cache_read = option.cache_read.or(quote.catalog_cache_read);
         return CalcLegs {
             provider: option.provider.clone(),
             input: option.input,
             output: option.output,
-            cache_read: option.cache_read,
-            cache_from: if option.cache_read.is_some() {
-                CacheRateSource::ProviderAsk
-            } else {
-                CacheRateSource::InputRate
-            },
+            cache_read,
+            cache_from: from_rate(option.cache_read),
         };
     }
     let market_best = quote
@@ -144,7 +153,13 @@ fn resolve_calc_legs(quote: &Quote, provider: Option<&str>) -> CalcLegs {
     let (cache_read, cache_from) = match quote.cache_read {
         Some(rate) => (Some(rate), CacheRateSource::ProviderAsk),
         None if market_best.is_finite() => (Some(market_best), CacheRateSource::MarketBest),
-        None => (None, CacheRateSource::InputRate),
+        None => (
+            quote.catalog_cache_read,
+            match quote.catalog_cache_read {
+                Some(_) => CacheRateSource::CatalogList,
+                None => CacheRateSource::AssumedShare,
+            },
+        ),
     };
     CalcLegs {
         provider: quote.provider.clone(),
@@ -242,6 +257,7 @@ impl ParetoWatchApp {
             self.settings.input_weight,
             self.settings.cache_read_weight,
             self.settings.output_weight,
+            self.settings.cache_read_fallback_pct,
         );
         let mut rows: Vec<ModelsRow<'_>> = quotes
             .iter()
@@ -257,13 +273,12 @@ impl ParetoWatchApp {
             })
             .map(|quote| ModelsRow {
                 quote,
-                blended: blended_price(
-                    quote.input,
-                    quote.cache_read,
-                    quote.output,
+                blended: quote.price(
+                    PriceMetric::Blended,
                     weights.0,
                     weights.1,
                     weights.2,
+                    weights.3,
                 ),
                 cache_read: quote.best_available_cache_read(),
             })
@@ -406,7 +421,7 @@ impl ParetoWatchApp {
         &mut self,
         ui: &mut egui::Ui,
         rows: &[ModelsRow<'_>],
-        weights: (f64, f64, f64),
+        weights: (f64, f64, f64, f64),
     ) {
         let mut sort_clicked: Option<ModelsSort> = None;
         {
@@ -467,7 +482,7 @@ impl ParetoWatchApp {
         &mut self,
         ui: &mut egui::Ui,
         row: &ModelsRow<'_>,
-        weights: (f64, f64, f64),
+        weights: (f64, f64, f64, f64),
     ) {
         let quote = row.quote;
         let is_selected = self.calc_model.as_deref() == Some(quote.model.as_str());
@@ -530,11 +545,10 @@ impl ParetoWatchApp {
             }
         }
         ui.label(format_price_tick(quote.output));
-        ui.label(format_price_tick(row.blended))
-            .on_hover_text(format!(
-                "Blended at your workload weights ({:.0}/{:.0}/{:.0} fresh/cache/output)",
-                weights.0, weights.1, weights.2,
-            ));
+        ui.label(format_price_tick(row.blended)).on_hover_text(format!(
+            "Blended at your workload weights ({:.0}/{:.0}/{:.0} fresh/cache/output). Cache rate falls back provider ask \u{2192} market best \u{2192} catalogue list \u{2192} assumed {:.0}% of input when nothing is published.",
+            weights.0, weights.1, weights.2, weights.3,
+        ));
         let provider_label = ui.small(if quote.live_market {
             quote.provider.clone()
         } else {
@@ -717,7 +731,14 @@ impl ParetoWatchApp {
                 "In {} · Cache {} · Out {} per 1M",
                 format_price_tick(legs.input),
                 legs.cache_read.map_or_else(
-                    || format!("{} (at input rate)", format_price_tick(legs.input)),
+                    || format!(
+                        "{} (assumed {:.0}% of input)",
+                        format_price_tick(assumed_cache_price(
+                            legs.input,
+                            self.settings.cache_read_fallback_pct
+                        )),
+                        self.settings.cache_read_fallback_pct
+                    ),
                     format_price_tick,
                 ),
                 format_price_tick(legs.output),
@@ -728,8 +749,16 @@ impl ParetoWatchApp {
             CacheRateSource::MarketBest => {
                 ui.small("Cache rate is the market-wide best ask — the selected provider publishes none.");
             }
-            CacheRateSource::InputRate => {
-                ui.small("No cache price published — cached tokens are billed at the input rate.");
+            CacheRateSource::CatalogList => {
+                ui.small(
+                    "No market cache ask — billing the model's published catalogue cache rate.",
+                );
+            }
+            CacheRateSource::AssumedShare => {
+                ui.small(format!(
+                    "No cache price published anywhere — cached tokens billed at an assumed {:.0}% of the input rate (adjust in Settings).",
+                    self.settings.cache_read_fallback_pct
+                ));
             }
         }
 
@@ -794,6 +823,7 @@ impl ParetoWatchApp {
             legs.input,
             legs.cache_read,
             legs.output,
+            self.settings.cache_read_fallback_pct,
         );
         ui.add_space(4.0);
         egui::Grid::new("calc_cost").num_columns(2).show(ui, |ui| {
@@ -866,13 +896,12 @@ impl ParetoWatchApp {
                     self.alert_mode = AlertMode::Threshold;
                     self.alert_metric = PriceMetric::Blended;
                     self.alert_cost_basis = CostBasis::PerMillion;
-                    self.alert_threshold = blended_price(
-                        quote.input,
-                        quote.cache_read,
-                        quote.output,
+                    self.alert_threshold = quote.price(
+                        PriceMetric::Blended,
                         self.settings.input_weight,
                         self.settings.cache_read_weight,
                         self.settings.output_weight,
+                        self.settings.cache_read_fallback_pct,
                     );
                     self.tab = Tab::Alerts;
                 }
@@ -1001,10 +1030,17 @@ mod tests {
         assert_eq!(legs.cache_from, CacheRateSource::MarketBest);
         assert!((legs.cache_read.unwrap() - 0.02).abs() < 1e-12);
 
-        // Nobody publishes one: cached tokens fall back to the input rate.
+        // No market asks at all: the model's published catalogue rate.
         q.market_options.clear();
         let legs = resolve_calc_legs(&q, None);
-        assert_eq!(legs.cache_from, CacheRateSource::InputRate);
+        assert_eq!(legs.cache_from, CacheRateSource::CatalogList);
+        assert!((legs.cache_read.unwrap() - 0.1).abs() < 1e-12);
+
+        // Nothing published anywhere: the assumed input share (billed by
+        // the settings share, the legs carry no rate).
+        q.catalog_cache_read = None;
+        let legs = resolve_calc_legs(&q, None);
+        assert_eq!(legs.cache_from, CacheRateSource::AssumedShare);
         assert_eq!(legs.cache_read, None);
     }
 
@@ -1034,10 +1070,17 @@ mod tests {
         let legs = resolve_calc_legs(&q, Some("dearer"));
         assert_eq!(legs.provider, "dearer");
         assert!((legs.input - 3.0).abs() < 1e-12);
-        // An explicit provider without its own cache ask is billed at its
-        // input rate, never another provider's cache ask.
+        // An explicit provider without its own cache ask falls to the
+        // model's published catalogue rate, never another provider's ask.
+        assert!((legs.cache_read.unwrap() - 0.1).abs() < 1e-12);
+        assert_eq!(legs.cache_from, CacheRateSource::CatalogList);
+
+        // With nothing published at all, the legs carry no rate and the
+        // cost math bills the assumed input share.
+        q.catalog_cache_read = None;
+        let legs = resolve_calc_legs(&q, Some("dearer"));
         assert_eq!(legs.cache_read, None);
-        assert_eq!(legs.cache_from, CacheRateSource::InputRate);
+        assert_eq!(legs.cache_from, CacheRateSource::AssumedShare);
 
         // Unknown provider names fall back to the headline legs.
         let legs = resolve_calc_legs(&q, Some("vanished"));

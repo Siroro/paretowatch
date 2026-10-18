@@ -87,6 +87,10 @@ pub(crate) fn fetch_prices(client: &Client, settings: &Settings) -> Result<Price
                 quote.creator = catalog.creator.clone();
                 quote.vision = catalog.vision;
                 quote.uncensored = catalog.uncensored;
+                // Keep the catalogue's published cache list price even for
+                // models whose cheapest market provider publishes no cache
+                // ask; blended pricing falls back to it.
+                quote.catalog_cache_read = catalog.cache_read.or(quote.catalog_cache_read);
             }
         }
 
@@ -140,10 +144,11 @@ pub(crate) fn fetch_prices(client: &Client, settings: &Settings) -> Result<Price
                     let q = &mut quotes[index];
                     // Catalogue list prices for the cache-inclusive
                     // discount; the overlay below replaces them with live
-                    // market asks.
+                    // market asks. `catalog_cache_read` survives the
+                    // overlay as the published fallback.
                     let catalog_input = q.input;
                     let catalog_output = q.output;
-                    let catalog_cache_read = q.cache_read;
+                    let catalog_cache_read = q.catalog_cache_read;
                     q.input = market.input;
                     q.output = market.output;
                     q.cache_read = market.cache_read;
@@ -217,6 +222,7 @@ fn market_discount_pct(
             settings.cache_read_weight,
             settings.output_weight,
         ),
+        settings.cache_read_fallback_pct,
     )
     .or(market.discount_pct)
 }
@@ -254,6 +260,7 @@ pub(crate) fn parse_price_matrix(value: &Value, settings: &Settings) -> Result<V
                     settings.input_weight,
                     settings.cache_read_weight,
                     settings.output_weight,
+                    settings.cache_read_fallback_pct,
                 );
                 if best
                     .as_ref()
@@ -278,6 +285,7 @@ pub(crate) fn parse_price_matrix(value: &Value, settings: &Settings) -> Result<V
                 settings.input_weight,
                 settings.cache_read_weight,
                 settings.output_weight,
+                settings.cache_read_fallback_pct,
             );
             best = Some((provider, input, output, cache_read, weighted));
         }
@@ -292,6 +300,7 @@ pub(crate) fn parse_price_matrix(value: &Value, settings: &Settings) -> Result<V
                 settings.input_weight,
                 settings.cache_read_weight,
                 settings.output_weight,
+                settings.cache_read_fallback_pct,
             );
             best = Some(("comparison".into(), input, output, cache_read, weighted));
         }
@@ -306,6 +315,7 @@ pub(crate) fn parse_price_matrix(value: &Value, settings: &Settings) -> Result<V
                 input,
                 output,
                 cache_read,
+                catalog_cache_read: cache_read,
                 seller_count: None,
                 healthy_seller_count: None,
                 provider_trusted: None,
@@ -368,6 +378,7 @@ pub(crate) fn parse_model_catalog(value: &Value) -> Result<Vec<Quote>> {
             input: prompt * 1_000_000.0,
             output: completion * 1_000_000.0,
             cache_read,
+            catalog_cache_read: cache_read,
             seller_count: None,
             healthy_seller_count: None,
             provider_trusted: None,
@@ -700,11 +711,13 @@ pub(crate) fn parse_market_overlay(root: &Value, settings: &Settings) -> Vec<Mar
                 settings.input_weight,
                 settings.cache_read_weight,
                 settings.output_weight,
+                settings.cache_read_fallback_pct,
             )
             .total_cmp(&b.workload_price(
                 settings.input_weight,
                 settings.cache_read_weight,
                 settings.output_weight,
+                settings.cache_read_fallback_pct,
             ))
         };
         let priced_options = provider_options
@@ -1080,7 +1093,9 @@ mod tests {
                 healthy_seller_count: Some(5),
             },
         ];
-        let selected = LiquidityFilter::Trusted.apply(&q, 15.0, 80.0, 5.0).unwrap();
+        let selected = LiquidityFilter::Trusted
+            .apply(&q, 15.0, 80.0, 5.0, 10.0)
+            .unwrap();
         assert_eq!(selected.provider, "trusted-provider");
         assert_eq!(selected.provider_trusted, Some(true));
         assert!((selected.input - 0.6).abs() < 1e-12);

@@ -380,6 +380,7 @@ fn windowed_metric_series(
                 settings.input_weight,
                 settings.cache_read_weight,
                 settings.output_weight,
+                settings.cache_read_fallback_pct,
             );
             &derived
         }

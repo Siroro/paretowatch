@@ -123,6 +123,32 @@ impl ParetoWatchApp {
         {
             self.settings_dirty = true;
         }
+        ui.horizontal(|ui| {
+            ui.label("Assumed cache-read price (unpublished)");
+            if ui
+                .add(
+                    egui::DragValue::new(&mut self.settings.cache_read_fallback_pct)
+                        .speed(1.0)
+                        .range(0.0..=100.0)
+                        .suffix("%"),
+                )
+                .on_hover_text(
+                    "Share of the fresh-input price billed for cache reads when a model \
+                     publishes no cache rate anywhere. Blended pricing always prefers \
+                     published numbers first: the provider's own ask, then the market-wide \
+                     best ask, then the model's catalogue list price.",
+                )
+                .changed()
+            {
+                self.settings_dirty = true;
+            }
+            ui.label("of input");
+        });
+        ui.small(
+            "Roughly half the catalogue publishes no cache price. Observed direct-cost \
+             billing puts real cache reads at 5–25% of the input price, so 10% is the \
+             default; set 100 to reproduce the old bill-at-input behavior.",
+        );
 
         ui.add_space(10.0);
         ui.heading("Alert delivery");

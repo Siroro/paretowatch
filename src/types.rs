@@ -493,6 +493,7 @@ impl LiquidityFilter {
         input_weight: f64,
         cache_read_weight: f64,
         output_weight: f64,
+        cache_fallback_pct: f64,
     ) -> Option<Quote> {
         if self == Self::Any {
             return Some(quote.clone());
@@ -513,8 +514,18 @@ impl LiquidityFilter {
             Self::Healthy10 => option.healthy_seller_count.unwrap_or(0) >= 10,
         };
         let by_workload = |a: &&ProviderMarketQuote, b: &&ProviderMarketQuote| {
-            a.workload_price(input_weight, cache_read_weight, output_weight)
-                .total_cmp(&b.workload_price(input_weight, cache_read_weight, output_weight))
+            a.workload_price(
+                input_weight,
+                cache_read_weight,
+                output_weight,
+                cache_fallback_pct,
+            )
+            .total_cmp(&b.workload_price(
+                input_weight,
+                cache_read_weight,
+                output_weight,
+                cache_fallback_pct,
+            ))
         };
         let qualifying: Vec<&ProviderMarketQuote> = quote
             .market_options
@@ -619,6 +630,13 @@ pub(crate) struct Settings {
     /// cache-read pricing comes from the catalogue; the market feed
     /// publishes no direct cache price.
     pub(crate) include_cache_read_in_discount: bool,
+    /// Assumed cache-read price, as a percentage of the fresh-input price,
+    /// for models where nothing published a cache rate at all — no provider
+    /// ask in the market and no catalogue list price (roughly half the
+    /// catalogue). Published rates are always preferred; observed direct-
+    /// cost billing clusters at 5–25% of input (10% is the classic
+    /// Anthropic/DeepSeek/GLM-style rate), so 10 is the default.
+    pub(crate) cache_read_fallback_pct: f64,
     pub(crate) alerts: Vec<AlertRule>,
     /// Base text size for the floating Pinned Prices window; every size in
     /// that window scales from it (10 is the original hard-coded look).
@@ -640,6 +658,7 @@ impl Default for Settings {
             cache_read_weight: 80.0,
             output_weight: 5.0,
             include_cache_read_in_discount: false,
+            cache_read_fallback_pct: 10.0,
             alerts: vec![],
             pinned_price_font_size: 10.0,
             quiet_hours_enabled: false,
@@ -665,6 +684,7 @@ impl ProviderMarketQuote {
         input_weight: f64,
         cache_read_weight: f64,
         output_weight: f64,
+        cache_fallback_pct: f64,
     ) -> f64 {
         blended_price(
             self.input,
@@ -673,6 +693,7 @@ impl ProviderMarketQuote {
             input_weight,
             cache_read_weight,
             output_weight,
+            cache_fallback_pct,
         )
     }
 }
@@ -693,6 +714,12 @@ pub(crate) struct Quote {
     pub(crate) input: f64,
     pub(crate) output: f64,
     pub(crate) cache_read: Option<f64>,
+    /// Cache-read list price published for this model by the catalogue or
+    /// comparison matrix. Unlike `cache_read`, the market overlay never
+    /// overwrites it, so it survives as the published fallback when no
+    /// market provider publishes a cache ask. Observed direct-cost billing
+    /// tracks these published rates closely.
+    pub(crate) catalog_cache_read: Option<f64>,
     pub(crate) seller_count: Option<u64>,
     pub(crate) healthy_seller_count: Option<u64>,
     pub(crate) provider_trusted: Option<bool>,
@@ -734,23 +761,40 @@ impl Quote {
         best.is_finite().then_some(best)
     }
 
+    /// The cache-read rate blended pricing should bill: published numbers
+    /// first — the selected provider's ask, else the market-wide best ask,
+    /// else the model's catalogue list price — and only when nothing is
+    /// published an assumed share of the fresh-input price. Always resolves
+    /// to a rate (`Some`), matching how prompt caching is billed in
+    /// practice: direct-cost usage data shows real cache reads land near
+    /// the published rates, never at the full input price.
+    pub(crate) fn effective_cache_read(&self, cache_fallback_pct: f64) -> Option<f64> {
+        Some(
+            self.best_available_cache_read()
+                .or(self.catalog_cache_read)
+                .unwrap_or_else(|| assumed_cache_price(self.input, cache_fallback_pct)),
+        )
+    }
+
     pub(crate) fn price(
         &self,
         metric: PriceMetric,
         input_weight: f64,
         cache_read_weight: f64,
         output_weight: f64,
+        cache_fallback_pct: f64,
     ) -> f64 {
         match metric {
             PriceMetric::Input => self.input,
             PriceMetric::Output => self.output,
             PriceMetric::Blended => blended_price(
                 self.input,
-                self.cache_read,
+                self.effective_cache_read(cache_fallback_pct),
                 self.output,
                 input_weight,
                 cache_read_weight,
                 output_weight,
+                cache_fallback_pct,
             ),
         }
     }
@@ -763,6 +807,7 @@ pub(crate) fn blended_price(
     input_weight: f64,
     cache_read_weight: f64,
     output_weight: f64,
+    cache_fallback_pct: f64,
 ) -> f64 {
     let input_weight = input_weight.max(0.0);
     let cache_read_weight = cache_read_weight.max(0.0);
@@ -771,14 +816,22 @@ pub(crate) fn blended_price(
     if total_weight <= f64::EPSILON {
         return (input + output) / 2.0;
     }
-    let cache_price = cache_read.unwrap_or(input);
+    let cache_price = cache_read.unwrap_or_else(|| assumed_cache_price(input, cache_fallback_pct));
     (input * input_weight + cache_price * cache_read_weight + output * output_weight) / total_weight
+}
+
+/// Cache-read rate assumed when nobody publishes one: the fresh-input price
+/// scaled by `cache_fallback_pct` percent. See
+/// [`Settings::cache_read_fallback_pct`] for why the default is 10.
+pub(crate) fn assumed_cache_price(input_price: f64, cache_fallback_pct: f64) -> f64 {
+    (input_price.max(0.0) * cache_fallback_pct.max(0.0)) / 100.0
 }
 
 /// Dollar cost of an explicit token workload against one model's per-1M
 /// rates. The cache-read leg is billed at the cache rate when one is known
-/// and at the fresh-input rate otherwise — the same fallback
-/// [`blended_price`] applies, so a cache-less model is never billed as free.
+/// and at the assumed percentage of the fresh-input rate otherwise — the
+/// same fallback [`blended_price`] applies, so a cache-less model is never
+/// billed as free.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub(crate) struct WorkloadCost {
     /// Fresh (uncached) input-token cost in dollars.
@@ -815,6 +868,7 @@ pub(crate) fn token_workload_cost(
     input_price: f64,
     cache_read_price: Option<f64>,
     output_price: f64,
+    cache_fallback_pct: f64,
 ) -> WorkloadCost {
     let input_tokens_m = input_tokens_m.max(0.0);
     let cache_read_tokens_m = cache_read_tokens_m.max(0.0);
@@ -822,11 +876,13 @@ pub(crate) fn token_workload_cost(
     let input = input_tokens_m * input_price.max(0.0);
     let output = output_tokens_m * output_price.max(0.0);
     let billed_cache_rate = cache_read_price.filter(|rate| *rate >= 0.0);
+    let input_price = input_price.max(0.0);
     WorkloadCost {
         input,
-        cache_read: cache_read_tokens_m * billed_cache_rate.unwrap_or(input_price.max(0.0)),
+        cache_read: cache_read_tokens_m
+            * billed_cache_rate.unwrap_or(assumed_cache_price(input_price, cache_fallback_pct)),
         output,
-        cache_read_at_input_rate: cache_read_tokens_m * input_price.max(0.0),
+        cache_read_at_input_rate: cache_read_tokens_m * input_price,
     }
 }
 
@@ -837,6 +893,7 @@ pub(crate) fn workload_discount_pct(
     market: (f64, Option<f64>, f64),
     list: (f64, Option<f64>, f64),
     weights: (f64, f64, f64),
+    cache_fallback_pct: f64,
 ) -> Option<f64> {
     let (market_input, market_cache_read, market_output) = market;
     let (list_input, list_cache_read, list_output) = list;
@@ -848,6 +905,7 @@ pub(crate) fn workload_discount_pct(
         input_weight,
         cache_read_weight,
         output_weight,
+        cache_fallback_pct,
     );
     if list_blended.partial_cmp(&f64::EPSILON) != Some(std::cmp::Ordering::Greater) {
         return None;
@@ -859,6 +917,7 @@ pub(crate) fn workload_discount_pct(
         input_weight,
         cache_read_weight,
         output_weight,
+        cache_fallback_pct,
     );
     let discount = (1.0 - market_blended / list_blended) * 100.0;
     discount.is_finite().then_some(discount)
@@ -926,16 +985,30 @@ mod tests {
 
     #[test]
     fn blended_price_is_normalized_and_cache_aware() {
-        let price = blended_price(2.0, Some(0.2), 10.0, 15.0, 80.0, 5.0);
+        let price = blended_price(2.0, Some(0.2), 10.0, 15.0, 80.0, 5.0, 100.0);
         assert!((price - 0.96).abs() < 1e-12);
-        let fallback = blended_price(2.0, None, 10.0, 15.0, 80.0, 5.0);
+        let fallback = blended_price(2.0, None, 10.0, 15.0, 80.0, 5.0, 100.0);
         assert!((fallback - 2.4).abs() < 1e-12);
+    }
+
+    #[test]
+    fn blended_price_assumes_unpublished_cache_at_configured_input_share() {
+        // 10% of the $2 input = $0.20 assumed cache rate, matching a
+        // published $0.20 ask exactly.
+        let assumed = blended_price(2.0, None, 10.0, 15.0, 80.0, 5.0, 10.0);
+        assert!((assumed - 0.96).abs() < 1e-12);
+        // 100% reproduces the old bill-cache-at-input behavior.
+        let at_input = blended_price(2.0, None, 10.0, 15.0, 80.0, 5.0, 100.0);
+        assert!((at_input - 2.4).abs() < 1e-12);
+        // A published ask always wins over the assumption.
+        let published = blended_price(2.0, Some(0.9), 10.0, 15.0, 80.0, 5.0, 10.0);
+        assert!(published > assumed);
     }
 
     #[test]
     fn token_workload_cost_bills_each_leg_and_clamps() {
         // 2M fresh input at $1.50, 8M cache reads at $0.15, 0.5M output at $8.
-        let cost = token_workload_cost(2.0, 8.0, 0.5, 1.5, Some(0.15), 8.0);
+        let cost = token_workload_cost(2.0, 8.0, 0.5, 1.5, Some(0.15), 8.0, 100.0);
         assert!((cost.input - 3.0).abs() < 1e-12);
         assert!((cost.cache_read - 1.2).abs() < 1e-12);
         assert!((cost.output - 4.0).abs() < 1e-12);
@@ -947,18 +1020,28 @@ mod tests {
 
     #[test]
     fn token_workload_cost_without_cache_price_bills_at_input_rate() {
-        let cost = token_workload_cost(1.0, 4.0, 1.0, 2.0, None, 6.0);
+        let cost = token_workload_cost(1.0, 4.0, 1.0, 2.0, None, 6.0, 100.0);
         assert!((cost.cache_read - 8.0).abs() < 1e-12);
         assert!((cost.cache_read_at_input_rate - 8.0).abs() < 1e-12);
         assert!((cost.cache_savings() - 0.0).abs() < 1e-12);
         // Negative token counts and rates clamp instead of crediting money.
-        let clamped = token_workload_cost(-5.0, -5.0, -5.0, -2.0, Some(-1.0), -6.0);
+        let clamped = token_workload_cost(-5.0, -5.0, -5.0, -2.0, Some(-1.0), -6.0, 10.0);
         assert!((clamped.total() - 0.0).abs() < 1e-12);
     }
 
     #[test]
+    fn token_workload_cost_without_cache_price_bills_at_assumed_share() {
+        // No published cache rate: 4M cached tokens at 10% of the $2 input =
+        // $0.80 instead of $8, so caching is credited with saving $7.20.
+        let cost = token_workload_cost(1.0, 4.0, 1.0, 2.0, None, 6.0, 10.0);
+        assert!((cost.cache_read - 0.8).abs() < 1e-12);
+        assert!((cost.cache_read_at_input_rate - 8.0).abs() < 1e-12);
+        assert!((cost.cache_savings() - 7.2).abs() < 1e-12);
+    }
+
+    #[test]
     fn token_workload_cost_cache_dearer_than_input_has_no_savings() {
-        let cost = token_workload_cost(0.0, 1.0, 0.0, 1.0, Some(2.5), 1.0);
+        let cost = token_workload_cost(0.0, 1.0, 0.0, 1.0, Some(2.5), 1.0, 100.0);
         assert!((cost.cache_read - 2.5).abs() < 1e-12);
         assert!((cost.cache_savings() - 0.0).abs() < 1e-12);
     }
@@ -1004,12 +1087,49 @@ mod tests {
     }
 
     #[test]
+    fn effective_cache_read_prefers_published_then_assumes() {
+        let mut q = test_quote("glm-5.3", 2.0, true);
+        q.cache_read = Some(0.30);
+        q.catalog_cache_read = Some(0.20);
+        // The selected provider's own ask always wins.
+        assert!((q.effective_cache_read(10.0).unwrap() - 0.30).abs() < 1e-12);
+
+        // No provider ask: the market-wide best ask (cheapest published
+        // option) beats the catalogue price.
+        q.cache_read = None;
+        q.market_options = vec![ProviderMarketQuote {
+            provider: "dear".into(),
+            input: 1.0,
+            output: 4.0,
+            cache_read: Some(0.25),
+            trusted: Some(true),
+            healthy_seller_count: Some(3),
+        }];
+        assert!((q.effective_cache_read(10.0).unwrap() - 0.25).abs() < 1e-12);
+
+        // No market asks at all: the published catalogue rate is the default.
+        q.market_options.clear();
+        assert!((q.effective_cache_read(10.0).unwrap() - 0.20).abs() < 1e-12);
+
+        // Nothing published: assumed share of the $2 input.
+        q.catalog_cache_read = None;
+        assert!((q.effective_cache_read(10.0).unwrap() - 0.20).abs() < 1e-12);
+        assert!((q.effective_cache_read(25.0).unwrap() - 0.50).abs() < 1e-12);
+
+        // And blended pricing bills that resolved rate, not the input price.
+        let blended = q.price(PriceMetric::Blended, 15.0, 80.0, 5.0, 10.0);
+        let expected = (2.0 * 15.0 + 0.20 * 80.0 + 4.0 * 5.0) / 100.0;
+        assert!((blended - expected).abs() < 1e-12);
+    }
+
+    #[test]
     fn workload_discount_includes_cache_read_leg() {
         // Same 50% cut on every leg must give 50% regardless of weights.
         let pct = workload_discount_pct(
             (1.0, Some(0.1), 5.0),
             (2.0, Some(0.2), 10.0),
             (15.0, 80.0, 5.0),
+            10.0,
         )
         .unwrap();
         assert!((pct - 50.0).abs() < 1e-9);
@@ -1020,12 +1140,14 @@ mod tests {
             (2.0, Some(0.02), 10.0),
             (2.0, Some(0.2), 10.0),
             (15.0, 80.0, 5.0),
+            10.0,
         )
         .unwrap();
         let no_cache = workload_discount_pct(
             (2.0, Some(0.02), 10.0),
             (2.0, Some(0.2), 10.0),
             (50.0, 0.0, 50.0),
+            10.0,
         )
         .unwrap();
         assert!(cache_heavy > 10.0);
@@ -1033,17 +1155,30 @@ mod tests {
     }
 
     #[test]
-    fn workload_discount_missing_cache_falls_back_to_input() {
-        // No cache price on either side: both fall back to their input
-        // prices, and an all-legs-50% market still yields exactly 50%.
-        let pct =
-            workload_discount_pct((1.0, None, 5.0), (2.0, None, 10.0), (15.0, 80.0, 5.0)).unwrap();
-        assert!((pct - 50.0).abs() < 1e-9);
+    fn workload_discount_missing_cache_falls_back_to_assumed_share() {
+        // No cache price on either side: both fall back to the same assumed
+        // share of their input prices, and an all-legs-50% market still
+        // yields exactly 50% whatever the share.
+        for share in [0.0, 10.0, 100.0] {
+            let pct = workload_discount_pct(
+                (1.0, None, 5.0),
+                (2.0, None, 10.0),
+                (15.0, 80.0, 5.0),
+                share,
+            )
+            .unwrap();
+            assert!((pct - 50.0).abs() < 1e-9);
+        }
         // Market side lacking a cache price while the catalogue has one
-        // borrows the market input price for that leg.
-        let pct =
-            workload_discount_pct((1.0, None, 10.0), (2.0, Some(0.2), 10.0), (0.0, 100.0, 0.0))
-                .unwrap();
+        // bills that leg at the assumed share of the market input price
+        // (share 100 = the old bill-at-input behavior).
+        let pct = workload_discount_pct(
+            (1.0, None, 10.0),
+            (2.0, Some(0.2), 10.0),
+            (0.0, 100.0, 0.0),
+            100.0,
+        )
+        .unwrap();
         assert!((pct - (1.0 - 1.0 / 0.2) * 100.0).abs() < 1e-9);
     }
 
@@ -1054,6 +1189,7 @@ mod tests {
                 (1.0, Some(0.1), 5.0),
                 (0.0, Some(0.0), 0.0),
                 (15.0, 80.0, 5.0),
+                10.0,
             )
             .is_none()
         );
@@ -1064,23 +1200,23 @@ mod tests {
         let q = test_quote("model-a", 1.0, true);
         assert!(
             LiquidityFilter::Trusted
-                .apply(&q, 15.0, 80.0, 5.0)
+                .apply(&q, 15.0, 80.0, 5.0, 10.0)
                 .is_some()
         );
         assert!(
             LiquidityFilter::Healthy3
-                .apply(&q, 15.0, 80.0, 5.0)
+                .apply(&q, 15.0, 80.0, 5.0, 10.0)
                 .is_some()
         );
         assert!(
             LiquidityFilter::Healthy10
-                .apply(&q, 15.0, 80.0, 5.0)
+                .apply(&q, 15.0, 80.0, 5.0, 10.0)
                 .is_none()
         );
         let fallback = test_quote("model-a", 1.0, false);
         assert!(
             LiquidityFilter::Trusted
-                .apply(&fallback, 15.0, 80.0, 5.0)
+                .apply(&fallback, 15.0, 80.0, 5.0, 10.0)
                 .is_none()
         );
     }
@@ -1107,7 +1243,7 @@ mod tests {
             },
         ];
         for filter in [LiquidityFilter::Trusted, LiquidityFilter::Healthy3] {
-            let selected = filter.apply(&q, 15.0, 80.0, 5.0).unwrap();
+            let selected = filter.apply(&q, 15.0, 80.0, 5.0, 10.0).unwrap();
             assert_eq!(
                 selected.provider, "priced",
                 "{filter:?} picked the free ask"
@@ -1128,7 +1264,7 @@ mod tests {
             healthy_seller_count: Some(4),
         }];
         let selected = LiquidityFilter::Healthy3
-            .apply(&q, 15.0, 80.0, 5.0)
+            .apply(&q, 15.0, 80.0, 5.0, 10.0)
             .unwrap();
         assert_eq!(selected.provider, "only-free");
     }

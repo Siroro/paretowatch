@@ -166,6 +166,22 @@ impl ParetoWatchApp {
                 {
                     self.settings_dirty = true;
                 }
+                ui.label("Assumed cache %").on_hover_text(
+                    "Cache-read price assumed for models with no published cache rate \
+                         (no provider ask and no catalogue price), as a share of the fresh-input \
+                         price. Published rates are always preferred.",
+                );
+                if ui
+                    .add(
+                        egui::DragValue::new(&mut self.settings.cache_read_fallback_pct)
+                            .speed(1.0)
+                            .range(0.0..=100.0)
+                            .suffix("%"),
+                    )
+                    .changed()
+                {
+                    self.settings_dirty = true;
+                }
                 if self.settings_dirty && ui.button("Apply weights").clicked() {
                     self.save_and_push_settings();
                     self.weights_applied_at = Some(ui.input(|i| i.time));
@@ -525,6 +541,7 @@ impl ParetoWatchApp {
             self.settings.input_weight,
             self.settings.cache_read_weight,
             self.settings.output_weight,
+            self.settings.cache_read_fallback_pct,
         );
         // Every orb is hoverable, so the tooltip formatter must be able to
         // resolve any series name back to its model: plain orbs are named
@@ -1044,6 +1061,7 @@ impl ParetoWatchApp {
                                         self.settings.input_weight,
                                         self.settings.cache_read_weight,
                                         self.settings.output_weight,
+                                        self.settings.cache_read_fallback_pct,
                                     )
                                 ));
                                 ui.label(match option.trusted {
@@ -1211,7 +1229,7 @@ struct HoverContext<'a> {
     history: Option<&'a ModelSeries>,
     low_metric: PriceMetric,
     cost_basis: CostBasis,
-    weights: (f64, f64, f64),
+    weights: (f64, f64, f64, f64),
     score_source: String,
 }
 
@@ -1266,6 +1284,7 @@ fn pareto_hover_label(p: &JoinedPoint, ctx: &HoverContext<'_>, score: f64) -> St
             ctx.weights.0,
             ctx.weights.1,
             ctx.weights.2,
+            ctx.weights.3,
         )
     {
         let current = match ctx.low_metric {
@@ -1278,6 +1297,7 @@ fn pareto_hover_label(p: &JoinedPoint, ctx: &HoverContext<'_>, score: f64) -> St
                 ctx.weights.0,
                 ctx.weights.1,
                 ctx.weights.2,
+                ctx.weights.3,
             ),
         };
         let pct = if low > 0.0 {

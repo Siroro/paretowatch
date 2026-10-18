@@ -40,6 +40,7 @@ pub(crate) fn semantic_alert_status(
     input_weight: f64,
     cache_read_weight: f64,
     output_weight: f64,
+    cache_fallback_pct: f64,
 ) -> String {
     let benchmarks = benchmarks_for_source(
         alert.benchmark_source,
@@ -55,9 +56,13 @@ pub(crate) fn semantic_alert_status(
     let filtered = quotes
         .iter()
         .filter_map(|quote| {
-            alert
-                .liquidity_filter
-                .apply(quote, input_weight, cache_read_weight, output_weight)
+            alert.liquidity_filter.apply(
+                quote,
+                input_weight,
+                cache_read_weight,
+                output_weight,
+                cache_fallback_pct,
+            )
         })
         .collect::<Vec<_>>();
     let joined = joined_points(
@@ -67,6 +72,7 @@ pub(crate) fn semantic_alert_status(
         alert.cost_basis,
         benchmark_metric,
         (input_weight, cache_read_weight, output_weight),
+        cache_fallback_pct,
     );
     if alert.model == ANY_MODEL {
         // Wildcard rules watch the whole population, not one target.
@@ -171,12 +177,14 @@ pub(crate) fn evaluate_alerts(
                 settings.input_weight,
                 settings.cache_read_weight,
                 settings.output_weight,
+                settings.cache_read_fallback_pct,
             );
             let new_blended = quote.price(
                 PriceMetric::Blended,
                 settings.input_weight,
                 settings.cache_read_weight,
                 settings.output_weight,
+                settings.cache_read_fallback_pct,
             );
             let (arrow, direction) = if best.new < best.old {
                 ("↓", "down")
@@ -292,6 +300,7 @@ pub(crate) fn evaluate_alerts(
             settings.input_weight,
             settings.cache_read_weight,
             settings.output_weight,
+            settings.cache_read_fallback_pct,
         );
         let condition = match alert.direction {
             AlertDirection::BelowOrEqual => price <= alert.threshold,
@@ -357,12 +366,14 @@ fn quote_has_price_change(old: &Quote, new: &Quote, settings: &Settings) -> bool
         settings.input_weight,
         settings.cache_read_weight,
         settings.output_weight,
+        settings.cache_read_fallback_pct,
     );
     let new_blended = new.price(
         PriceMetric::Blended,
         settings.input_weight,
         settings.cache_read_weight,
         settings.output_weight,
+        settings.cache_read_fallback_pct,
     );
     prices_differ(old.input, new.input)
         || prices_differ(old.output, new.output)
@@ -408,12 +419,14 @@ pub(crate) fn qualifying_move(
         settings.input_weight,
         settings.cache_read_weight,
         settings.output_weight,
+        settings.cache_read_fallback_pct,
     );
     let new_blended = quote.price(
         PriceMetric::Blended,
         settings.input_weight,
         settings.cache_read_weight,
         settings.output_weight,
+        settings.cache_read_fallback_pct,
     );
     [
         LegMove {
@@ -477,6 +490,7 @@ pub(crate) fn detect_delisted(
                 settings.input_weight,
                 settings.cache_read_weight,
                 settings.output_weight,
+                settings.cache_read_fallback_pct,
             ),
         })
         .collect::<Vec<_>>();
@@ -541,12 +555,14 @@ pub(crate) fn detect_price_changes(
                 settings.input_weight,
                 settings.cache_read_weight,
                 settings.output_weight,
+                settings.cache_read_fallback_pct,
             ),
             new_blended: new.price(
                 PriceMetric::Blended,
                 settings.input_weight,
                 settings.cache_read_weight,
                 settings.output_weight,
+                settings.cache_read_fallback_pct,
             ),
             old_input: old.input,
             new_input: new.input,

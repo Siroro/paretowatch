@@ -53,6 +53,9 @@ pub(crate) struct ParetoCacheKey {
     pub(crate) input_weight: f64,
     pub(crate) cache_read_weight: f64,
     pub(crate) output_weight: f64,
+    /// Assumed cache-read share of the input price for models with no
+    /// published cache ask; changing it re-prices the blended metric.
+    pub(crate) cache_read_fallback_pct: f64,
 }
 
 /// Cached join/frontier for the current inputs. Kept behind an `Arc` in the
@@ -113,6 +116,7 @@ pub(crate) fn joined_points(
     cost_basis: CostBasis,
     benchmark_metric: BenchmarkMetric,
     weights: (f64, f64, f64),
+    cache_fallback_pct: f64,
 ) -> Vec<JoinedPoint> {
     let (input_weight, cache_read_weight, output_weight) = weights;
     let mut out = vec![];
@@ -120,7 +124,13 @@ pub(crate) fn joined_points(
         if let Some(b) = best_benchmark_match(q, benchmarks)
             && let Some(score) = benchmark_metric.value(b)
         {
-            let per_million = q.price(price_metric, input_weight, cache_read_weight, output_weight);
+            let per_million = q.price(
+                price_metric,
+                input_weight,
+                cache_read_weight,
+                output_weight,
+                cache_fallback_pct,
+            );
             let cost = match cost_basis {
                 CostBasis::PerMillion => per_million,
                 CostBasis::EstimatedPerTask => {
@@ -148,7 +158,10 @@ pub(crate) fn joined_points(
                     benchmark_name: b.name.clone(),
                     input: q.input,
                     output: q.output,
-                    cache_read: q.cache_read,
+                    // Resolved cache rate (provider ask, market best,
+                    // catalogue list, else assumed share): what `cost` and
+                    // the chart tooltips actually bill.
+                    cache_read: q.effective_cache_read(cache_fallback_pct),
                     cost,
                     tokens_per_task: b.tokens_per_task,
                     token_profile: b.token_profile.clone(),
@@ -229,6 +242,7 @@ mod tests {
             CostBasis::EstimatedPerTask,
             BenchmarkMetric::AgenticCoding,
             (15.0, 80.0, 5.0),
+            10.0,
         );
         assert_eq!(points.len(), 1);
         // test_quote => input $2, cache $0.2, output $4 => blend $0.66/M.

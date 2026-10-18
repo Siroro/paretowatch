@@ -377,6 +377,7 @@ impl ParetoWatchApp {
             let input_weight = self.settings.input_weight;
             let cache_read_weight = self.settings.cache_read_weight;
             let output_weight = self.settings.output_weight;
+            let cache_fallback_pct = self.settings.cache_read_fallback_pct;
             egui::Grid::new("alerts_grid").striped(true).show(ui, |ui| {
                 ui.strong("On");
                 ui.strong("Model");
@@ -479,6 +480,7 @@ impl ParetoWatchApp {
                                         input_weight,
                                         cache_read_weight,
                                         output_weight,
+                                        cache_fallback_pct,
                                     )
                                 )
                             })

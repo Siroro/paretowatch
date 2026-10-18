@@ -13,6 +13,7 @@ pub(crate) fn test_quote(model: &str, input: f64, live_market: bool) -> Quote {
         input,
         output: input * 2.0,
         cache_read: Some(input * 0.1),
+        catalog_cache_read: Some(input * 0.1),
         seller_count: Some(12),
         healthy_seller_count: Some(8),
         provider_trusted: Some(true),

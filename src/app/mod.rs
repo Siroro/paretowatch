@@ -145,9 +145,9 @@ pub(crate) struct ParetoWatchApp {
     data_version: u64,
     scaffold_cache: Option<(u64, Vec<String>)>,
     pareto_cache: Option<Arc<ParetoCache>>,
-    /// Status text per alert id for the Alerts tab, keyed to the data version
-    /// and workload weights it was computed at.
-    alert_status_cache: HashMap<u64, (u64, f64, f64, f64, String)>,
+    /// Status text per alert id for the Alerts tab, keyed to the data version,
+    /// workload weights, and assumed cache-read share it was computed at.
+    alert_status_cache: HashMap<u64, (u64, f64, f64, f64, f64, String)>,
     consensus_cache: Option<(
         u64,
         ComparisonMode,
@@ -448,12 +448,14 @@ impl ParetoWatchApp {
                 self.settings.input_weight,
                 self.settings.cache_read_weight,
                 self.settings.output_weight,
+                self.settings.cache_read_fallback_pct,
             );
             let Some(previous_low) = blended_series(
                 series,
                 self.settings.input_weight,
                 self.settings.cache_read_weight,
                 self.settings.output_weight,
+                self.settings.cache_read_fallback_pct,
             )
             .into_iter()
             .map(|(_, value)| value)
@@ -537,6 +539,7 @@ impl ParetoWatchApp {
                             self.settings.input_weight,
                             self.settings.cache_read_weight,
                             self.settings.output_weight,
+                            self.settings.cache_read_fallback_pct,
                         ),
                     )
                 });
@@ -551,6 +554,7 @@ impl ParetoWatchApp {
                                 self.settings.input_weight,
                                 self.settings.cache_read_weight,
                                 self.settings.output_weight,
+                                self.settings.cache_read_fallback_pct,
                             )
                         });
                         format!("{display} · blend ${blend:.4}/1M")
@@ -638,6 +642,7 @@ impl ParetoWatchApp {
             input_weight: self.settings.input_weight,
             cache_read_weight: self.settings.cache_read_weight,
             output_weight: self.settings.output_weight,
+            cache_read_fallback_pct: self.settings.cache_read_fallback_pct,
         }
     }
 
@@ -656,6 +661,7 @@ impl ParetoWatchApp {
             self.settings.input_weight,
             self.settings.cache_read_weight,
             self.settings.output_weight,
+            self.settings.cache_read_fallback_pct,
         );
         let filtered_quotes = snapshot
             .quotes
@@ -665,7 +671,7 @@ impl ParetoWatchApp {
             .filter(|quote| pricing_source_allows(self.hide_catalog_prices, quote))
             .filter_map(|quote| {
                 self.liquidity_filter
-                    .apply(quote, weights.0, weights.1, weights.2)
+                    .apply(quote, weights.0, weights.1, weights.2, weights.3)
             })
             .collect::<Vec<_>>();
         let active_benchmarks = benchmarks_for_source(
@@ -681,7 +687,8 @@ impl ParetoWatchApp {
             key.price_metric,
             key.cost_basis,
             key.benchmark_metric,
-            weights,
+            (weights.0, weights.1, weights.2),
+            weights.3,
         );
         // Hidden groups stay in `joined` so the legend can offer them back;
         // the chart and the frontier only see the enabled subset.
@@ -743,10 +750,11 @@ impl ParetoWatchApp {
     /// are formatted fresh each call.
     fn cached_alert_statuses(&mut self) -> Vec<String> {
         let data_version = self.data_version;
-        let (input_weight, cache_read_weight, output_weight) = (
+        let (input_weight, cache_read_weight, output_weight, cache_fallback_pct) = (
             self.settings.input_weight,
             self.settings.cache_read_weight,
             self.settings.output_weight,
+            self.settings.cache_read_fallback_pct,
         );
         let quotes: &[Quote] = self
             .price_snapshot
@@ -760,11 +768,17 @@ impl ParetoWatchApp {
                 let cached = self
                     .alert_status_cache
                     .get(&alert.id)
-                    .filter(|(version, iw, cw, ow, _)| {
+                    .filter(|(version, iw, cw, ow, pct, _)| {
                         *version == data_version
-                            && (*iw, *cw, *ow) == (input_weight, cache_read_weight, output_weight)
+                            && (*iw, *cw, *ow, *pct)
+                                == (
+                                    input_weight,
+                                    cache_read_weight,
+                                    output_weight,
+                                    cache_fallback_pct,
+                                )
                     })
-                    .map(|(_, _, _, _, text)| text.clone());
+                    .map(|(_, _, _, _, _, text)| text.clone());
                 match cached {
                     Some(text) => text,
                     None => {
@@ -778,6 +792,7 @@ impl ParetoWatchApp {
                                 input_weight,
                                 cache_read_weight,
                                 output_weight,
+                                cache_fallback_pct,
                             )
                         };
                         self.alert_status_cache.insert(
@@ -787,6 +802,7 @@ impl ParetoWatchApp {
                                 input_weight,
                                 cache_read_weight,
                                 output_weight,
+                                cache_fallback_pct,
                                 text.clone(),
                             ),
                         );
@@ -816,7 +832,13 @@ impl ParetoWatchApp {
                     .map(|q| {
                         format!(
                             "${:.4}",
-                            q.price(alert.metric, input_weight, cache_read_weight, output_weight,)
+                            q.price(
+                                alert.metric,
+                                input_weight,
+                                cache_read_weight,
+                                output_weight,
+                                cache_fallback_pct,
+                            )
                         )
                     })
                     .unwrap_or_else(|| "—".into())
@@ -829,10 +851,11 @@ impl ParetoWatchApp {
     /// Status text for an all-time-low rule: current blended price beside
     /// the lowest value the history log has ever recorded for the model.
     fn floor_alert_status(&self, alert: &AlertRule, quotes: &[Quote]) -> String {
-        let (input_weight, cache_read_weight, output_weight) = (
+        let (input_weight, cache_read_weight, output_weight, cache_fallback_pct) = (
             self.settings.input_weight,
             self.settings.cache_read_weight,
             self.settings.output_weight,
+            self.settings.cache_read_fallback_pct,
         );
         let Some(quote) = quotes.iter().find(|q| q.model == alert.model) else {
             return "—".into();
@@ -842,14 +865,21 @@ impl ParetoWatchApp {
             input_weight,
             cache_read_weight,
             output_weight,
+            cache_fallback_pct,
         );
         let Some(series) = self.history.series(&alert.model) else {
             return format!("${current:.4} · no history yet");
         };
-        let low = blended_series(series, input_weight, cache_read_weight, output_weight)
-            .into_iter()
-            .map(|(_, value)| value)
-            .fold(f64::INFINITY, f64::min);
+        let low = blended_series(
+            series,
+            input_weight,
+            cache_read_weight,
+            output_weight,
+            cache_fallback_pct,
+        )
+        .into_iter()
+        .map(|(_, value)| value)
+        .fold(f64::INFINITY, f64::min);
         if low.is_finite() {
             format!("${current:.4} · low ${low:.4}")
         } else {
@@ -898,6 +928,7 @@ impl ParetoWatchApp {
                         self.settings.input_weight,
                         self.settings.cache_read_weight,
                         self.settings.output_weight,
+                        self.settings.cache_read_fallback_pct,
                     )
                 })
                 .collect::<Vec<_>>();
@@ -912,6 +943,7 @@ impl ParetoWatchApp {
                     self.settings.cache_read_weight,
                     self.settings.output_weight,
                 ),
+                self.settings.cache_read_fallback_pct,
             );
 
             if wildcard {

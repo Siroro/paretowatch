@@ -9,7 +9,7 @@ use egui::{ViewportClass, ViewportCommand, ViewportId, WindowLevel};
 
 use crate::alerts::prices_differ;
 use crate::theme::{PRICE_DOWN, PRICE_UP, creator_color, discount_color};
-use crate::types::{LiquidityFilter, PriceSnapshot, Quote, Settings, blended_price};
+use crate::types::{LiquidityFilter, PriceMetric, PriceSnapshot, Quote, Settings};
 
 /// The pinned row's prices under the active market-quality filter: the
 /// cheapest provider that satisfies it, or `None` when nothing does.
@@ -23,6 +23,7 @@ fn effective_quote(
         settings.input_weight,
         settings.cache_read_weight,
         settings.output_weight,
+        settings.cache_read_fallback_pct,
     )
 }
 
@@ -142,13 +143,16 @@ fn observe(quote: &crate::types::Quote, settings: &Settings) -> ObservedPrices {
         input: quote.input,
         cache_read: quote.cache_read,
         output: quote.output,
-        blended: blended_price(
-            quote.input,
-            quote.cache_read,
-            quote.output,
+        // Quote::price resolves the cache leg through the published-number
+        // chain (provider ask, market best, catalogue list) before the
+        // assumed share, so the pinned blended price never bills cache at
+        // the full input rate just because an ask is unpublished.
+        blended: quote.price(
+            PriceMetric::Blended,
             settings.input_weight,
             settings.cache_read_weight,
             settings.output_weight,
+            settings.cache_read_fallback_pct,
         ),
         discount_pct: quote.discount_pct,
     }

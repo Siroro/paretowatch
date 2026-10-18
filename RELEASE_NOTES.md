@@ -1,3 +1,14 @@
+# ParetoWatch v0.18.2
+
+## Fixes
+
+- **Cache reads were billed at the full input price whenever no cache ask was published.** Roughly half the catalogue publishes no cache rate (200 of 451 `/v1/models` rows; 199 of 413 market rows carry no cache ask from any provider), and for every one of those models the blended price — chart, Models tab, pinned window, history charts, workload discounts, and every alert evaluation — priced the cache leg at 100% of fresh input. Billing evidence says that is far off: inverting a month of AA usage-dashboard "direct cost" rows against the feed's list prices puts real cache reads at 5–27% of input (Grok 4.6 inverts to 24.8% against its published 25%; GPT-6.1 Sol to 4.5% against 5%; Abliterated Large V2 to $0.2977/M against its published $0.30 — exactly 10% of its $3 input). Cache-read pricing now resolves **published numbers first**: the selected provider's own ask, then the market-wide best cache ask, then the model's catalogue list price — `catalog_cache_read` is newly preserved through the market overlay instead of being overwritten by an empty provider ask — and only when nothing at all is published does it assume a share of the input price.
+- New setting: **"Assumed cache-read price (unpublished)"** — the share of the fresh-input price billed for cache reads when a model publishes no cache rate anywhere. It sits in Settings beside the workload weights and inline in the Pareto chart's weights row, defaults to 10% (the classic Anthropic/DeepSeek/GLM convention and the center of the observed range), and accepts 0–100 — 100 reproduces the old bill-at-input behavior. Existing configs load with the 10% default. The Models-tab calculator now labels its cache rate by source — provider ask, market-wide best, published catalogue rate, or assumed share — and shows the assumed tick inline, and the blended column's tooltip documents the whole fallback chain.
+
+## Validation
+
+Formatting, locked check, locked test (143 tests), and Clippy with warnings denied all pass.
+
 # ParetoWatch v0.18.1
 
 ## Updates
