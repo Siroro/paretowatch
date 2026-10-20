@@ -129,55 +129,11 @@ pub(crate) fn fetch_prices(client: &Client, settings: &Settings) -> Result<Price
                     json_shape(&value)
                 ));
             } else {
-                let quote_index: HashMap<String, usize> = quotes
-                    .iter()
-                    .enumerate()
-                    .map(|(i, q)| (normalize(&q.model), i))
-                    .collect();
-                for market in markets {
-                    // Only overlay models already admitted by the text-output
-                    // catalog. Do not append unmatched market products: the market
-                    // feed also contains image, video, music and other media SKUs.
-                    let Some(&index) = quote_index.get(&normalize(&market.model)) else {
-                        continue;
-                    };
-                    let q = &mut quotes[index];
-                    // Catalogue list prices for the cache-inclusive
-                    // discount; the overlay below replaces them with live
-                    // market asks. `catalog_cache_read` survives the
-                    // overlay as the published fallback.
-                    let catalog_input = q.input;
-                    let catalog_output = q.output;
-                    let catalog_cache_read = q.catalog_cache_read;
-                    q.input = market.input;
-                    q.output = market.output;
-                    q.cache_read = market.cache_read;
-                    if let Some(provider) = &market.provider {
-                        q.provider = provider.clone();
-                    }
-                    q.seller_count = market.seller_count;
-                    q.healthy_seller_count = market.healthy_seller_count;
-                    q.provider_trusted = market.provider_trusted;
-                    q.requests_24h = market.requests_24h;
-                    q.volume_24h = market.volume_24h;
-                    q.discount_pct = market_discount_pct(
-                        &market,
-                        catalog_input,
-                        catalog_cache_read,
-                        catalog_output,
-                        settings,
-                    );
-                    q.discount_direction = market.discount_direction.clone();
-                    q.free_offer_listed = market.free_offer_listed;
-                    q.market_options = market.provider_options.clone();
-                    q.live_market = true;
-                    overlay_count += 1;
-                }
+                overlay_count = apply_market_overlay(&mut quotes, markets, settings);
             }
         }
         Err(err) => market_error = Some(format!("{err:#}")),
     }
-
     quotes.sort_by(|a, b| a.display_name.cmp(&b.display_name));
     Ok(PriceSnapshot {
         quotes,
@@ -187,6 +143,65 @@ pub(crate) fn fetch_prices(client: &Client, settings: &Settings) -> Result<Price
         market_error,
         base_source,
     })
+}
+
+/// Overlays live market asks onto the catalogue quotes they match, returning
+/// how many quotes were overlaid. Only models already admitted by the
+/// text-output catalog are touched: the market feed also contains image,
+/// video, music and other media SKUs that must never appear as rows.
+fn apply_market_overlay(
+    quotes: &mut [Quote],
+    markets: Vec<MarketOverlay>,
+    settings: &Settings,
+) -> usize {
+    let quote_index: HashMap<String, usize> = quotes
+        .iter()
+        .enumerate()
+        .map(|(i, q)| (normalize(&q.model), i))
+        .collect();
+    let mut overlay_count = 0usize;
+    for market in markets {
+        let Some(&index) = quote_index.get(&normalize(&market.model)) else {
+            continue;
+        };
+        let q = &mut quotes[index];
+        // Catalogue list prices for the cache-inclusive discount; the overlay
+        // below replaces them with live market asks. `catalog_cache_read`
+        // survives the overlay as the published fallback.
+        let catalog_input = q.input;
+        let catalog_output = q.output;
+        let catalog_cache_read = q.catalog_cache_read;
+        q.input = market.input;
+        q.output = market.output;
+        // The feed's provider rows never publish a per-provider cache ask
+        // (verified 2026-10: 0 of ~1.3k provider rows carry one), so
+        // `cache_read` is None and the marketplace's actual cache billing
+        // follows the market-wide aggregate instead — receipts bill the
+        // aggregate rate, not the catalogue list price. Fall back to the
+        // aggregate before touching the catalogue or the assumed share.
+        q.cache_read = market.cache_read.or(market.top_cache_read);
+        if let Some(provider) = &market.provider {
+            q.provider = provider.clone();
+        }
+        q.seller_count = market.seller_count;
+        q.healthy_seller_count = market.healthy_seller_count;
+        q.provider_trusted = market.provider_trusted;
+        q.requests_24h = market.requests_24h;
+        q.volume_24h = market.volume_24h;
+        q.discount_pct = market_discount_pct(
+            &market,
+            catalog_input,
+            catalog_cache_read,
+            catalog_output,
+            settings,
+        );
+        q.discount_direction = market.discount_direction.clone();
+        q.free_offer_listed = market.free_offer_listed;
+        q.market_options = market.provider_options.clone();
+        q.live_market = true;
+        overlay_count += 1;
+    }
+    overlay_count
 }
 
 /// Discount shown for an overlaid quote. With the option off this is the
@@ -555,10 +570,11 @@ pub(crate) struct MarketOverlay {
     pub(crate) output: f64,
     pub(crate) cache_read: Option<f64>,
     /// Entry-level cheapest cache-read ask across the whole market. The
-    /// headline `cache_read` follows the selected provider and is `None`
-    /// whenever that provider publishes no cache price; the discount still
-    /// uses this market-wide best rather than falling back to the input
-    /// price.
+    /// provider rows never publish a per-provider cache ask, so in practice
+    /// this aggregate is the only cache price the market feed carries — and
+    /// the one marketplace billing follows. It backs both the headline
+    /// `cache_read` (when the selected provider publishes none) and the
+    /// cache-inclusive discount.
     pub(crate) top_cache_read: Option<f64>,
     /// Official (direct) list prices published by the market feed itself.
     /// The feed has no direct cache-read price; that leg comes from the
@@ -874,6 +890,57 @@ mod tests {
         assert!((rows[0].volume_24h.unwrap() - 0.203913).abs() < 1e-12);
         assert_eq!(rows[0].discount_direction.as_deref(), Some("tightening"));
         assert!(!rows[0].free_offer_listed);
+    }
+
+    #[test]
+    fn overlay_bills_market_best_cache_when_providers_publish_none() {
+        // Live feed reality (2026-10): no provider row carries a cache ask
+        // (0 of ~1.3k), so the quote's cache leg must fall back to the
+        // market-wide aggregate — the rate marketplace receipts actually
+        // bill — before the catalogue list price is ever consulted.
+        let mut quote = test_quote("deepseek-v4.1-flash", 0.3, false);
+        quote.catalog_cache_read = Some(0.0016);
+        let markets = parse_market_overlay(
+            &serde_json::json!({
+                "markets": [{
+                    "model": "deepseek-v4.1-flash",
+                    "best_input_per_1m": 356000,
+                    "best_output_per_1m": 635000,
+                    "best_cache_read_per_1m": 13000,
+                    "discount_trend": {"current_discount_pct": 80.0, "direction": "stable"},
+                    "providers": [
+                        {"provider": "inferhub", "trusted": false,
+                         "best_input_per_1m": 356000, "best_output_per_1m": 635000}
+                    ]
+                }]
+            }),
+            &Settings::default(),
+        );
+        assert_eq!(markets.len(), 1);
+        assert!(
+            markets[0].cache_read.is_none(),
+            "provider rows carry no cache ask"
+        );
+        assert!((markets[0].top_cache_read.unwrap() - 0.013).abs() < 1e-12);
+
+        let mut quotes = vec![quote];
+        let overlaid = apply_market_overlay(&mut quotes, markets, &Settings::default());
+        assert_eq!(overlaid, 1);
+        let q = &quotes[0];
+        assert!(
+            (q.cache_read.unwrap() - 0.013).abs() < 1e-12,
+            "aggregate cache ask wins over the catalogue rate"
+        );
+        assert!(
+            (q.catalog_cache_read.unwrap() - 0.0016).abs() < 1e-12,
+            "catalogue fallback survives the overlay"
+        );
+        assert_eq!(q.provider, "inferhub");
+        assert!(q.live_market);
+        assert!(
+            (q.effective_cache_read(10.0).unwrap() - 0.013).abs() < 1e-12,
+            "blended pricing bills the aggregate"
+        );
     }
 
     #[test]
