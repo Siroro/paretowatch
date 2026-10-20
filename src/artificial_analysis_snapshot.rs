@@ -137,7 +137,33 @@
 //! literal zero; the market parser's free-offer handling already keeps $0
 //! asks real, so no code changed for it.
 //!
-//! Deliberately unrated (no AA presence as of 2026-10-17): Aion 2.0/3.0/3.0
+//! The 2026-10-20 bump stayed on v4.3.2: the leader (Claude Opus 5.5,
+//! live 57.6 → integer display 58) and the scale are unchanged, so only the
+//! new-model rows were read fresh — plus DeepSeek V4.1 Flash 1017, whose
+//! max-effort page firmed up at 45 (the 40 read three days earlier had
+//! drifted past rounding, the same re-read Muse Spark 1.3 needed), and the
+//! Qwen3.8 Max family, which AA reorganized: the canonical page now measures
+//! the 0902 snapshot (45.42, chart default) while the old undated 0803 build
+//! is deprecated and retained only as a non-default 40.15 entry. Surplus
+//! delisted the undated Max SKU the same week, so the dated listing gets a
+//! row of its own reading the same 45.4 the undated row carries — the
+//! undated row stays because undated leaderboard slugs (LiveBench 2.0 still
+//! publishes `qwen3.8-max`) keep joining it. Qwen3.8 Max Prime is a
+//! higher-throughput same-checkpoint SKU and inherits through the stripped
+//! `prime` token exactly like GLM 5.3 Prime. MiniMax M3.1 Flash entered at
+//! 43 (single max-default measurement): thirteen over MiniMax-M3's 29.6 and
+//! MiniMax's strongest row on the index. inclusionAI's Ling 3.1 Flash
+//! entered at 41; `inclusionAI` is not a stripped creator prefix (same as
+//! Cohere/Inception), so the row carries the display prefix to exact-join.
+//! Reflection's Beam 1.0 (501B A23B, Apache 2.0) entered at 30. Meta's Muse
+//! Spark Open — the open-weights coding SKU — entered at 39, read at xhigh,
+//! the only effort AA measured; nine under the purchasable Spark 1.3 (48).
+//! Z.ai's GLM 5.3 FlashX is GLM-5.3-Flash served at up to 200 tok/s, but
+//! unlike `prime` it cannot be a stripped deployment token: stripping
+//! `flashx` would collapse the key onto GLM-5.3 (44.9), the wrong base, so
+//! it gets a ~proxy row onto GLM-5.3-Flash instead.
+//!
+//! Deliberately unrated (no AA presence as of 2026-10-20): Aion 2.0/3.0/3.0
 //! Mini, Hermes 3 405B, Palmyra Vision 7B, Qwen 2.5 7B, GPT-OSS Safeguard
 //! 20B/120B, Grok 4.20 Multi-Agent Beta, Venice rebrands, uncensored finetunes
 //! such as GLM 4.7 Flash Heretic (Abliterated Large V2 above is the lone
@@ -148,7 +174,12 @@
 //! rated; AA has no Flash page yet), TypeSafe's JEV 1.13 decisions model, and
 //! Fireworks Ember-1 (a Kimi-K3-derived reasoning model; AA has no page, and
 //! it deliberately does NOT proxy Kimi K3 — it is a derivative build, not the
-//! same checkpoint).
+//! same checkpoint). The 2026-10-18 listings join them: Qwen3.7 Flash (AA
+//! rates the 3.7 Plus/Max tiers but has no Flash page, and no same-checkpoint
+//! sibling to proxy), LiquidAI's LFM2.5-24B-A2B (AA's LFM2.5 pages cover only
+//! the 1.2B–8B small models; the 24B-A2B is not the LFM2 24B A2B checkpoint),
+//! Moondream 3 Preview and Moondream 3.1 (vision-language; no AA pages),
+//! Pareto 26.9 (no AA page), and Elorian's Glimpse (no AA page).
 //! MiMo-V2.6-Pro-UltraSpeed is a same-checkpoint speed wrapper, not an
 //! unrated model: it inherits the MiMo-V2.6-Pro row because benchmark
 //! matching strips the `ultraspeed` deployment token. AA had additionally
@@ -161,13 +192,38 @@
 use crate::fetch::score_benchmark;
 use crate::types::{Benchmark, BenchmarkKind};
 
-pub(crate) const ARTIFICIAL_ANALYSIS_SNAPSHOT_DATE: &str = "2026-10-17";
+pub(crate) const ARTIFICIAL_ANALYSIS_SNAPSHOT_DATE: &str = "2026-10-20";
 pub(crate) const ARTIFICIAL_ANALYSIS_SNAPSHOT_VERSION: &str = "v4.3.2";
 
 /// `(model name, AA Intelligence score)` pairs, one representative row per
 /// family. Names should mirror Surplus display names so exact-key joins hit
 /// before fuzzy matching has to.
 pub(crate) const SNAPSHOT_ROWS: &[(&str, f64)] = &[
+    // Added 2026-10-20 for the Surplus listings of 2026-10-18..10-20, read
+    // from the still-v4.3.2 index (leader and scale unchanged). MiniMax M3.1
+    // Flash entered at 43 (single max-default measurement), thirteen over
+    // MiniMax-M3 and MiniMax's strongest row. Qwen3.8 Max (0902) reads the
+    // canonical page AA re-pointed at the 0902 snapshot (45.42, chart
+    // default); the old undated 0803 build is deprecated at 40.15 and Surplus
+    // delisted the undated SKU, but the undated row below stays so undated
+    // leaderboard slugs keep joining. Qwen3.8 Max Prime (higher-throughput
+    // same-checkpoint SKU) inherits through the stripped `prime` token, not a
+    // row. Ling 3.1 Flash carries the `inclusionAI: ` display prefix because
+    // that creator is not stripped (same as Cohere/Inception). Beam 1.0 is
+    // Reflection's open-weights 501B A23B reasoning model. Muse Spark Open is
+    // read at xhigh, the only effort AA measured for the open-weights coding
+    // SKU. GLM 5.3 FlashX ~proxies GLM-5.3-Flash: it is the same checkpoint
+    // served at up to 200 tok/s, but `flashx` cannot be a stripped deployment
+    // token because that would collapse the key onto GLM-5.3 (44.9), the
+    // wrong base. DeepSeek V4.1 Flash 1017 was re-read in the same bump: AA
+    // firmed its max-effort measurement at 45.1, past rounding vs the 40 it
+    // entered at three days earlier.
+    ("MiniMax M3.1 Flash", 43.0),
+    ("Qwen3.8 Max (0902)", 45.4),
+    ("inclusionAI: Ling 3.1 Flash", 41.0),
+    ("Reflection: Beam 1.0 501B A23B", 30.0),
+    ("Muse Spark Open", 39.0),
+    ("GLM-5.3-FlashX", 41.9), // ~proxy: GLM-5.3-Flash at high speed; AA rates no FlashX page
     // Added 2026-10-17 for the Surplus listings of 2026-10-15..10-17, read
     // from the still-v4.3.2 index (leader and scale unchanged). DeepSeek V4.1
     // Flash 1017 is the 1017 dated refresh of the V4.1 Flash family; like the
@@ -181,7 +237,7 @@ pub(crate) const SNAPSHOT_ROWS: &[(&str, f64)] = &[
     // "NVIDIA: " Surplus display name joins exactly. Mistral Large 4's matrix
     // priced at $0.0000 (100%-off launch window) and joins its existing
     // Preview-read row above unchanged.
-    ("DeepSeek V4.1 Flash 1017", 40.0),
+    ("DeepSeek V4.1 Flash 1017", 45.0), // re-read 2026-10-20: max page firmed at 45.1 (was 40.0 at entry)
     ("NVIDIA Nemotron 3.5 Super VL", 25.0),
     // Added 2026-10-15 for the Surplus listings of 2026-10-07..10-15, read
     // from the still-v4.3.2 index (leader and scale unchanged). Claude Haiku
@@ -833,8 +889,11 @@ mod tests {
         };
         // The Surplus display name carries the "NVIDIA: " creator prefix the
         // key strips; assert through it so the exact join is what's covered.
+        // The 1017 entered at 40 and was re-read to 45 on 2026-10-20 (see the
+        // 2026_10_20 test); this test pins the family separation, not the
+        // entry value.
         for (name, expected) in [
-            ("DeepSeek V4.1 Flash 1017", 40.0),
+            ("DeepSeek V4.1 Flash 1017", 45.0),
             ("NVIDIA: Nemotron 3.5 Super VL", 25.0),
             ("Mistral Large 4", 38.0),
             ("DeepSeek V4.1 Flash", 39.5),
@@ -869,6 +928,95 @@ mod tests {
             benchmark_model_key("NVIDIA Nemotron 3 Super 120B"),
             "the 3.5 generation must not collapse onto the 3 generation"
         );
+    }
+
+    #[test]
+    fn aa_snapshot_covers_the_2026_10_20_refresh() {
+        // Rows added 2026-10-20 under the still-v4.3.2 index for the Surplus
+        // listings of 2026-10-18..10-20: MiniMax M3.1 Flash (43, MiniMax's
+        // strongest row), Qwen3.8 Max (0902) (reading the canonical page AA
+        // re-pointed at the 0902 snapshot; same 45.4 the undated row carries),
+        // inclusionAI's Ling 3.1 Flash (41), Reflection's Beam 1.0 (30), and
+        // Meta's Muse Spark Open (39 at xhigh, the only measured effort).
+        // GLM 5.3 FlashX ~proxies GLM-5.3-Flash (same checkpoint at speed)
+        // because stripping `flashx` would collapse onto GLM-5.3, the wrong
+        // base. DeepSeek V4.1 Flash 1017 was re-read 40 -> 45 when AA firmed
+        // its max measurement. Qwen3.8 Max Prime inherits via the stripped
+        // `prime` token rather than a row, and the unrated 2026-10-18
+        // listings (Qwen3.7 Flash, LFM2.5-24B-A2B, Moondream 3 Preview/3.1,
+        // Pareto 26.9, Elorian Glimpse) must have no rows.
+        let rows = artificial_analysis_snapshot();
+        let score_of = |name: &str| {
+            rows.iter()
+                .find(|b| benchmark_model_key(&b.slug) == benchmark_model_key(name))
+                .and_then(|b| b.agentic_coding)
+        };
+        for (name, expected) in [
+            ("MiniMax M3.1 Flash", 43.0),
+            ("Qwen3.8 Max (0902)", 45.4),
+            ("inclusionAI: Ling 3.1 Flash", 41.0),
+            ("Reflection: Beam 1.0 501B A23B", 30.0),
+            ("Muse Spark Open", 39.0),
+            ("GLM-5.3-FlashX", 41.9),
+            ("DeepSeek V4.1 Flash 1017", 45.0),
+            ("Qwen3.8 Max", 45.4),
+        ] {
+            assert_eq!(
+                score_of(name),
+                Some(expected),
+                "{name} missing or wrong in snapshot"
+            );
+        }
+        // The dated Max reads the same canonical page as the undated row but
+        // keeps its own key; Prime collapses onto the undated key through the
+        // stripped `prime` token and inherits 45.4, not a row of its own.
+        assert_ne!(
+            benchmark_model_key("Qwen3.8 Max (0902)"),
+            benchmark_model_key("Qwen3.8 Max"),
+            "the dated snapshot must not collapse onto the undated row"
+        );
+        assert_eq!(
+            benchmark_model_key("Qwen3.8 Max Prime"),
+            benchmark_model_key("Qwen3.8 Max"),
+            "the higher-throughput Prime SKU inherits the base row"
+        );
+        // FlashX keeps its own key (distinct from both GLM bases) and the
+        // proxy source row itself is unchanged.
+        assert_ne!(
+            benchmark_model_key("GLM-5.3-FlashX"),
+            benchmark_model_key("GLM-5.3"),
+            "FlashX must not collapse onto GLM-5.3 (the wrong base)"
+        );
+        assert_ne!(
+            benchmark_model_key("GLM-5.3-FlashX"),
+            benchmark_model_key("GLM-5.3-Flash"),
+            "FlashX keeps its own key; the proxy is disclosed, not joined"
+        );
+        assert_eq!(
+            score_of("GLM-5.3-Flash"),
+            Some(41.9),
+            "the proxy source row itself is unchanged"
+        );
+        // Muse Spark Open stays distinct from the purchasable Spark 1.3.
+        assert_ne!(
+            benchmark_model_key("Muse Spark Open"),
+            benchmark_model_key("Muse Spark 1.3")
+        );
+        // The unrated 2026-10-18 listings have no rows and no accidental
+        // fuzzy-join partners.
+        for unrated in [
+            "Qwen3.7 Flash",
+            "LFM2.5-24B-A2B",
+            "Moondream 3 Preview",
+            "Moondream 3.1",
+            "Pareto 26.9",
+            "Glimpse",
+        ] {
+            assert!(
+                score_of(unrated).is_none(),
+                "{unrated} is unrated and must not have a row"
+            );
+        }
     }
 
     #[test]

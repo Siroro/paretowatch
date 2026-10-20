@@ -1,3 +1,20 @@
+# ParetoWatch v0.19.0
+
+## Fixes
+
+- **LiveBench had been dead since the `LiveBench/new-livebench` GitHub repository was deleted** in the project's October 2026 consolidation — the fetcher 404'd on `constants.js`, so the board silently contributed nothing. LiveBench now serves everything from livebench.ai itself, and the fetcher was migrated to the **LiveBench 2.0 boards**: it reads the SPA homepage for its app-bundle path, scans the bundle for the newest `YYYYMMDD` release label (the same read-a-JS-file approach the old `constants.js` flow used), and pulls `data/<label>/table.csv` + `categories.json` from the site. The 2.0 category set replaces v1's "Agentic Coding" with **"Long Agentic"** (long-horizon agentic work), which now feeds the agentic metric with an overall-mean fallback so a release without that column still maps; the legacy v1 question-set boards are gone from the site's navigation and are no longer fetched. The restored board already rates Beam 1.0, MiniMax M3.1 Flash, Muse Spark Open, and DeepSeek V4.1 Flash 1017 (49 rows in release 20261014).
+- Cache-read pricing follow-up to v0.18.2: the market feed's provider rows never publish a per-provider cache ask (verified 2026-10: 0 of ~1.3k rows), so the quote's cache leg now falls back to the **market-wide best cache ask** — the rate marketplace receipts actually bill — before the catalogue list price or the assumed share is ever consulted. The overlay logic was extracted to `apply_market_overlay` unchanged in behavior apart from that fallback.
+
+## Updates
+
+- AA Intelligence Index snapshot bumped from v4.3.2 (read 2026-10-17) to v4.3.2 (read 2026-10-20). The index revision, scale, and leader are unchanged — Claude Opus 5.5 still leads at 58 — so only the new-model rows were read fresh and `AA_CALIBRATION_POINTS` keeps its anchors.
+- New snapshot rows for the Surplus listings of 2026-10-18..10-20: **MiniMax M3.1 Flash** (43, the single max-default measurement — thirteen over MiniMax-M3 and MiniMax's strongest row on the index), **Qwen3.8 Max (0902)** (45.4, reading the canonical page AA re-pointed at the 0902 snapshot; the old undated 0803 build is deprecated at 40.15 and Surplus delisted the undated SKU, but the undated row stays so undated leaderboard slugs keep joining), **inclusionAI: Ling 3.1 Flash** (41; `inclusionAI` is not a stripped creator prefix, so the row carries the display prefix to exact-join, same as Cohere/Inception), **Reflection: Beam 1.0 501B A23B** (30, the open-weights 501B A23B reasoning model), **Muse Spark Open** (39, read at xhigh — the only effort AA measured for Meta's open-weights coding SKU), and **GLM 5.3 FlashX** (41.9, `~proxy`: GLM-5.3-Flash served at up to 200 tok/s — the listing names the base checkpoint, but `flashx` cannot be a stripped deployment token because that would collapse the key onto GLM-5.3 (44.9), the wrong base).
+- **Qwen3.8 Max Prime** (higher-throughput same-checkpoint SKU) inherits the base row through the stripped `prime` token exactly like GLM 5.3 Prime — no row of its own. **DeepSeek V4.1 Flash 1017** was re-read 40 → 45: AA firmed its max-effort measurement three days after entry, the same past-rounding drift Muse Spark 1.3 needed. The remaining 2026-10-18 listings are unrated and documented in the snapshot header: Qwen3.7 Flash (AA rates the 3.7 Plus/Max tiers but has no Flash page), LiquidAI's LFM2.5-24B-A2B (AA's LFM2.5 pages cover only the 1.2B–8B small models), Moondream 3 Preview / 3.1 (vision-language; no AA pages), Pareto 26.9, and Elorian's Glimpse.
+
+## Validation
+
+Formatting, locked check, locked test (150 tests), Clippy with warnings denied, and the live-data smoke test all pass. The smoke run pins the composite leader — Claude Opus 5.5 — with all eight sources fetched (AA snapshot 167 rows, LiveBench 49 via the new 2.0 endpoint, FrontierCode 46, Terminal-Bench 4 35) and the new rows joining the live boards.
+
 # ParetoWatch v0.18.2
 
 ## Fixes
