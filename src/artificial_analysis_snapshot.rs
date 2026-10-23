@@ -255,6 +255,25 @@
 //! MiMo-V2.5 → its dated 0424 page, Grok Build 0.1 → 0616, and Grok 4.20
 //! Beta → the 0309 v2 build.
 //!
+//! The 2026-10-24 Kimi K3.1 Pro launch bump stayed on v4.3.2: the leader
+//! (Claude Opus 5.5, 58) and the scale are unchanged, so `AA_CALIBRATION_POINTS`
+//! keeps its anchors. Moonshot's post-trained successor to Kimi K3 (2.8T total
+//! / 104B active MoE, 1M context, text+image+video in) entered at 55, #4 on
+//! the index — 11 over the K3 (max) row and trailing only Opus 5.5 (58),
+//! Sonnet 5.5 (56), and Muse Wonder Full (56, no API). It is the leading
+//! open-weights measurement the moment the weights land (promised by
+//! 2026-11-04), narrowing the open-vs-proprietary gap from 12 points to 3.
+//! The gains are agentic-led: #3 on GDPval-AA (1,846 Elo, +312 over K3),
+//! Terminal-Bench 4.0 at 67% — the highest of any model, up from K3's 13 —
+//! AutomationBench-AA 58% → 73%, HLE 47% → 52%, while AA-Omniscience went
+//! 20 → 30 with hallucinations 53% → 44%. The launch was OpenRouter-first:
+//! `moonshotai/kimi-k3.1-pro` listed at the first-party $2/$10/$0.20 per 1M
+//! in/out/cache-hit rates, 33% under K3 on all three, holding K3's $1.98 Cost
+//! per Task (55K output tokens per task, 14% more than K3's 48K). The row
+//! therefore lands ahead of its Surplus listing (the Gemini 4 Argon pattern);
+//! K3.1 Pro Highspeed (2-3x faster) is the same checkpoint and inherits
+//! through the stripped `highspeed` token.
+//!
 //! Deliberately unrated (no AA presence as of 2026-10-23): Aion 2.0/3.0/3.0
 //! Mini, Hermes 3 405B (AA rates only the Hermes 4 generation), Palmyra
 //! Vision 7B, Qwen 2.5 7B, GPT-OSS Safeguard
@@ -295,6 +314,20 @@ pub(crate) const ARTIFICIAL_ANALYSIS_SNAPSHOT_VERSION: &str = "v4.3.2";
 /// family. Names should mirror Surplus display names so exact-key joins hit
 /// before fuzzy matching has to.
 pub(crate) const SNAPSHOT_ROWS: &[(&str, f64)] = &[
+    // Added 2026-10-24 for the Kimi K3.1 Pro launch (AA's 2026-10-24
+    // writeup; see the header notes). Moonshot's post-trained successor to
+    // Kimi K3 entered at 55 (#4, max effort), 11 over the K3 (max) row below
+    // — the new leading open-weights measurement once the promised 2026-11-04
+    // weights land, and ahead of any Surplus listing (the Gemini 4 Argon
+    // pattern). OpenRouter listed `moonshotai/kimi-k3.1-pro` at launch-day
+    // first-party pricing of $2/$10/$0.20 per 1M in/out/cache-hit tokens, 33%
+    // under K3 on all three rates, so the row lands with purchasable asks
+    // from day one even before Surplus; Cost per Task holds K3's $1.98 (55K
+    // output tokens per task, 14% more than K3's 48K, at the lower prices).
+    // K3.1 Pro Highspeed is the same checkpoint served 2-3x faster, so it
+    // inherits through the stripped `highspeed` token like MiMo-V2.6-Pro-
+    // UltraSpeed, not a row.
+    ("Kimi K3.1 Pro", 55.0),
     // Added in the second 2026-10-23 bump (the full-table re-read; see the
     // header notes). DeepSeek V4.1 Flash Uncensored is dealignai's uncensored
     // finetune of the 1017 build (Surplus listed it 2026-10-21; "origin
