@@ -205,23 +205,69 @@
 //! 2026-10-13..15 evaluations of models with no Surplus listing (Muse Wonder
 //! Full, Solar Pro 4, Bolt 74B-A9B) need no rows.
 //!
-//! Deliberately unrated (no AA presence as of 2026-10-20): Aion 2.0/3.0/3.0
-//! Mini, Hermes 3 405B, Palmyra Vision 7B, Qwen 2.5 7B, GPT-OSS Safeguard
+//! A second 2026-10-23 bump the same day did the first full-table re-read
+//! since the v4.3 rebaseline: every row was fetched from its live model page
+//! and compared against the stored value. The index stayed v4.3.2 and the
+//! leader (Claude Opus 5.5, 58) is unchanged, so `AA_CALIBRATION_POINTS`
+//! keeps its anchors. The leaderboard itself gained a Status filter defaulting
+//! to Current (133 ranked): older models are hidden from the table but their
+//! pages still live — GPT-6 Sol re-read unchanged at 48 (AA marks it "no
+//! publicly available API"; its new "Daybreak Blue" variant is unevaluated
+//! and has no Surplus listing, so no row). Thirty-four families had drifted
+//! past rounding since their reads (mostly a single point: GPT-6 Luna
+//! 37 → 38, MiniMax-M3 29.6 → 29, Qwen 3.7 Plus and Hy3 25.8 → 25, Qwen3.5
+//! 397B A17B 19.1 → 18, Nemotron 3.5 Lightning 13.6 → 13, …) and moved to
+//! their live integer displays. Three families moved for structural reasons:
+//! AA folded the DeepSeek V4 Flash and V4 Pro canonical pages onto their
+//! dated refresh builds (the undated pages now measure 0731/0813, the same
+//! fold R1 0528 got, so both rows per family read one page — V4 Flash
+//! 24.6 → 34, V4 Pro 30.9 → 36, and the dated rows re-read 34/36); Grok 4.1
+//! Fast's reasoning evaluation is gone from AA (only the non-reasoning run
+//! remains), so the row falls back to 11 per the no-reasoning-run policy;
+//! and Qwen3 VL 235B A22B lost its reasoning page, reading the instruct-only
+//! 10, while the Nemotron Nano 12B v2 row does the same at 6. Three rows
+//! joined: DeepSeek V4.1 Flash Uncensored (listed 2026-10-21, dealignai's
+//! uncensored finetune of the 1017 build — the listing names the base
+//! checkpoint, so it ~proxies the 1017 row the way Abliterated Large V2
+//! proxies GLM-5.3, and the app's uncensored flag applies), MiMo-V2.6-Flash
+//! (AA finally published the Flash page: 38, eight under the Pro — it leaves
+//! the unrated list), and Thinking Machines: Inkling (a Surplus listing
+//! since 2026-07-24 — an auto-proposed SKU with live asks — that AA now
+//! rates 25 at xhigh, the only effort measured; Inkling Small (26) is a
+//! separate SKU Surplus does not list, so it gets no row). AA REMOVED the
+//! undated `qwen3-8-flash` page (404; only the distinct Aug-26
+//! `qwen3-8-flash-next` preview remains rated), so the Qwen3.8 Flash row and
+//! the Qwen3.8 Omni Flash row that ~proxied it lost their rows rather than
+//! keeping stale reads — the GLM-4.5 precedent — and the undated Surplus
+//! SKUs fall back to the neutral prior. GLM-4.7-Thinking's page was folded
+//! into the base GLM-4.7 page, so the SKU now inherits through
+//! [`SAME_WEIGHTS_SKU_ALIASES`] exactly like DeepSeek R1 0528. Four pages
+//! were retitled onto dated/renamed builds with unchanged values, verified
+//! rather than moved: Gemini 3 Flash Preview → the GA reasoning page (26),
+//! MiMo-V2.5 → its dated 0424 page, Grok Build 0.1 → 0616, and Grok 4.20
+//! Beta → the 0309 v2 build.
+//!
+//! Deliberately unrated (no AA presence as of 2026-10-23): Aion 2.0/3.0/3.0
+//! Mini, Hermes 3 405B (AA rates only the Hermes 4 generation), Palmyra
+//! Vision 7B, Qwen 2.5 7B, GPT-OSS Safeguard
 //! 20B/120B, Grok 4.20 Multi-Agent Beta, Venice rebrands, uncensored finetunes
-//! such as GLM 4.7 Flash Heretic (Abliterated Large V2 above is the lone
-//! exception — its listing names the base checkpoint, so it proxies instead
-//! of sitting unrated), Seed 2.1 Turbo and Seed-2.0-Code, the
-//! 2026-09-11 Sakana
-//! listings (Fugu Max, Fugu Ultra v2), MiMo-V2.6-Flash (the Pro sibling is
-//! rated; AA has no Flash page yet), TypeSafe's JEV 1.13 decisions model, and
-//! Fireworks Ember-1 (a Kimi-K3-derived reasoning model; AA has no page, and
-//! it deliberately does NOT proxy Kimi K3 — it is a derivative build, not the
-//! same checkpoint). The 2026-10-18 listings join them: Qwen3.7 Flash (AA
+//! such as GLM 4.7 Flash Heretic (Abliterated Large V2 and DeepSeek V4.1
+//! Flash Uncensored above are the lone exceptions — their listings name the
+//! base checkpoint, so they proxy instead of sitting unrated), Seed 2.1
+//! Turbo and Seed-2.0-Code, the 2026-09-11 Sakana
+//! listings (Fugu Max, Fugu Ultra v2), TypeSafe's JEV 1.13 decisions model,
+//! and Fireworks Ember-1 (a Kimi-K3-derived reasoning model; AA has no page,
+//! and it deliberately does NOT proxy Kimi K3 — it is a derivative build, not
+//! the same checkpoint). The 2026-10-18 listings join them: Qwen3.7 Flash (AA
 //! rates the 3.7 Plus/Max tiers but has no Flash page, and no same-checkpoint
 //! sibling to proxy), LiquidAI's LFM2.5-24B-A2B (AA's LFM2.5 pages cover only
 //! the 1.2B–8B small models; the 24B-A2B is not the LFM2 24B A2B checkpoint),
 //! Moondream 3 Preview and Moondream 3.1 (vision-language; no AA pages),
-//! Pareto 26.9 (no AA page), and Elorian's Glimpse (no AA page).
+//! Pareto 26.9 (no AA page), and Elorian's Glimpse (no AA page). The undated
+//! Qwen3.8 Flash and Qwen3.8 Omni Flash SKUs joined them on 2026-10-23 when
+//! AA removed the undated `qwen3-8-flash` page: only the distinct Aug-26
+//! `qwen3-8-flash-next` preview remains rated, and a different build is not
+//! a proxy source.
 //! MiMo-V2.6-Pro-UltraSpeed is a same-checkpoint speed wrapper, not an
 //! unrated model: it inherits the MiMo-V2.6-Pro row because benchmark
 //! matching strips the `ultraspeed` deployment token. AA had additionally
@@ -241,6 +287,23 @@ pub(crate) const ARTIFICIAL_ANALYSIS_SNAPSHOT_VERSION: &str = "v4.3.2";
 /// family. Names should mirror Surplus display names so exact-key joins hit
 /// before fuzzy matching has to.
 pub(crate) const SNAPSHOT_ROWS: &[(&str, f64)] = &[
+    // Added in the second 2026-10-23 bump (the full-table re-read; see the
+    // header notes). DeepSeek V4.1 Flash Uncensored is dealignai's uncensored
+    // finetune of the 1017 build (Surplus listed it 2026-10-21; "origin
+    // Experiential Labs", FP8); AA rates no page, but unlike most uncensored
+    // builds the listing names its base checkpoint, so the row ~proxies the
+    // 1017 measurement exactly the way Abliterated Large V2 ~proxies GLM-5.3
+    // — and the app's uncensored flag marks the listing independently of the
+    // proxy. MiMo-V2.6-Flash finally got its AA page (the unrated note had
+    // been waiting for it): 38, eight under the Pro sibling's 46. Inkling is
+    // Thinking Machines' model, listed on Surplus since 2026-07-24 as an
+    // auto-proposed SKU ("from openrouter, venice. Awaiting review.") that
+    // nonetheless carries live asks; AA rates it 25 at xhigh, the only effort
+    // measured, so the row reads that. Inkling Small (26) is a separate SKU
+    // with no Surplus listing and gets no row.
+    ("DeepSeek V4.1 Flash Uncensored", 45.0), // ~proxy: the 1017 build with refusals removed; AA rates no page
+    ("MiMo-V2.6-Flash", 38.0),
+    ("Thinking Machines: Inkling", 25.0), // xhigh, the only effort AA measured; `thinking machines` is not a stripped creator prefix
     // Added 2026-10-23 for AA's 2026-10-22 release, read from the
     // still-v4.3.2 index (leader and scale unchanged). Ling 3.1 Flash 1019 —
     // the 1019 dated refresh of inclusionAI's Flash family, evaluated at 44,
@@ -362,7 +425,6 @@ pub(crate) const SNAPSHOT_ROWS: &[(&str, f64)] = &[
     // GLM 5.3 Prime (same-checkpoint speed variant) and Fireworks Ember-1
     // (Kimi-K3 derivative, unrated) need no rows — see the header notes.
     ("Claude Sonnet 5.5", 56.0),
-    ("Qwen3.8 Omni Flash", 39.9), // ~proxy: text sibling Qwen3.8 Flash; AA has no omni page
     ("Cohere: Command A+", 13.0),
     // Added 2026-09-22 for the Surplus listings of 2026-09-20..09-22, read
     // from the v4.3.2 index (same scale as v4.3, integer displays). Claude
@@ -381,8 +443,8 @@ pub(crate) const SNAPSHOT_ROWS: &[(&str, f64)] = &[
     ("GPT-6 Sol Pro", 48.0), // same weights as GPT-6 Sol; see SAME_WEIGHTS_SKU_ALIASES
     ("Grok 4.7", 46.0),
     ("MiMo-V2.6-Pro", 46.0),
-    ("GPT-6 Luna", 37.0),
-    ("GPT-6 Luna Pro", 37.0), // same weights as GPT-6 Luna; see SAME_WEIGHTS_SKU_ALIASES
+    ("GPT-6 Luna", 38.0), // re-read 2026-10-23 (second bump): page firmed at 38 (was 37.0 at the 2026-09-22 entry)
+    ("GPT-6 Luna Pro", 38.0), // same weights as GPT-6 Luna; see SAME_WEIGHTS_SKU_ALIASES
     // Added 2026-09-19 for the Surplus listings of 2026-09-03..09-11, read
     // from the v4.3 index. GPT-6 Astra entered at AA's top alongside Fable 5.1
     // (AA's own writeup calls it a tie at lower cost); DeepSeek V4.1 Flash is
@@ -404,49 +466,48 @@ pub(crate) const SNAPSHOT_ROWS: &[(&str, f64)] = &[
     ("Muse Spark 1.3", 48.0), // re-read 2026-10-15: the Wonder launch re-measured max at 48 (was 45.2 v4.3)
     ("Meta: Muse Spark 1.3 Contributor", 48.0), // same weights; see SAME_WEIGHTS_SKU_ALIASES (AA rates no Contributor page)
     ("Muse Spark 1.2", 39.8),
-    ("DeepSeek V4.1 Flash", 39.5),
+    ("DeepSeek V4.1 Flash", 39.0), // re-read 2026-10-23: page drifted a point under the 0910 build's 39.5 v4.3 read
     ("Gemini 3.8 Flash", 41.2),
     ("Gemini 3.7 Flash", 39.4),
     ("Gemini 3.6 Flash", 34.3),
     ("Grok 4.5", 39.1),
     ("Claude Sonnet 5", 38.4),
-    ("GPT-5.5", 38.6),
+    ("GPT-5.5", 38.0),
     ("Claude Opus 4.8", 42.0),
     ("Claude Opus 4.7", 40.7),
     ("Muse Spark 1.1", 34.3),
-    ("Muse Glimmer 30B", 18.1),
-    ("DeepSeek V4 Pro 0813", 36.3),
+    ("Muse Glimmer 30B", 17.0),
+    ("DeepSeek V4 Pro 0813", 36.0), // re-read 2026-10-23: AA folded the canonical page onto the 0813 build (the dated slug now soft-404s)
     ("GLM-5.2", 34.0),
     ("GPT-5.4", 39.0),
-    ("GPT-5.4 Mini", 24.6),
+    ("GPT-5.4 Mini", 24.0),
     ("GPT-5.4 Nano", 21.2),
     ("GPT-5.2", 30.4),
     ("GPT-5 Mini", 17.4),
-    ("DeepSeek V4 Flash 0731", 34.5),
+    ("DeepSeek V4 Flash 0731", 34.0), // re-read 2026-10-23: the canonical page's 0731 measurement firmed at 34 (was 34.5 v4.3)
     ("GPT-5.6 Luna", 37.5),
     ("Gemini 3.5 Flash", 33.0),
-    ("Gemini 3.5 Flash Lite", 22.7),
+    ("Gemini 3.5 Flash Lite", 22.0),
     ("Gemini 3.1 Pro Preview", 30.4),
     ("Gemini 3.1 Flash-Lite", 16.0),
     ("Gemini 3 Flash Preview", 26.3),
     ("Claude Sonnet 4.6", 24.7),
-    ("MiniMax-M3", 29.6),
+    ("MiniMax-M3", 29.0),
     ("MiniMax-M2.7", 23.2),
     ("MiniMax-M2.5", 22.8),
     ("MiniMax-M2.1", 20.9),
     ("MiniMax-M2", 18.6),
-    ("DeepSeek V4 Pro", 30.9),
+    ("DeepSeek V4 Pro", 36.0), // re-read 2026-10-23: the canonical page now measures the 0813 build (was the undated read 30.9)
     ("Kimi K2.6", 27.5),
     ("Claude Opus 4.6", 26.4),
     ("Qwen3.8 27B", 33.9),
-    ("Qwen3.8 Flash", 39.9),
     ("Kimi K2.7 Code", 26.3),
     ("Kimi K2 Thinking", 22.0),
     ("Kimi K2", 12.7),
     ("MiMo-V2.5-Pro", 26.4),
     ("MiMo-V2.5", 22.3),
-    ("Hy3", 25.8),
-    ("DeepSeek V4 Flash", 24.6),
+    ("Hy3", 25.0),
+    ("DeepSeek V4 Flash", 34.0), // re-read 2026-10-23: the canonical page now measures the 0731 build (was the undated read 24.6)
     ("GLM-5.1", 26.4),
     ("GLM-5", 27.9),
     ("GLM-4.7", 22.2),
@@ -456,14 +517,14 @@ pub(crate) const SNAPSHOT_ROWS: &[(&str, f64)] = &[
     // v4.3, so the family is unrated now and falls back to the neutral prior.
     ("GLM-4.5-Air", 11.1),
     ("Grok 4.3", 25.4),
-    ("Grok 4.1 Fast", 17.9),
-    ("Grok 4", 22.5),
+    ("Grok 4.1 Fast", 11.0), // re-read 2026-10-23: AA retired the reasoning evaluation; only the non-reasoning run (11) remains, so the row falls back per the no-reasoning-run policy (was 17.9)
+    ("Grok 4", 22.0),
     ("NVIDIA Nemotron 3 Ultra 550B A55B", 23.4),
-    ("NVIDIA Nemotron 3.5 Lightning 30B", 13.6),
+    ("NVIDIA Nemotron 3.5 Lightning 30B", 13.0),
     ("Claude 4.5 Sonnet", 19.3),
     ("Claude Opus 4.5", 23.7),
-    ("Kimi K2.5", 23.5),
-    ("Qwen3.5 397B A17B", 19.1),
+    ("Kimi K2.5", 23.0),
+    ("Qwen3.5 397B A17B", 18.0),
     ("Qwen3.5 122B A10B", 16.2),
     ("DeepSeek V3.2", 16.0),
     ("DeepSeek V3.1", 13.7),
@@ -473,25 +534,25 @@ pub(crate) const SNAPSHOT_ROWS: &[(&str, f64)] = &[
     // SAME_WEIGHTS_SKU_ALIASES).
     ("DeepSeek R1 0528", 13.1),
     ("DeepSeek R1", 13.1),
-    ("Qwen3.6 27B", 21.9),
-    ("Qwen3.6 35B A3B", 18.8),
+    ("Qwen3.6 27B", 21.0),
+    ("Qwen3.6 35B A3B", 18.0),
     ("Qwen3.5 35B A3B", 19.3),
     ("Qwen3 Next 80B A3B Instruct", 9.6),
-    ("Qwen3 Coder Next", 10.1),
+    ("Qwen3 Coder Next", 9.0),
     ("Qwen3 Coder 480B", 11.9),
     ("Qwen3 Coder 480B Turbo", 11.9), // same weights served faster; see SAME_WEIGHTS_SKU_ALIASES
     ("Gemma 4 31B", 15.4),
     ("Gemma 4 26B A4B", 16.7),
     ("Claude 4.5 Haiku", 15.4),
-    ("GPT-5.5 Instant", 26.8),
+    ("GPT-5.5 Instant", 26.0),
     ("gpt-oss-120b", 12.3),
     ("gpt-oss-20b", 9.0),
     ("Qwen3 235B A22B 2507", 12.0),
     ("Mistral Small 3.2", 7.0),
     ("Mistral Small 3.2 24B Instruct", 7.0), // same model, open-weights listing name; see SAME_WEIGHTS_SKU_ALIASES
-    ("Mistral Small 4", 11.5),
+    ("Mistral Small 4", 11.0),
     ("Mistral Large 3", 9.7),
-    ("Llama 4 Scout", 6.5),
+    ("Llama 4 Scout", 6.0),
     ("Llama 3.3 70B", 7.7),
     //
     // Backfill (re-read from the v4.3 model pages on 2026-09-19): remaining
@@ -504,20 +565,22 @@ pub(crate) const SNAPSHOT_ROWS: &[(&str, f64)] = &[
     ("GPT-5 Nano", 13.0),
     ("GPT-5.2 Codex", 28.5),
     ("GPT-5.3 Codex", 32.5),
-    ("GPT-5.6 Sol Pro", 47.1), // same weights as GPT-5.6 Sol; see INHERITED_EXECUTION_MODE_NOTES
-    ("GPT-5.6 Terra Pro", 42.3), // same weights as GPT-5.6 Terra; see INHERITED_EXECUTION_MODE_NOTES
-    ("GPT-5.6 Luna Pro", 37.5),  // same weights as GPT-5.6 Luna; see INHERITED_EXECUTION_MODE_NOTES
+    ("GPT-5.6 Sol Pro", 47.1), // same weights as GPT-5.6 Sol; see SAME_WEIGHTS_SKU_ALIASES
+    ("GPT-5.6 Terra Pro", 42.3), // same weights as GPT-5.6 Terra; see SAME_WEIGHTS_SKU_ALIASES
+    ("GPT-5.6 Luna Pro", 37.5), // same weights as GPT-5.6 Luna; see SAME_WEIGHTS_SKU_ALIASES
     // Google
-    ("Gemini 2.5 Pro", 16.7),
+    ("Gemini 2.5 Pro", 16.0),
     ("Gemini 2.5 Flash", 9.9),
     // xAI
     ("Grok 4.20 Beta", 25.7),
     ("Grok Build 0.1", 27.2),
     ("Grok Code Fast 1", 14.1),
     // Z AI
+    // GLM-4.7-Thinking's AA page was folded into the base GLM-4.7 page (see
+    // SAME_WEIGHTS_SKU_ALIASES), so the SKU reads the base measurement.
     ("GLM-4.7-Thinking", 22.2),
     ("GLM-5 Turbo", 26.6),
-    ("GLM 5V Turbo", 23.5),
+    ("GLM 5V Turbo", 23.0),
     // Meta — Llama 3.2 3B lost its AA page along with GLM-4.5; it was an
     // ~est row already and stays unrated under v4.3.
     // Gemma open models
@@ -528,28 +591,28 @@ pub(crate) const SNAPSHOT_ROWS: &[(&str, f64)] = &[
     // Mistral family
     ("Magistral Small 2509", 8.6),
     ("Ministral 14B 3.0", 6.0),
-    ("Ministral 3 8B", 5.5),
+    ("Ministral 3 8B", 5.0),
     ("Ministral 3B", 4.8),
     ("Devstral 2 123B", 9.4),
     // NVIDIA
-    ("NVIDIA Nemotron 3 Super 120B", 13.6),
+    ("NVIDIA Nemotron 3 Super 120B", 13.0),
     ("NVIDIA Nemotron Cascade 2 30B", 11.7),
     ("NVIDIA Nemotron 3 Nano 30B A3B", 8.9),
-    ("NVIDIA Nemotron Nano 12B v2", 7.5), // ~est: VL Reasoning page (non-reasoning unrated)
+    ("NVIDIA Nemotron Nano 12B v2", 6.0), // ~est: the VL Reasoning page is gone; the row reads the page's non-reasoning 6 (was 7.5)
     ("NVIDIA Nemotron Nano 9B v2", 6.8),
     // Qwen
-    ("Qwen 3.7 Max", 29.9),
-    ("Qwen 3.7 Plus", 25.8),
+    ("Qwen 3.7 Max", 29.0),
+    ("Qwen 3.7 Plus", 25.0),
     ("Qwen3.5 Plus", 20.4),  // ~proxy: Qwen3.5 Omni Plus
-    ("Qwen3.5 Flash", 12.5), // ~proxy: Qwen3.5 Omni Flash
-    ("Qwen 3.5 9B", 13.7),
-    ("Qwen3 VL 235B A22B", 13.4),
+    ("Qwen3.5 Flash", 12.0), // ~proxy: Qwen3.5 Omni Flash (re-read 2026-10-23: source page 12)
+    ("Qwen 3.5 9B", 11.0),
+    ("Qwen3 VL 235B A22B", 10.0), // re-read 2026-10-23: the reasoning page is gone; only the instruct run (10) remains (was 13.4)
     ("Qwen3 235B A22B Thinking 2507", 12.7),
     ("Qwen3 32B", 7.2),
     ("Qwen3 30B A3B", 7.6), // reasoning variant (instruct is lower)
     ("Qwen3 Coder 30B A3B Instruct", 9.6),
     // Others
-    ("Mercury 2", 11.5),
+    ("Mercury 2", 11.0),
     ("Trinity Large Thinking", 10.9),
 ];
 
@@ -616,6 +679,11 @@ pub(crate) const SAME_WEIGHTS_SKU_ALIASES: &[(&str, &str, &str)] = &[
         "Mistral Small 3.2 24B Instruct",
         "Mistral Small 3.2",
         "open-weights listing name of the same model",
+    ),
+    (
+        "GLM-4.7-Thinking",
+        "GLM-4.7",
+        "thinking-mode page AA folded into the base",
     ),
     (
         "Qwen3 Coder 480B Turbo",
@@ -761,8 +829,8 @@ mod tests {
             .iter()
             .find(|b| benchmark_model_key(&b.slug) == "glm 5 3")
             .unwrap();
-        assert_eq!(deepseek_release.agentic_coding, Some(34.5));
-        assert_eq!(deepseek_base.agentic_coding, Some(24.6));
+        assert_eq!(deepseek_release.agentic_coding, Some(34.0));
+        assert_eq!(deepseek_base.agentic_coding, Some(34.0));
         assert_eq!(glm.agentic_coding, Some(44.9));
     }
 
@@ -783,16 +851,15 @@ mod tests {
             ("Claude Fable 5.1", 53.4),
             ("GPT-6 Astra", 52.8),
             ("Gemini 3.6 Flash", 34.3),
-            ("Gemini 3.5 Flash Lite", 22.7),
-            ("Qwen3.8 Flash", 39.9),
+            ("Gemini 3.5 Flash Lite", 22.0),
             ("MiMo-V2.5", 22.3),
-            ("Muse Glimmer 30B", 18.1),
-            ("NVIDIA Nemotron 3.5 Lightning 30B", 13.6),
+            ("Muse Glimmer 30B", 17.0),
+            ("NVIDIA Nemotron 3.5 Lightning 30B", 13.0),
             // Re-read 2026-10-15 (see the refresh test): the Wonder launch
             // moved the max-effort page from the 45.2 v4.3 read to 48.
             ("Muse Spark 1.3", 48.0),
             ("Gemini 3.8 Flash", 41.2),
-            ("DeepSeek V4.1 Flash", 39.5),
+            ("DeepSeek V4.1 Flash", 39.0),
             ("Meta: Muse Spark 1.3 Contributor", 48.0),
         ] {
             assert_eq!(
@@ -801,6 +868,12 @@ mod tests {
                 "{name} missing or wrong in snapshot"
             );
         }
+        // Qwen3.8 Flash lost its AA page on 2026-10-23 (see the full-sweep
+        // test) and must not come back as a stale row.
+        assert!(
+            score_of("Qwen3.8 Flash").is_none(),
+            "Qwen3.8 Flash lost its AA page and must not have a row"
+        );
     }
 
     #[test]
@@ -821,8 +894,8 @@ mod tests {
             ("Claude Opus 5.5", 58.0),
             ("GPT-6 Sol", 48.0),
             ("GPT-6 Sol Pro", 48.0),
-            ("GPT-6 Luna", 37.0),
-            ("GPT-6 Luna Pro", 37.0),
+            ("GPT-6 Luna", 38.0),
+            ("GPT-6 Luna Pro", 38.0),
             ("Grok 4.7", 46.0),
             ("MiMo-V2.6-Pro", 46.0),
             ("MiMo-V2.6-Pro-UltraSpeed", 46.0),
@@ -839,7 +912,9 @@ mod tests {
     fn aa_snapshot_covers_the_2026_09_29_sonnet_refresh() {
         // Rows added 2026-09-29 under the still-v4.3.2 index: Claude Sonnet
         // 5.5 (the new #3, below Opus 5.5's 58 and above the Fable 5.1/Astra
-        // tier), the first Cohere row, and the ~proxied Qwen3.8 Omni Flash.
+        // tier) and the first Cohere row. The Qwen3.8 Omni Flash row that
+        // ~proxied its text sibling was removed on 2026-10-23 when AA deleted
+        // the sibling's page (see the full-sweep test).
         // GLM 5.3 Prime inherits the GLM-5.3 row through key equality (the
         // `prime` deployment token is stripped), NOT through a row of its own,
         // and the Sonnet family must keep 5 and 5.5 as distinct keys.
@@ -851,7 +926,6 @@ mod tests {
         };
         for (name, expected) in [
             ("Claude Sonnet 5.5", 56.0),
-            ("Qwen3.8 Omni Flash", 39.9),
             ("Cohere: Command A+", 13.0),
             ("Claude Sonnet 5", 38.4),
         ] {
@@ -874,6 +948,10 @@ mod tests {
         assert!(
             score_of("Ember-1").is_none(),
             "Fireworks Ember-1 is unrated and must not have a row"
+        );
+        assert!(
+            score_of("Qwen3.8 Omni Flash").is_none(),
+            "Qwen3.8 Omni Flash lost its proxy source on 2026-10-23 and must not have a row"
         );
     }
 
@@ -1004,14 +1082,15 @@ mod tests {
         };
         // The Surplus display name carries the "NVIDIA: " creator prefix the
         // key strips; assert through it so the exact join is what's covered.
-        // The 1017 entered at 40 and was re-read to 45 on 2026-10-20, and the
-        // Nemotron row was re-read to 26 on 2026-10-23 (see those days' tests);
+        // The 1017 entered at 40 and was re-read to 45 on 2026-10-20, the
+        // Nemotron row was re-read to 26 on 2026-10-23, and the undated family
+        // row was re-read to 39 in the same day's full sweep (was 39.5 v4.3);
         // this test pins the family separations, not the entry values.
         for (name, expected) in [
             ("DeepSeek V4.1 Flash 1017", 45.0),
             ("NVIDIA: Nemotron 3.5 Super VL", 26.0),
             ("Mistral Large 4", 38.0),
-            ("DeepSeek V4.1 Flash", 39.5),
+            ("DeepSeek V4.1 Flash", 39.0),
         ] {
             assert_eq!(
                 score_of(name),
@@ -1088,6 +1167,84 @@ mod tests {
                 .any(|(sku, base, _)| sku == &"Meta: Muse Spark 1.2 Contributor"
                     && base == &"Muse Spark 1.2"),
             "Muse Spark 1.2 Contributor must be registered in SAME_WEIGHTS_SKU_ALIASES"
+        );
+    }
+
+    #[test]
+    fn aa_snapshot_covers_the_2026_10_23_full_sweep() {
+        // The second 2026-10-23 bump re-read every row against its live AA
+        // model page (the first full-table re-read since the v4.3
+        // rebaseline). The index stayed v4.3.2 with the leader (Claude Opus
+        // 5.5, 58) unchanged, so `AA_CALIBRATION_POINTS` keeps its anchors.
+        // This test pins the structural moves: the three new rows (the
+        // uncensored DeepSeek proxy, Xiaomi's newly rated MiMo-V2.6-Flash,
+        // and Thinking Machines' Inkling), the DeepSeek canonical-page folds
+        // onto the dated 0731/0813 builds, the single-point drifts with the
+        // biggest chart impact, and the AA page removals. GPT-6 Sol stayed at
+        // 48 even though the Current-filtered leaderboard hides it.
+        let rows = artificial_analysis_snapshot();
+        let score_of = |name: &str| {
+            rows.iter()
+                .find(|b| benchmark_model_key(&b.slug) == benchmark_model_key(name))
+                .and_then(|b| b.agentic_coding)
+        };
+        for (name, expected) in [
+            ("DeepSeek V4.1 Flash Uncensored", 45.0),
+            ("MiMo-V2.6-Flash", 38.0),
+            ("Thinking Machines: Inkling", 25.0),
+            ("DeepSeek V4 Flash", 34.0),
+            ("DeepSeek V4 Flash 0731", 34.0),
+            ("DeepSeek V4 Pro", 36.0),
+            ("DeepSeek V4 Pro 0813", 36.0),
+            ("GPT-6 Luna", 38.0),
+            ("GPT-6 Luna Pro", 38.0),
+            ("Grok 4.1 Fast", 11.0),
+            ("Qwen3 VL 235B A22B", 10.0),
+            ("NVIDIA Nemotron Nano 12B v2", 6.0),
+            ("GLM-4.7-Thinking", 22.2),
+            ("GPT-6 Sol", 48.0),
+        ] {
+            assert_eq!(
+                score_of(name),
+                Some(expected),
+                "{name} missing or wrong in snapshot"
+            );
+        }
+        // AA removed the undated qwen3-8-flash page (only the distinct Aug-26
+        // flash-next preview remains rated), so both undated rows are gone and
+        // their Surplus SKUs fall back to the neutral prior — the GLM-4.5
+        // precedent, not a stale read.
+        for removed in ["Qwen3.8 Flash", "Qwen3.8 Omni Flash"] {
+            assert!(
+                score_of(removed).is_none(),
+                "{removed} lost its AA page and must not have a row"
+            );
+        }
+        // The uncensored proxy keeps its own key (the listing is a finetune,
+        // not the 1017 checkpoint), the Flash key stays distinct from the Pro,
+        // and the Inkling row keeps its creator prefix in the key.
+        assert_ne!(
+            benchmark_model_key("DeepSeek V4.1 Flash Uncensored"),
+            benchmark_model_key("DeepSeek V4.1 Flash 1017"),
+            "the uncensored finetune must not collapse onto the 1017 row it proxies"
+        );
+        assert_ne!(
+            benchmark_model_key("MiMo-V2.6-Flash"),
+            benchmark_model_key("MiMo-V2.6-Pro"),
+            "the Flash tier must not collapse onto the Pro tier"
+        );
+        assert_ne!(
+            benchmark_model_key("Thinking Machines: Inkling"),
+            benchmark_model_key("Inkling Small"),
+            "the base Inkling must not collapse onto the unlisted Small SKU"
+        );
+        // The thinking SKU resolves through the alias table (its page was
+        // folded into the base GLM-4.7 page), not through a fuzzy join.
+        assert!(
+            SAME_WEIGHTS_SKU_ALIASES
+                .iter()
+                .any(|(sku, base, _)| sku == &"GLM-4.7-Thinking" && base == &"GLM-4.7"),
+            "GLM-4.7-Thinking must be registered in SAME_WEIGHTS_SKU_ALIASES"
         );
     }
 
