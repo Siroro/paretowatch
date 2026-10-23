@@ -32,12 +32,12 @@ const AUTOMATIONBENCH_URL: &str = "https://artificialanalysis.ai/evaluations/aut
 
 /// Effort tiers AA names in its variant suffixes. Anything else inside the
 /// parentheses (`Default Fallback`, run notes) is configuration, not effort.
-const NAMED_EFFORTS: [&str; 5] = ["low", "medium", "high", "xhigh", "max"];
+pub(crate) const NAMED_EFFORTS: [&str; 5] = ["low", "medium", "high", "xhigh", "max"];
 
 /// The AA boards rate some models under short display names that normalize
 /// differently from the Surplus listing. Map them to the listing name so
 /// exact-key joins hit first.
-fn alias_display_name(base: &str) -> &str {
+pub(crate) fn alias_display_name(base: &str) -> &str {
     match base {
         // Surplus lists "Thinking Machines: Inkling"; the creator prefix is
         // not one benchmark matching strips.

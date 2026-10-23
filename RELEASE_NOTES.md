@@ -1,3 +1,19 @@
+# ParetoWatch v0.21.0
+
+## Features
+
+- **The main AA Intelligence Index is now automated — no API key.** The leaderboard page (`artificialanalysis.ai/leaderboards/models`) embeds every CURRENT model with its `intelligenceIndex` (plus an `intelligenceIndexIsEstimated` flag) in its server-rendered RSC payload, so one plain HTML request refreshes the whole frontier every six hours. The bundled snapshot becomes the offline BASE of a hybrid:
+  - live non-estimated values replace the bundled score for the family — exact canonical key first, then the 0.80 fuzzy bar (the leaderboard drops parameter suffixes AA's own snapshot carries, e.g. "Nemotron 3.5 Lightning" vs "... 30B") — and the row name re-tags from "snapshot 2026-10-23" to "live <today>";
+  - variant policy mirrors the snapshot's: prefer the best reasoning effort the page lists (max > xhigh > high > medium > low), fall back to the bare entry, and only then to an explicit non-reasoning run;
+  - same-weights SKU aliases (`GPT-6.1 Sol Pro`, the Contributor SKUs, ...) follow their base variant's live value, keeping their inheritance disclosure;
+  - current models the payload rates that the snapshot never curated get fresh "live" rows — Muse Wonder Full (AA 55.8) enters the composite at #2 on real measurements, with no Surplus listing to plot until one exists;
+  - everything the payload cannot see — legacy families (GPT-5.2, Opus 4.x, Grok 4.6, GLM-5.2 ...), ~proxy rows, AA "~est" values — keeps the bundled read, and a fetch failure degrades to exactly today's behavior (the plain bundled snapshot). This source can no longer fail.
+- The source joined the periodic benchmark refresh (`remote_sources`), so the app's startup seed of bundled rows is replaced by overlaid rows within the first refresh cycle. Labels updated: "Artificial Analysis (live + snapshot)", metric hint "Intelligence Index (live + snapshot fallback)". Manual snapshot bumps remain for what automation cannot do: legacy-row re-reads, new-family curation (proxy/alias/unrated policy), and the calibration anchors — the snapshot header documents the new division of labor.
+
+## Validation
+
+Formatting, locked check, locked test (166 tests), Clippy with warnings denied, and the live-data smoke test all pass. The smoke run shows the overlay live: AA rows carry fresh decimal reads (Opus 5.5 57.62 vs the bundled 58 integer), Muse Wonder Full joined, and the composite leader (Claude Opus 5.5, 99.5) is unchanged.
+
 # ParetoWatch v0.20.0
 
 ## Features

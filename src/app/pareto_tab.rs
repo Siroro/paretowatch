@@ -119,7 +119,7 @@ impl ParetoWatchApp {
                 // metric note would just repeat it in the toolbar.
                 ui.label(match self.benchmark_source {
                     BenchmarkSource::ArtificialAnalysisSnapshot => {
-                        "Metric: Intelligence Index snapshot"
+                        "Metric: Intelligence Index (live + snapshot fallback)"
                     }
                     BenchmarkSource::SWERebench => "Metric: Result@1",
                     BenchmarkSource::TerminalBench3 => "Metric: accuracy",
@@ -579,7 +579,9 @@ impl ParetoWatchApp {
         let benchmark_axis_label = match self.benchmark_source {
             BenchmarkSource::CompositeAgentic => "Capability composite percentile (posterior)".to_owned(),
             BenchmarkSource::CompositeDeployment => "Deployment composite percentile (posterior)".to_owned(),
-            BenchmarkSource::ArtificialAnalysisSnapshot => format!("AA Intelligence Index snapshot ({ARTIFICIAL_ANALYSIS_SNAPSHOT_DATE})"),
+            BenchmarkSource::ArtificialAnalysisSnapshot => format!(
+                "AA Intelligence Index (live over {ARTIFICIAL_ANALYSIS_SNAPSHOT_DATE} snapshot)"
+            ),
             BenchmarkSource::SWERebench => "SWE-rebench Result@1".to_owned(),
             BenchmarkSource::TerminalBench3 => "Terminal-Bench 3.0 accuracy".to_owned(),
             BenchmarkSource::TerminalBench4 => "Terminal-Bench 4.0 accuracy".to_owned(),

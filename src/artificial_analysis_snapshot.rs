@@ -1,11 +1,19 @@
 //! Bundled Artificial Analysis Intelligence Index snapshot.
 //!
 //! This data lives apart from `main.rs` so the table can be bumped without
-//! touching any fetch/parse code. It is never presented as live data: the UI
-//! labels it as a static snapshot and the composite treats it as a broad
-//! capability prior that works without an API key.
+//! touching any fetch/parse code. Since 0.21.0 it is the OFFLINE BASE of a
+//! hybrid: `fetch::aa_index` reads the public leaderboard page (no API key)
+//! and overlays live values for every current model onto these rows, while
+//! everything the live payload cannot see — legacy families, ~proxy rows,
+//! AA "~est" values — keeps the bundled read below. The composite still
+//! treats the source as a broad capability prior either way; row names
+//! disclose which read they carry ("live <date>" vs "snapshot <date>").
 //!
 //! # Keeping the snapshot up to date
+//!
+//! The live overlay automates value freshness for current models, so manual
+//! bumps now maintain what automation cannot: legacy-row re-reads, new-family
+//! curation (proxy/alias/unrated policy), and the calibration anchors.
 //!
 //! 1. Open the Artificial Analysis Intelligence Index for [`ARTIFICIAL_ANALYSIS_SNAPSHOT_VERSION`]
 //!    and read each relevant model page.

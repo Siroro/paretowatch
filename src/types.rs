@@ -230,7 +230,7 @@ impl BenchmarkSource {
         match self {
             Self::CompositeAgentic => "Composite (capability)",
             Self::CompositeDeployment => "Composite (deployment)",
-            Self::ArtificialAnalysisSnapshot => "Artificial Analysis (snapshot)",
+            Self::ArtificialAnalysisSnapshot => "Artificial Analysis (live + snapshot)",
             Self::SWERebench => "SWE-rebench",
             Self::TerminalBench3 => "Terminal-Bench 3.0",
             Self::TerminalBench4 => "Terminal-Bench 4.0",
@@ -249,7 +249,7 @@ impl BenchmarkSource {
         match self {
             Self::CompositeAgentic => "Composite",
             Self::CompositeDeployment => "Deploy comp",
-            Self::ArtificialAnalysisSnapshot => "AA snapshot",
+            Self::ArtificialAnalysisSnapshot => "AA Intelligence",
             Self::SWERebench => "SWE-rebench",
             Self::TerminalBench3 => "Terminal-Bench 3",
             Self::TerminalBench4 => "Terminal-Bench 4",
@@ -304,8 +304,12 @@ impl BenchmarkSource {
         )
     }
 
-    pub(crate) fn remote_sources() -> [Self; 11] {
+    pub(crate) fn remote_sources() -> [Self; 12] {
         [
+            // The AA Intelligence Index fetch overlays live leaderboard values
+            // onto the bundled snapshot (it never fails — the bundle is the
+            // offline fallback), so it joins the periodic refresh.
+            Self::ArtificialAnalysisSnapshot,
             Self::SWERebench,
             Self::TerminalBench3,
             Self::TerminalBench4,

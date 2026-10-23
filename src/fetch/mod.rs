@@ -3,6 +3,7 @@
 //! across board fetchers.
 
 pub(crate) mod aa_evals;
+pub(crate) mod aa_index;
 pub(crate) mod deepswe;
 pub(crate) mod design_arena;
 pub(crate) mod frontiercode;
@@ -14,6 +15,7 @@ pub(crate) mod swebench_pro;
 pub(crate) mod terminal_bench;
 
 pub(crate) use aa_evals::*;
+pub(crate) use aa_index::*;
 pub(crate) use deepswe::*;
 pub(crate) use design_arena::*;
 pub(crate) use frontiercode::*;
@@ -36,7 +38,6 @@ use reqwest::blocking::Client;
 use serde_json::Value;
 
 use crate::alerts::evaluate_alerts;
-use crate::artificial_analysis_snapshot::artificial_analysis_snapshot;
 use crate::notifications::SharedNotifications;
 use crate::theme::infer_creator;
 use crate::types::{Benchmark, BenchmarkKind, BenchmarkSource, Quote, Settings};
@@ -166,7 +167,7 @@ pub(crate) fn fetch_benchmark_source(
     source: BenchmarkSource,
 ) -> Result<Vec<Benchmark>> {
     match source {
-        BenchmarkSource::ArtificialAnalysisSnapshot => Ok(artificial_analysis_snapshot()),
+        BenchmarkSource::ArtificialAnalysisSnapshot => fetch_artificial_analysis_index(client),
         BenchmarkSource::SWERebench => fetch_swe_rebench(client),
         BenchmarkSource::TerminalBench3 => fetch_terminal_bench_3(client),
         BenchmarkSource::TerminalBench4 => fetch_terminal_bench_4(client),
