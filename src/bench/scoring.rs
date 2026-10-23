@@ -77,9 +77,12 @@ pub(crate) fn calibrated_aa_percentile(score: f64) -> f64 {
     points[points.len() - 1].1
 }
 
-/// Total base weight of the agentic (non-AA) sources that can contribute
-/// evidence on top of the AA prior: rebench .20 + TB3 .15 + DeepSWE .15 +
-/// LiveBench .10 + Revelo .05.
+/// Coverage-normalization scale for the confidence tier: how much
+/// population-scaled evidence weight a model must absorb before the
+/// composite reports full confidence. It is a calibrated constant, not the
+/// literal sum of the agentic base weights (TB4, FrontierCode, and the
+/// 2026-10 AA/Scale additions push that sum past 1.0): with more boards
+/// live, well-covered models saturate at 1.0 sooner, which is the intent.
 pub(crate) const AGENTIC_EVIDENCE_TOTAL_WEIGHT: f64 = 0.65;
 
 /// Weight of the AA prior inside the posterior. Small on purpose: among the
@@ -416,6 +419,19 @@ pub(crate) fn build_agentic_composite(
         // agentic construct, but each model runs in its vendor harness, so it
         // joins the harness-specific family (capability flavor demotes it).
         (BenchmarkSource::FrontierCode, 0.15_f64),
+        // AA's own agentic boards (added 0.20.0). Briefcase is the flagship
+        // knowledge-work construct with a private task set, but it shares a
+        // publisher with the AA prior the composite already trusts, so it
+        // carries LiveBench-tier weight instead of a top-tier one.
+        (BenchmarkSource::AABriefcase, 0.10_f64),
+        // AutomationBench-AA overlaps the same publisher correlation and the
+        // same frontier cohort, so it anchors like the Code Index.
+        (BenchmarkSource::AutomationBenchAA, 0.05_f64),
+        // SWE-Bench Pro V2 is a third-party, long-horizon SWE standard —
+        // top-tier construct weight — but its rows score model+harness
+        // pairings (Claude Code / mini-swe-agent / Codex), so it joins the
+        // harness-specific family like FrontierCode.
+        (BenchmarkSource::SWEBenchPro, 0.15_f64),
     ];
     let aliases = same_weights_sku_aliases();
 
@@ -2458,6 +2474,9 @@ mod tests {
             BenchmarkSource::LiveBench,
             BenchmarkSource::ReveloCodeIndex,
             BenchmarkSource::FrontierCode,
+            BenchmarkSource::AABriefcase,
+            BenchmarkSource::AutomationBenchAA,
+            BenchmarkSource::SWEBenchPro,
         ] {
             match fetch_benchmark_source(&client, source) {
                 Ok(rows) => {

@@ -204,6 +204,9 @@ pub(crate) enum BenchmarkSource {
     ReveloCodeIndex,
     DesignArena,
     FrontierCode,
+    AABriefcase,
+    AutomationBenchAA,
+    SWEBenchPro,
 }
 
 /// Which question a composite answers. Capability/value asks "how good is the
@@ -236,6 +239,9 @@ impl BenchmarkSource {
             Self::ReveloCodeIndex => "Revelo Code Index",
             Self::DesignArena => "Frontend Design Elo (Design Arena)",
             Self::FrontierCode => "FrontierCode (Cognition)",
+            Self::AABriefcase => "AA-Briefcase (Elo)",
+            Self::AutomationBenchAA => "AutomationBench-AA",
+            Self::SWEBenchPro => "SWE-Bench Pro V2 HARD (Scale)",
         }
     }
 
@@ -252,6 +258,9 @@ impl BenchmarkSource {
             Self::ReveloCodeIndex => "Code Index",
             Self::DesignArena => "Design Elo",
             Self::FrontierCode => "FrontierCode",
+            Self::AABriefcase => "AA-Briefcase",
+            Self::AutomationBenchAA => "AutomationBench",
+            Self::SWEBenchPro => "SWE-Bench Pro",
         }
     }
 
@@ -270,10 +279,16 @@ impl BenchmarkSource {
     /// Model-level boards: the published number describes the model itself.
     /// SWE-rebench is deliberately excluded — its uniform harness makes it an
     /// agentic-capability standard that stays fully weighted in both flavors.
+    /// The AA evaluation boards run every model under AA's own standardized
+    /// protocol, so they measure the model rather than a vendor scaffold.
     pub(crate) fn is_model_level(self) -> bool {
         matches!(
             self,
-            Self::ArtificialAnalysisSnapshot | Self::LiveBench | Self::DesignArena
+            Self::ArtificialAnalysisSnapshot
+                | Self::LiveBench
+                | Self::DesignArena
+                | Self::AABriefcase
+                | Self::AutomationBenchAA
         )
     }
 
@@ -285,10 +300,11 @@ impl BenchmarkSource {
                 | Self::DeepSWE11
                 | Self::ReveloCodeIndex
                 | Self::FrontierCode
+                | Self::SWEBenchPro
         )
     }
 
-    pub(crate) fn remote_sources() -> [Self; 8] {
+    pub(crate) fn remote_sources() -> [Self; 11] {
         [
             Self::SWERebench,
             Self::TerminalBench3,
@@ -298,10 +314,13 @@ impl BenchmarkSource {
             Self::ReveloCodeIndex,
             Self::DesignArena,
             Self::FrontierCode,
+            Self::AABriefcase,
+            Self::AutomationBenchAA,
+            Self::SWEBenchPro,
         ]
     }
 
-    pub(crate) fn consensus_sources() -> [Self; 9] {
+    pub(crate) fn consensus_sources() -> [Self; 12] {
         [
             Self::ArtificialAnalysisSnapshot,
             Self::SWERebench,
@@ -312,10 +331,13 @@ impl BenchmarkSource {
             Self::ReveloCodeIndex,
             Self::DesignArena,
             Self::FrontierCode,
+            Self::AABriefcase,
+            Self::AutomationBenchAA,
+            Self::SWEBenchPro,
         ]
     }
 
-    pub(crate) fn display_sources() -> [Self; 9] {
+    pub(crate) fn display_sources() -> [Self; 12] {
         Self::consensus_sources()
     }
 
@@ -335,6 +357,11 @@ impl BenchmarkSource {
             Self::ReveloCodeIndex => REVELO_CODE_INDEX_URL,
             Self::DesignArena => "https://designarena.ai/leaderboard",
             Self::FrontierCode => FRONTIERCODE_URL,
+            Self::AABriefcase => "https://artificialanalysis.ai/evaluations/aa-briefcase",
+            Self::AutomationBenchAA => {
+                "https://artificialanalysis.ai/evaluations/automationbench-aa"
+            }
+            Self::SWEBenchPro => "https://labs.scale.com/leaderboard/swe_bench_pro_public_v2",
         }
     }
 }

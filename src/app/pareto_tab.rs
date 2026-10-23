@@ -128,6 +128,9 @@ impl ParetoWatchApp {
                     BenchmarkSource::ReveloCodeIndex => "Metric: Code Index",
                     BenchmarkSource::DesignArena => "Metric: Design Elo (blinded votes)",
                     BenchmarkSource::FrontierCode => "Metric: mergeability score",
+                    BenchmarkSource::AABriefcase => "Metric: Elo (blind pairwise, private tasks)",
+                    BenchmarkSource::AutomationBenchAA => "Metric: partial score (no violations)",
+                    BenchmarkSource::SWEBenchPro => "Metric: resolve rate (HARD set)",
                     _ => unreachable!(),
                 });
             }
@@ -585,6 +588,11 @@ impl ParetoWatchApp {
             BenchmarkSource::ReveloCodeIndex => "Revelo Code Index".to_owned(),
             BenchmarkSource::DesignArena => "Design Arena Elo".to_owned(),
             BenchmarkSource::FrontierCode => "FrontierCode 1.1 mergeability score".to_owned(),
+            BenchmarkSource::AABriefcase => "AA-Briefcase Elo (blind pairwise)".to_owned(),
+            BenchmarkSource::AutomationBenchAA => {
+                "AutomationBench-AA partial score".to_owned()
+            }
+            BenchmarkSource::SWEBenchPro => "SWE-Bench Pro V2 HARD resolve rate".to_owned(),
         };
 
         // The chart body scrolls as one page with the card and table below it,

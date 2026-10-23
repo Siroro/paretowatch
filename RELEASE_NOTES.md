@@ -1,3 +1,18 @@
+# ParetoWatch v0.20.0
+
+## Features
+
+- **Three new live benchmark boards** join the composite, all public pages needing no API key (fetched on the same six-hour cycle as the rest, in parallel with the price loop). The composite now fuses eleven boards plus the AA prior.
+- **AA-Briefcase** (`artificialanalysis.ai/evaluations/aa-briefcase`, weight 0.10) — Artificial Analysis's knowledge-work benchmark: Elo ratings from blind pairwise comparisons on long, multi-week professional tasks with a **private task set**, so the number is contamination-resistant by construction. The page renders a plain server-side table (currently ~114 models; Claude Sonnet 5.5 leads at Elo 1816), and effort variants of the same model collapse to the best one. This is one of the flagship components of the Intelligence Index the app already trusts as its bundled prior — and it makes the snapshot header's old claim that AA-Briefcase results "live on boards the app fetches live" finally true.
+- **AutomationBench-AA** (`artificialanalysis.ai/evaluations/automationbench-aa`, weight 0.05) — AA's long-horizon office-automation board; the headline is the *partial score* (how much of each task's objective tree completed with no violations). The page embeds its data as escaped JSON in the RSC payload; scores are attributed to the nearest preceding model `shortName`, and the parse is anchored to reality: Gemini 4 Argon reads exactly the 77.5 AA's changelog headlines for it. Both AA boards run every model under AA's own standardized protocol, so they count as model-level (full capability weight) — but they share a publisher with the AA prior, hence the deliberately modest weights (0.10/0.05, LiveBench/Code-Index tier).
+- **SWE-Bench Pro V2 HARD** (`labs.scale.com/leaderboard/swe_bench_pro_public_v2`, weight 0.15) — Scale's long-horizon SWE benchmark: 1,865 tasks across 41 professional repositories, third-party run under a locked protocol, copyleft-sourced public split (contamination-resistant by design), and unsaturated where SWE-bench Verified topped out (~97% and retired by community consensus). No hidden XHR needed: the leaderboard's default HARD tab is server-rendered with `data-model-name` markers, so the fetcher is a plain HTML read. Rows score model+harness pairings (`Opus 5 (Claude Code) xhigh` → 98.0, `Gemini 4 Argon (mini-swe-agent) high` → 92.2), so the board joins the harness-specific family like FrontierCode — full deployment weight, demoted for capability — with the harness carried in the row's `agent` field.
+- Fetcher-local display aliases: the AA boards and Scale name two models differently from Surplus — `Inkling` → `Thinking Machines: Inkling` (the creator prefix is not one benchmark matching strips) and Scale's `Muse Wonder 1.0` → `Muse Wonder`. The worker's benchmark refresh loop, the Models/consensus grid, the Pareto source selector, alerts, and the settings source list all pick the new boards up automatically via `remote_sources`/`display_sources`.
+- The live smoke test now fetches all eleven sources; the composite leader is unchanged (Claude Opus 5.5 at 99.4 — the Briefcase Elo leader, Sonnet 5.5, stays #2 on the broader consensus), while Muse Wonder climbs to #4 on strong new-board evidence.
+
+## Validation
+
+Formatting, locked check, locked test (162 tests), Clippy with warnings denied, and the live-data smoke test (AA snapshot 170, AA-Briefcase 114, AutomationBench-AA 30, SWE-Bench Pro 16, LiveBench 49, FrontierCode 46, Terminal-Bench 4 35 rows) all pass.
+
 # ParetoWatch v0.19.2
 
 ## Updates
