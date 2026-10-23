@@ -1,3 +1,21 @@
+# ParetoWatch v0.19.1
+
+## Fixes
+
+- **The same model could show two different Composite scores when Surplus sells its weights as two SKUs.** Reported 2026-10-23 with Muse Spark 1.3: "Meta: Muse Spark 1.3 Contributor" showed Composite 85.4 while "Meta: Muse Spark 1.3" — literally the same checkpoint — showed 70.9. The composite joins boards by exact canonical key, and no leaderboard ever lists the Contributor variant, so its key carried only the AA prior (insertion-ranked 48 into the elite cohort → the 85.4 the v0.18.0 smoke run already printed); when the v0.19.0 LiveBench 2.0 migration added a `Muse Spark 1.3` row, the base key alone absorbed that board evidence and pulled down to 70.9. The fuzzy quote join the consensus grid uses never had this problem — only the composite's keyed join did. The GPT `pro` execution modes already solved this exact shape through `INHERITED_EXECUTION_MODES`; that table is now **`SAME_WEIGHTS_SKU_ALIASES`** (SKU, base variant, what the SKU is) and the composite's per-source alias pass copies the base variant's rows onto the SKU key in every board, so same-weights SKUs rate identically while native SKU rows still win when a board does list one.
+- Audited the whole snapshot for other same-weights pairs with the same latent split and registered four more: **GLM-5.3-FlashX** (GLM-5.3-Flash served at up to 200 tok/s — previously only `~proxied` for AA with no board inheritance, since stripping `flashx` would collapse onto GLM-5.3, the wrong base), **DeepSeek R1 0528** (the refresh AA folded into the base DeepSeek R1 page, so both Surplus SKUs serve the same weights), **Mistral Small 3.2 24B Instruct** (the open-weights listing name of Mistral Small 3.2), and **Qwen3 Coder 480B Turbo** (the 480B checkpoint served faster, the same relationship the prime/ultraspeed wrappers have). Same-weights pairs that differ by *build* are deliberately not aliased — Qwen3.8 Max (0902) vs the deprecated undated 0803 row, and the dated DeepSeek refreshes, keep separate measurements. No AA scores moved; the row-name disclosure now reads "inherited from <base> — <what the SKU is>; same weights, not separately benchmarked".
+- New regression test drives every alias pair through the composite with base-only board evidence and asserts identical scores for both the composite rows and the joined quotes.
+
+## Updates
+
+- AA Intelligence Index snapshot bumped from v4.3.2 (read 2026-10-20) to v4.3.2 (read 2026-10-23). The index revision, scale, and leader are unchanged — Claude Opus 5.5 still leads at 58 — so `AA_CALIBRATION_POINTS` keeps its anchors and only the release's rows moved.
+- New snapshot rows for AA's 2026-10-22 release: **inclusionAI: Ling 3.1 Flash 1019** (44 — the 1019 dated refresh of the Flash family, three over the undated build's 41, which re-reads unchanged. The release tag stays in the key so the undated row keeps its own measurement, and the row lands ahead of its Surplus listing — the catalog still carries only the undated `ling-3.1-flash` SKU — the same way Gemini 4 Argon and Mistral Large 4 did) and **Meta: Muse Spark 1.2 Contributor** (39.8, the 1.2 weights; Surplus lists `muse-spark-1.2-contributor`, and the SKU — the sibling of the 1.3 Contributor bug above, surfaced by the same audit's catalog sweep — now carries the 1.2 measurement and inherits board evidence through `SAME_WEIGHTS_SKU_ALIASES` instead of joining the 1.2 rows through the 0.80 fuzzy bar).
+- **NVIDIA Nemotron 3.5 Super VL** re-read 25 → 26: the page firmed past rounding since the 2026-10-17 entry read, matching AA's 2026-10-15 changelog number (still past the Nemotron 3 Ultra 550B's 23.4). Spot-checks of the other recently moved families found no further drift (GPT-6 Sol 48, Muse Spark 1.3 48, undated Ling 3.1 Flash 41), and AA's 2026-10-13..15 evaluations of models with no Surplus listing (Muse Wonder Full, Solar Pro 4, Bolt 74B-A9B) need no rows.
+
+## Validation
+
+Formatting, locked check, locked test (152 tests), and Clippy with warnings denied all pass.
+
 # ParetoWatch v0.19.0
 
 ## Fixes

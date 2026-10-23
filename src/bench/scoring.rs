@@ -5,7 +5,7 @@
 use std::collections::HashMap;
 
 use super::{benchmarks_for_source, collapse_benchmark_rows};
-use crate::artificial_analysis_snapshot::INHERITED_EXECUTION_MODES;
+use crate::artificial_analysis_snapshot::SAME_WEIGHTS_SKU_ALIASES;
 use crate::bench::matching::{benchmark_model_key, best_benchmark_match};
 use crate::types::{
     Benchmark, BenchmarkKind, BenchmarkSource, ComparisonMode, CompositeFlavor,
@@ -176,17 +176,22 @@ pub(crate) fn evidence_tier(coverage: f64) -> &'static str {
     }
 }
 
-/// Canonical model keys of execution-mode SKUs (for example `gpt 5 6 sol pro`)
-/// mapped to the base variant whose leaderboard evidence they inherit. Modes
-/// inherit base rows; the base never inherits mode-specific rows.
-pub(crate) fn execution_mode_aliases() -> HashMap<String, String> {
-    INHERITED_EXECUTION_MODES
+/// Canonical model keys of same-weights SKU aliases (for example
+/// `gpt 5 6 sol pro`, `muse spark 1 3 contributor`) mapped to the base
+/// variant whose leaderboard evidence they inherit. SKUs inherit base rows;
+/// the base never inherits SKU-specific rows. Without this pass the composite
+/// keyed the SKU on its own and — because no board ever lists the SKU
+/// itself — rated the same checkpoint at its AA prior while the base variant
+/// absorbed all the board evidence (the Muse Spark 1.3 / Contributor split:
+/// 85.4 vs 70.9).
+pub(crate) fn same_weights_sku_aliases() -> HashMap<String, String> {
+    SAME_WEIGHTS_SKU_ALIASES
         .iter()
-        .filter_map(|(mode, base)| {
-            let mode_key = benchmark_model_key(mode);
+        .filter_map(|(sku, base, _)| {
+            let sku_key = benchmark_model_key(sku);
             let base_key = benchmark_model_key(base);
-            (!mode_key.is_empty() && !base_key.is_empty() && mode_key != base_key)
-                .then_some((mode_key, base_key))
+            (!sku_key.is_empty() && !base_key.is_empty() && sku_key != base_key)
+                .then_some((sku_key, base_key))
         })
         .collect()
 }
@@ -412,7 +417,7 @@ pub(crate) fn build_agentic_composite(
         // joins the harness-specific family (capability flavor demotes it).
         (BenchmarkSource::FrontierCode, 0.15_f64),
     ];
-    let aliases = execution_mode_aliases();
+    let aliases = same_weights_sku_aliases();
 
     let mut source_scores: HashMap<BenchmarkSource, HashMap<String, (Benchmark, f64)>> =
         HashMap::new();
@@ -438,9 +443,10 @@ pub(crate) fn build_agentic_composite(
                 by_model.insert(key, (row, score));
             }
         }
-        // Execution-mode SKUs (e.g. `...-sol-pro`) inherit the base variant's
-        // rows so same-weights SKUs rate identically; native rows for the mode
-        // itself always win over inherited ones.
+        // Same-weights SKU aliases (e.g. `...-sol-pro`, the Contributor
+        // tier) inherit the base variant's rows so same-weights SKUs rate
+        // identically; native rows for the SKU itself always win over
+        // inherited ones.
         for (mode_key, base_key) in &aliases {
             if let Some(entry) = by_model.get(base_key).cloned() {
                 by_model.entry(mode_key.clone()).or_insert(entry);
@@ -1117,6 +1123,95 @@ mod tests {
             "dominant broad evidence ({dominant}) must outrank lucky sparse evidence ({lucky})\nLucky: {}\nDominant: {}",
             lucky_row.name,
             dominant_row.name,
+        );
+    }
+
+    #[test]
+    fn same_weights_sku_pair_rates_identically_to_base_variant() {
+        // Regression (reported 2026-10-23): "Meta: Muse Spark 1.3 Contributor"
+        // and "Meta: Muse Spark 1.3" are the same weights sold as two Surplus
+        // SKUs, but only the base key joins live board rows (boards list the
+        // plain family name). The composite keyed the Contributor SKU on its
+        // own — AA prior only, no board evidence — so once LiveBench 2.0 added
+        // a Muse Spark 1.3 row the same checkpoint showed two different
+        // Composite scores (85.4 prior-only vs 70.9 with boards). Every
+        // SAME_WEIGHTS_SKU_ALIASES pair must rate identically when only the
+        // base variant has board rows.
+        let mk =
+            |name: &str, score: f64| score_benchmark(name, score, None, None, BenchmarkKind::Model);
+        let mut sets = HashMap::new();
+        sets.insert(
+            BenchmarkSource::ArtificialAnalysisSnapshot,
+            crate::artificial_analysis_snapshot::artificial_analysis_snapshot(),
+        );
+        // One live board measuring every base variant mid-pack; no board ever
+        // lists the alias SKUs themselves.
+        let mut board = vec![
+            mk("Claude Opus 5.5", 88.0),
+            mk("Claude Sonnet 5.5", 84.0),
+            mk("GPT-6 Astra", 82.0),
+            mk("Gemini 4 Argon", 79.0),
+            mk("Muse Wonder", 76.0),
+            mk("Grok 4.7", 74.0),
+            mk("GLM-5.3", 70.0),
+            mk("Kimi K3", 69.0),
+            mk("Claude Haiku 5.5", 66.0),
+            mk("Gemini 3.8 Flash", 62.0),
+            mk("DeepSeek V4.1 Flash", 60.0),
+        ];
+        for (_, base, _) in crate::artificial_analysis_snapshot::SAME_WEIGHTS_SKU_ALIASES {
+            board.push(mk(base, 71.0));
+        }
+        sets.insert(BenchmarkSource::LiveBench, board);
+        let composite = build_agentic_composite(
+            &sets,
+            ComparisonMode::ModelCapability,
+            "",
+            CompositeFlavor::Capability,
+        );
+        for (sku, base, _) in crate::artificial_analysis_snapshot::SAME_WEIGHTS_SKU_ALIASES {
+            let find = |key: &str| {
+                composite
+                    .iter()
+                    .find(|b| benchmark_model_key(&b.slug) == key)
+                    .unwrap_or_else(|| panic!("no composite row for {key}"))
+            };
+            let sku_row = find(&benchmark_model_key(sku));
+            let base_row = find(&benchmark_model_key(base));
+            assert!(
+                (sku_row.agentic_coding.unwrap() - base_row.agentic_coding.unwrap()).abs() < 1e-9,
+                "{sku} ({}) must rate identically to {base} ({}) — same weights\n{sku}: {}\n{base}: {}",
+                sku_row.agentic_coding.unwrap(),
+                base_row.agentic_coding.unwrap(),
+                sku_row.name,
+                base_row.name,
+            );
+            assert!(
+                sku_row.name.contains("LiveBench"),
+                "{sku} did not inherit the base variant's board evidence: {}",
+                sku_row.name
+            );
+        }
+        // The user-visible symptom: the two Surplus quotes for the Muse Spark
+        // 1.3 weights must join composite rows with the same score.
+        let points = crate::pareto::joined_points(
+            &[
+                test_quote("muse-spark-1.3-contributor", 1.0, true),
+                test_quote("muse-spark-1.3", 1.0, true),
+            ],
+            &composite,
+            crate::types::PriceMetric::Blended,
+            crate::types::CostBasis::PerMillion,
+            crate::types::BenchmarkMetric::AgenticCoding,
+            (1.0, 1.0, 1.0),
+            10.0,
+        );
+        assert_eq!(points.len(), 2, "both SKUs must join the composite");
+        assert!(
+            (points[0].score - points[1].score).abs() < 1e-9,
+            "quotes for the same weights must plot the same score: {} vs {}",
+            points[0].score,
+            points[1].score
         );
     }
 

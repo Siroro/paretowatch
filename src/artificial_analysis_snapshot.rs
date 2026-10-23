@@ -18,10 +18,13 @@
 //!      so never add separate rows for them.
 //!    - When AA only rates a sibling variant, proxy it and mark the row with
 //!      `~proxy`; pure AA estimates get `~est`.
-//!    - SKUs that are execution modes of an already-rated model (same weights,
-//!      for example `reasoning.mode: "pro"`) get one row per purchasable SKU
-//!      with the base score, and MUST be listed in
-//!      [`INHERITED_EXECUTION_MODE_NOTES`] so the UI discloses the inheritance.
+//!    - SKUs that are the same weights as an already-rated model (execution
+//!      modes such as `reasoning.mode: "pro"`, licensing tiers, speed
+//!      variants the key normalizer cannot strip, duplicate listing names)
+//!      get one row per purchasable SKU with the base score, and MUST be
+//!      listed in [`SAME_WEIGHTS_SKU_ALIASES`] so the UI discloses the
+//!      inheritance and the composite rates the SKU identically to its base
+//!      variant.
 //! 3. Bump [`ARTIFICIAL_ANALYSIS_SNAPSHOT_VERSION`] and
 //!    [`ARTIFICIAL_ANALYSIS_SNAPSHOT_DATE`] together with the values.
 //! 4. Run `cargo test`: the tests below reject duplicate normalized keys,
@@ -163,6 +166,45 @@
 //! `flashx` would collapse the key onto GLM-5.3 (44.9), the wrong base, so
 //! it gets a ~proxy row onto GLM-5.3-Flash instead.
 //!
+//! The 2026-10-23 fix (same day, no index bump — no scores moved) renamed
+//! `INHERITED_EXECUTION_MODES` to [`SAME_WEIGHTS_SKU_ALIASES`] and widened it
+//! past `pro` execution modes after a reported regression: "Meta: Muse Spark
+//! 1.3 Contributor" and "Meta: Muse Spark 1.3" are the same weights sold as
+//! two SKUs, but the composite keyed the Contributor SKU alone — the AA prior
+//! was its only evidence (85.4, 0 sources), while the base key joined the
+//! LiveBench 2.0 boards the v0.19.0 migration restored and landed at 70.9, so
+//! the same checkpoint showed two different Composite scores. Every
+//! same-weights pair whose canonical key differs from its base now lives in
+//! the alias table so the composite's per-source alias pass copies the base
+//! variant's rows onto the SKU key in every board: the Contributor SKU, plus
+//! four more pairs audited the same day — GLM-5.3-FlashX (same checkpoint at
+//! up to 200 tok/s; previously only ~proxied for AA with no board
+//! inheritance), DeepSeek R1 0528 (the refresh AA folded into the base DeepSeek
+//! R1 page, so both Surplus SKUs serve the same weights), Mistral Small 3.2
+//! 24B Instruct (the open-weights listing name of Mistral Small 3.2), and
+//! Qwen3 Coder 480B Turbo (the 480B checkpoint served faster, the same
+//! relationship the prime/ultraspeed wrappers have). Same-weights pairs that
+//! differ by BUILD are deliberately NOT aliased: Qwen3.8 Max (0902) vs the
+//! undated 0803 row, and the dated DeepSeek refreshes, keep separate rows
+//! because a different snapshot is different weights even when the AA score
+//! happens to match.
+//!
+//! The 2026-10-23 bump stayed on v4.3.2: the leader (Claude Opus 5.5, 58) and
+//! the scale are unchanged, so `AA_CALIBRATION_POINTS` keeps its anchors and
+//! only the new release's rows moved. AA's 2026-10-22 release evaluated Ling
+//! 3.1 Flash 1019 — the 1019 dated refresh of inclusionAI's Flash family — at
+//! 44, three over the undated build's 41 (re-read unchanged); like the other
+//! dated refreshes the tag stays in the key, and the row lands ahead of its
+//! Surplus listing the way Gemini 4 Argon and Mistral Large 4 did. The same
+//! bump's Surplus catalog sweep surfaced `muse-spark-1.2-contributor`, which
+//! had no row and joined the Muse Spark 1.2 rows only through the 0.80 fuzzy
+//! bar; it now carries the 1.2 measurement and a SAME_WEIGHTS_SKU_ALIASES
+//! entry. Nemotron 3.5 Super VL was re-read 25 → 26 (past rounding, matching
+//! AA's 2026-10-15 changelog number), and spot-checks of GPT-6 Sol (48), Muse
+//! Spark 1.3 (48), and the undated Ling row found no further drift. AA's
+//! 2026-10-13..15 evaluations of models with no Surplus listing (Muse Wonder
+//! Full, Solar Pro 4, Bolt 74B-A9B) need no rows.
+//!
 //! Deliberately unrated (no AA presence as of 2026-10-20): Aion 2.0/3.0/3.0
 //! Mini, Hermes 3 405B, Palmyra Vision 7B, Qwen 2.5 7B, GPT-OSS Safeguard
 //! 20B/120B, Grok 4.20 Multi-Agent Beta, Venice rebrands, uncensored finetunes
@@ -192,13 +234,32 @@
 use crate::fetch::score_benchmark;
 use crate::types::{Benchmark, BenchmarkKind};
 
-pub(crate) const ARTIFICIAL_ANALYSIS_SNAPSHOT_DATE: &str = "2026-10-20";
+pub(crate) const ARTIFICIAL_ANALYSIS_SNAPSHOT_DATE: &str = "2026-10-23";
 pub(crate) const ARTIFICIAL_ANALYSIS_SNAPSHOT_VERSION: &str = "v4.3.2";
 
 /// `(model name, AA Intelligence score)` pairs, one representative row per
 /// family. Names should mirror Surplus display names so exact-key joins hit
 /// before fuzzy matching has to.
 pub(crate) const SNAPSHOT_ROWS: &[(&str, f64)] = &[
+    // Added 2026-10-23 for AA's 2026-10-22 release, read from the
+    // still-v4.3.2 index (leader and scale unchanged). Ling 3.1 Flash 1019 —
+    // the 1019 dated refresh of inclusionAI's Flash family, evaluated at 44,
+    // three over the undated build the 2026-10-20 row reads (41, re-read
+    // unchanged) — lands ahead of its Surplus listing (the catalog still
+    // carries only the undated `ling-3.1-flash` SKU), the same way Gemini 4
+    // Argon and Mistral Large 4 did; like the other dated refreshes the
+    // release tag stays in the key so the undated row keeps its own
+    // measurement. Muse Spark 1.2 Contributor is the contributor-licensed SKU
+    // of the 1.2 weights (Surplus lists `muse-spark-1.2-contributor`); AA
+    // rates no page of its own, so the row carries the 1.2 measurement and
+    // SAME_WEIGHTS_SKU_ALIASES passes board evidence through — until now the
+    // SKU joined the 1.2 rows only through the 0.80 fuzzy bar, one rename
+    // away from the 1.3 Contributor split. Nemotron 3.5 Super VL was re-read
+    // in the same bump: the page firmed at 26 (the 2026-10-17 entry read of
+    // 25 had drifted past rounding, matching AA's 2026-10-15 changelog
+    // number).
+    ("inclusionAI: Ling 3.1 Flash 1019", 44.0),
+    ("Meta: Muse Spark 1.2 Contributor", 39.8), // same weights; see SAME_WEIGHTS_SKU_ALIASES
     // Added 2026-10-20 for the Surplus listings of 2026-10-18..10-20, read
     // from the still-v4.3.2 index (leader and scale unchanged). MiniMax M3.1
     // Flash entered at 43 (single max-default measurement), thirteen over
@@ -223,7 +284,7 @@ pub(crate) const SNAPSHOT_ROWS: &[(&str, f64)] = &[
     ("inclusionAI: Ling 3.1 Flash", 41.0),
     ("Reflection: Beam 1.0 501B A23B", 30.0),
     ("Muse Spark Open", 39.0),
-    ("GLM-5.3-FlashX", 41.9), // ~proxy: GLM-5.3-Flash at high speed; AA rates no FlashX page
+    ("GLM-5.3-FlashX", 41.9), // same checkpoint; see SAME_WEIGHTS_SKU_ALIASES (AA rates no FlashX page)
     // Added 2026-10-17 for the Surplus listings of 2026-10-15..10-17, read
     // from the still-v4.3.2 index (leader and scale unchanged). DeepSeek V4.1
     // Flash 1017 is the 1017 dated refresh of the V4.1 Flash family; like the
@@ -238,7 +299,7 @@ pub(crate) const SNAPSHOT_ROWS: &[(&str, f64)] = &[
     // priced at $0.0000 (100%-off launch window) and joins its existing
     // Preview-read row above unchanged.
     ("DeepSeek V4.1 Flash 1017", 45.0), // re-read 2026-10-20: max page firmed at 45.1 (was 40.0 at entry)
-    ("NVIDIA Nemotron 3.5 Super VL", 25.0),
+    ("NVIDIA Nemotron 3.5 Super VL", 26.0), // re-read 2026-10-23: page firmed at 26 (was 25.0 at the 2026-10-17 entry)
     // Added 2026-10-15 for the Surplus listings of 2026-10-07..10-15, read
     // from the still-v4.3.2 index (leader and scale unchanged). Claude Haiku
     // 5.5 entered at 43 read at max effort — the same page configuration its
@@ -282,13 +343,13 @@ pub(crate) const SNAPSHOT_ROWS: &[(&str, f64)] = &[
     // Astra; read at max effort — the effort the Surplus SKU exposes via
     // `reasoning_effort` — it entered at #10 of 222, between the Fable 5.1/
     // Astra tier and GPT-6 Sol's 48. Its Pro SKU is a `reasoning.mode: "pro"`
-    // execution mode of the same weights (see INHERITED_EXECUTION_MODES).
+    // execution mode of the same weights (see SAME_WEIGHTS_SKU_ALIASES).
     // Mercury 2.5 is Inception's diffusion-LLM refresh of Mercury 2; the name
     // carries the `Inception: ` prefix so it exact-joins the Surplus display
     // name (`inception` is not a stripped creator prefix, same as Cohere).
     // Seed-2.0-Code has no AA page and is unrated — see the header notes.
     ("GPT-6.1 Sol", 52.0),
-    ("GPT-6.1 Sol Pro", 52.0), // same weights as GPT-6.1 Sol; see INHERITED_EXECUTION_MODES
+    ("GPT-6.1 Sol Pro", 52.0), // same weights as GPT-6.1 Sol; see SAME_WEIGHTS_SKU_ALIASES
     ("Inception: Mercury 2.5", 12.0),
     // Added 2026-09-29 for the Surplus listings of 2026-09-23..09-29, read
     // from the still-v4.3.2 index (leader and scale unchanged). Claude Sonnet
@@ -311,17 +372,17 @@ pub(crate) const SNAPSHOT_ROWS: &[(&str, f64)] = &[
     // cost-efficient high-end tier and Luna the fast tier, both read at max
     // effort, the effort the Surplus SKUs expose via `reasoning_effort`;
     // their Pro SKUs are `reasoning.mode: "pro"` execution modes of the same
-    // weights (see INHERITED_EXECUTION_MODES). Grok 4.7 has no max-effort
+    // weights (see SAME_WEIGHTS_SKU_ALIASES). Grok 4.7 has no max-effort
     // measurement, so its row is the xhigh run AA labels on the model page.
     // MiMo-V2.6-Pro is Xiaomi's new 1T flagship at AA 46; the UltraSpeed SKU
     // and the unrated V2.6-Flash are covered by the header notes.
     ("Claude Opus 5.5", 58.0),
     ("GPT-6 Sol", 48.0),
-    ("GPT-6 Sol Pro", 48.0), // same weights as GPT-6 Sol; see INHERITED_EXECUTION_MODES
+    ("GPT-6 Sol Pro", 48.0), // same weights as GPT-6 Sol; see SAME_WEIGHTS_SKU_ALIASES
     ("Grok 4.7", 46.0),
     ("MiMo-V2.6-Pro", 46.0),
     ("GPT-6 Luna", 37.0),
-    ("GPT-6 Luna Pro", 37.0), // same weights as GPT-6 Luna; see INHERITED_EXECUTION_MODES
+    ("GPT-6 Luna Pro", 37.0), // same weights as GPT-6 Luna; see SAME_WEIGHTS_SKU_ALIASES
     // Added 2026-09-19 for the Surplus listings of 2026-09-03..09-11, read
     // from the v4.3 index. GPT-6 Astra entered at AA's top alongside Fable 5.1
     // (AA's own writeup calls it a tie at lower cost); DeepSeek V4.1 Flash is
@@ -341,7 +402,7 @@ pub(crate) const SNAPSHOT_ROWS: &[(&str, f64)] = &[
     ("Qwen3.8 2.4T A95B", 40.0),
     ("GPT-5.6 Terra", 42.3),
     ("Muse Spark 1.3", 48.0), // re-read 2026-10-15: the Wonder launch re-measured max at 48 (was 45.2 v4.3)
-    ("Meta: Muse Spark 1.3 Contributor", 48.0), // ~proxy: Muse Spark 1.3 (max); AA rates no Contributor page
+    ("Meta: Muse Spark 1.3 Contributor", 48.0), // same weights; see SAME_WEIGHTS_SKU_ALIASES (AA rates no Contributor page)
     ("Muse Spark 1.2", 39.8),
     ("DeepSeek V4.1 Flash", 39.5),
     ("Gemini 3.8 Flash", 41.2),
@@ -408,7 +469,8 @@ pub(crate) const SNAPSHOT_ROWS: &[(&str, f64)] = &[
     ("DeepSeek V3.1", 13.7),
     ("DeepSeek V3.1 Terminus", 13.9),
     // AA folded the R1 0528 refresh into the base DeepSeek R1 page, so both
-    // Surplus SKUs read the same v4.3 measurement.
+    // Surplus SKUs read the same v4.3 measurement (see
+    // SAME_WEIGHTS_SKU_ALIASES).
     ("DeepSeek R1 0528", 13.1),
     ("DeepSeek R1", 13.1),
     ("Qwen3.6 27B", 21.9),
@@ -417,7 +479,7 @@ pub(crate) const SNAPSHOT_ROWS: &[(&str, f64)] = &[
     ("Qwen3 Next 80B A3B Instruct", 9.6),
     ("Qwen3 Coder Next", 10.1),
     ("Qwen3 Coder 480B", 11.9),
-    ("Qwen3 Coder 480B Turbo", 11.9), // ~proxy: no separate AA page for the turbo SKU
+    ("Qwen3 Coder 480B Turbo", 11.9), // same weights served faster; see SAME_WEIGHTS_SKU_ALIASES
     ("Gemma 4 31B", 15.4),
     ("Gemma 4 26B A4B", 16.7),
     ("Claude 4.5 Haiku", 15.4),
@@ -426,7 +488,7 @@ pub(crate) const SNAPSHOT_ROWS: &[(&str, f64)] = &[
     ("gpt-oss-20b", 9.0),
     ("Qwen3 235B A22B 2507", 12.0),
     ("Mistral Small 3.2", 7.0),
-    ("Mistral Small 3.2 24B Instruct", 7.0),
+    ("Mistral Small 3.2 24B Instruct", 7.0), // same model, open-weights listing name; see SAME_WEIGHTS_SKU_ALIASES
     ("Mistral Small 4", 11.5),
     ("Mistral Large 3", 9.7),
     ("Llama 4 Scout", 6.5),
@@ -491,21 +553,75 @@ pub(crate) const SNAPSHOT_ROWS: &[(&str, f64)] = &[
     ("Trinity Large Thinking", 10.9),
 ];
 
-/// Rows sold by Surplus as separate SKUs that are actually execution modes of
-/// the same weights (for example OpenAI serves `gpt-5.6-sol-pro` as the Sol
-/// model with `reasoning.mode: "pro"`). Each needs its own snapshot row so
-/// Surplus prices join, but no leaderboard has measured the mode itself, so the
-/// score is inherited from the base variant. `(execution-mode SKU, base SKU)`
-/// pairs; `main.rs` uses this table to resolve the mode's canonical model key
-/// to the base variant when joining live leaderboard rows, and the builder
-/// appends an inheritance note to the rendered row name.
-pub(crate) const INHERITED_EXECUTION_MODES: &[(&str, &str)] = &[
-    ("GPT-6.1 Sol Pro", "GPT-6.1 Sol"),
-    ("GPT-6 Sol Pro", "GPT-6 Sol"),
-    ("GPT-6 Luna Pro", "GPT-6 Luna"),
-    ("GPT-5.6 Sol Pro", "GPT-5.6 Sol"),
-    ("GPT-5.6 Terra Pro", "GPT-5.6 Terra"),
-    ("GPT-5.6 Luna Pro", "GPT-5.6 Luna"),
+/// Same-weights SKU aliases: `(SKU display name, base variant name, what the
+/// SKU is)`. Rows Surplus sells as separate SKUs that are actually the SAME
+/// weights as an already-rated variant — `reasoning.mode: "pro"` execution
+/// modes, licensing tiers, same-checkpoint speed variants the key normalizer
+/// cannot strip, and duplicate listing names. Each needs its own snapshot row
+/// so Surplus prices join, but no leaderboard measures the SKU itself, so the
+/// score is inherited from the base variant. The builder appends an
+/// inheritance note to the rendered row name, and the composite's alias pass
+/// (`build_agentic_composite`) resolves the SKU's canonical model key to the
+/// base variant in every source so same-weights SKUs rate identically.
+///
+/// This is the mechanism for same-weights pairs whose canonical keys differ.
+/// Wrappers the key normalizer strips (`prime`, `ultraspeed`, `batch`,
+/// `e2ee`, `web`, `private`, …) collapse onto the base key by construction and
+/// need no entry here. Same-checkpoint speed variants whose wrapper token
+/// CANNOT be stripped because it would collapse onto the wrong base (FlashX
+/// would fold onto GLM-5.3 instead of GLM-5.3-Flash) belong here instead.
+pub(crate) const SAME_WEIGHTS_SKU_ALIASES: &[(&str, &str, &str)] = &[
+    // `reasoning.mode: "pro"` execution modes of the same weights.
+    ("GPT-6.1 Sol Pro", "GPT-6.1 Sol", "reasoning.mode: pro"),
+    ("GPT-6 Sol Pro", "GPT-6 Sol", "reasoning.mode: pro"),
+    ("GPT-6 Luna Pro", "GPT-6 Luna", "reasoning.mode: pro"),
+    ("GPT-5.6 Sol Pro", "GPT-5.6 Sol", "reasoning.mode: pro"),
+    ("GPT-5.6 Terra Pro", "GPT-5.6 Terra", "reasoning.mode: pro"),
+    ("GPT-5.6 Luna Pro", "GPT-5.6 Luna", "reasoning.mode: pro"),
+    // Added 2026-10-23 after the Muse Spark 1.3 regression: same-weights SKUs
+    // whose keys differ from the base must inherit the base's live board
+    // evidence, or the composite rates the same checkpoint twice — the
+    // Contributor SKU sat at its AA prior (85.4) while the base joined the
+    // LiveBench 2.0 boards and landed at 70.9. FlashX is the same-checkpoint
+    // speed variant that cannot be a stripped token (see the header notes).
+    // R1 0528 is the refresh AA folded into the base DeepSeek R1 page, so both
+    // Surplus SKUs serve the same weights. Mistral Small 3.2 24B Instruct is
+    // the open-weights listing name of Mistral Small 3.2, and Qwen3 Coder
+    // 480B Turbo is the 480B checkpoint served faster (same weights, like the
+    // prime/ultraspeed wrappers).
+    (
+        "Meta: Muse Spark 1.3 Contributor",
+        "Muse Spark 1.3",
+        "contributor-licensed SKU of the same weights",
+    ),
+    // Found 2026-10-23 in the same audit's Surplus catalog sweep: the 1.2
+    // generation's Contributor SKU had no snapshot row, so it joined the 1.2
+    // rows only through the 0.80 fuzzy bar.
+    (
+        "Meta: Muse Spark 1.2 Contributor",
+        "Muse Spark 1.2",
+        "contributor-licensed SKU of the same weights",
+    ),
+    (
+        "GLM-5.3-FlashX",
+        "GLM-5.3-Flash",
+        "same checkpoint at up to 200 tok/s",
+    ),
+    (
+        "DeepSeek R1 0528",
+        "DeepSeek R1",
+        "refresh AA folded into the base page",
+    ),
+    (
+        "Mistral Small 3.2 24B Instruct",
+        "Mistral Small 3.2",
+        "open-weights listing name of the same model",
+    ),
+    (
+        "Qwen3 Coder 480B Turbo",
+        "Qwen3 Coder 480B",
+        "same weights served faster",
+    ),
 ];
 
 pub(crate) fn artificial_analysis_snapshot() -> Vec<Benchmark> {
@@ -518,16 +634,17 @@ pub(crate) fn artificial_analysis_snapshot() -> Vec<Benchmark> {
                 None,
                 BenchmarkKind::Model,
             );
-            let inherited = INHERITED_EXECUTION_MODES.iter()
-                .find(|(mode, _)| *mode == *model)
-                .map(|(_, base)| *base);
+            let inherited = SAME_WEIGHTS_SKU_ALIASES.iter()
+                .find(|(sku, _, _)| *sku == *model)
+                .map(|(_, base, what)| (*base, *what));
             row.name = match inherited {
-                Some(base) => format!(
-                    "{} [AA Intelligence {} · snapshot {} · inherited from {} (max effort); pro mode not separately benchmarked]",
+                Some((base, what)) => format!(
+                    "{} [AA Intelligence {} · snapshot {} · inherited from {} — {}; same weights, not separately benchmarked]",
                     model,
                     ARTIFICIAL_ANALYSIS_SNAPSHOT_VERSION,
                     ARTIFICIAL_ANALYSIS_SNAPSHOT_DATE,
                     base,
+                    what,
                 ),
                 None => format!(
                     "{} [AA Intelligence {} · snapshot {}]",
@@ -598,30 +715,28 @@ mod tests {
     }
 
     #[test]
-    fn inherited_mode_pairs_reference_real_rows_and_disclose_in_name() {
+    fn same_weights_alias_pairs_reference_real_rows_and_disclose_in_name() {
         let names: std::collections::HashSet<_> =
             SNAPSHOT_ROWS.iter().map(|(model, _)| *model).collect();
-        assert!(!INHERITED_EXECUTION_MODES.is_empty());
-        for (mode, base) in INHERITED_EXECUTION_MODES {
-            assert!(
-                names.contains(mode),
-                "pair references unknown mode SKU `{mode}`"
-            );
+        assert!(!SAME_WEIGHTS_SKU_ALIASES.is_empty());
+        for (sku, base, _) in SAME_WEIGHTS_SKU_ALIASES {
+            assert!(names.contains(sku), "pair references unknown SKU `{sku}`");
             assert!(
                 names.contains(base),
                 "pair references unknown base variant `{base}`"
             );
             assert_ne!(
-                benchmark_model_key(mode),
+                benchmark_model_key(sku),
                 benchmark_model_key(base),
-                "{mode} must normalize differently from {base}"
+                "{sku} must normalize differently from {base} (equal keys need no alias: \
+                 the wrapper token should strip instead)"
             );
         }
         let rows = artificial_analysis_snapshot();
-        for (mode, base) in INHERITED_EXECUTION_MODES {
+        for (sku, base, _) in SAME_WEIGHTS_SKU_ALIASES {
             let row = rows
                 .iter()
-                .find(|row| benchmark_model_key(&row.slug) == benchmark_model_key(mode))
+                .find(|row| benchmark_model_key(&row.slug) == benchmark_model_key(sku))
                 .unwrap();
             assert!(
                 row.name.contains(base) && row.name.contains("not separately benchmarked"),
@@ -695,7 +810,7 @@ mod tests {
         // SKUs, Grok 4.7 (xhigh; AA measured no max run), and Xiaomi's
         // MiMo-V2.6-Pro. The UltraSpeed SKU must collapse onto the Pro key so
         // the same-checkpoint wrapper inherits the row, and the pro modes must
-        // stay distinct keys resolved through INHERITED_EXECUTION_MODES.
+        // stay distinct keys resolved through SAME_WEIGHTS_SKU_ALIASES.
         let rows = artificial_analysis_snapshot();
         let score_of = |name: &str| {
             rows.iter()
@@ -889,12 +1004,12 @@ mod tests {
         };
         // The Surplus display name carries the "NVIDIA: " creator prefix the
         // key strips; assert through it so the exact join is what's covered.
-        // The 1017 entered at 40 and was re-read to 45 on 2026-10-20 (see the
-        // 2026_10_20 test); this test pins the family separation, not the
-        // entry value.
+        // The 1017 entered at 40 and was re-read to 45 on 2026-10-20, and the
+        // Nemotron row was re-read to 26 on 2026-10-23 (see those days' tests);
+        // this test pins the family separations, not the entry values.
         for (name, expected) in [
             ("DeepSeek V4.1 Flash 1017", 45.0),
-            ("NVIDIA: Nemotron 3.5 Super VL", 25.0),
+            ("NVIDIA: Nemotron 3.5 Super VL", 26.0),
             ("Mistral Large 4", 38.0),
             ("DeepSeek V4.1 Flash", 39.5),
         ] {
@@ -927,6 +1042,52 @@ mod tests {
             benchmark_model_key("NVIDIA: Nemotron 3.5 Super VL"),
             benchmark_model_key("NVIDIA Nemotron 3 Super 120B"),
             "the 3.5 generation must not collapse onto the 3 generation"
+        );
+    }
+
+    #[test]
+    fn aa_snapshot_covers_the_2026_10_23_refresh() {
+        // Rows added 2026-10-23 under the still-v4.3.2 index for AA's
+        // 2026-10-22 release: Ling 3.1 Flash 1019 (the dated refresh, three
+        // over the undated build's 41) lands ahead of its Surplus listing,
+        // and Muse Spark 1.2 Contributor (the contributor-licensed SKU of the
+        // 1.2 weights, listed on Surplus) carries the 1.2 measurement and
+        // joins through SAME_WEIGHTS_SKU_ALIASES instead of the fuzzy bar.
+        // Nemotron 3.5 Super VL was re-read 25 -> 26 in the same bump.
+        let rows = artificial_analysis_snapshot();
+        let score_of = |name: &str| {
+            rows.iter()
+                .find(|b| benchmark_model_key(&b.slug) == benchmark_model_key(name))
+                .and_then(|b| b.agentic_coding)
+        };
+        for (name, expected) in [
+            ("inclusionAI: Ling 3.1 Flash 1019", 44.0),
+            ("inclusionAI: Ling 3.1 Flash", 41.0),
+            ("Meta: Muse Spark 1.2 Contributor", 39.8),
+            ("Muse Spark 1.2", 39.8),
+            ("NVIDIA: Nemotron 3.5 Super VL", 26.0),
+        ] {
+            assert_eq!(
+                score_of(name),
+                Some(expected),
+                "{name} missing or wrong in snapshot"
+            );
+        }
+        // The dated refresh keeps its release tag, so it never collapses onto
+        // the undated family row.
+        assert_ne!(
+            benchmark_model_key("inclusionAI: Ling 3.1 Flash 1019"),
+            benchmark_model_key("inclusionAI: Ling 3.1 Flash"),
+            "the 1019 refresh must not collapse onto the undated family row"
+        );
+        // The 1.2 Contributor SKU joins the 1.2 rows through the alias table,
+        // not a fuzzy accident.
+        assert!(
+            SAME_WEIGHTS_SKU_ALIASES
+                .iter()
+                .any(|(sku, base, _)| sku == &"Meta: Muse Spark 1.2 Contributor"
+                    && base == &"Muse Spark 1.2"),
+            "Muse Spark 1.2 Contributor must be registered in SAME_WEIGHTS_SKU_ALIASES"
         );
     }
 
