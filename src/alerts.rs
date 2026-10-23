@@ -8,7 +8,7 @@ use chrono::{DateTime, Utc};
 
 use crate::bench::benchmarks_for_source;
 use crate::notifications::{NotificationKind, SharedNotifications, notify_alert};
-use crate::pareto::{JoinedPoint, joined_points, pareto_frontier};
+use crate::pareto::{JoinedPoint, filter_frontier_hidden, joined_points, pareto_frontier};
 use crate::types::{
     ANY_MODEL, AlertDirection, AlertMode, AlertRearm, AlertRule, Benchmark, BenchmarkMetric,
     BenchmarkSource, MoveDirection, PriceMetric, PriceSnapshot, Quote, Settings,
@@ -37,11 +37,15 @@ pub(crate) fn semantic_alert_status(
     alert: &AlertRule,
     quotes: &[Quote],
     sets: &HashMap<BenchmarkSource, Vec<Benchmark>>,
-    input_weight: f64,
-    cache_read_weight: f64,
-    output_weight: f64,
-    cache_fallback_pct: f64,
+    settings: &Settings,
 ) -> String {
+    let (input_weight, cache_read_weight, output_weight, cache_fallback_pct) = (
+        settings.input_weight,
+        settings.cache_read_weight,
+        settings.output_weight,
+        settings.cache_read_fallback_pct,
+    );
+    let hidden_frontier = settings.hidden_frontier_set();
     let benchmarks = benchmarks_for_source(
         alert.benchmark_source,
         sets,
@@ -94,14 +98,18 @@ pub(crate) fn semantic_alert_status(
                 None => "no model clears score".into(),
             };
         }
-        return format!("frontier: {} models", pareto_frontier(&joined).len());
+        return format!(
+            "frontier: {} models",
+            pareto_frontier(&filter_frontier_hidden(&joined, &hidden_frontier)).len()
+        );
     }
     let Some(target) = joined.iter().find(|point| point.model_id == alert.model) else {
         return "not matched".into();
     };
     match alert.mode {
         AlertMode::EntersFrontier | AlertMode::LeavesFrontier => {
-            let on_frontier = pareto_frontier(&joined)
+            // Frontier-hidden models cannot enter or leave the line.
+            let on_frontier = pareto_frontier(&filter_frontier_hidden(&joined, &hidden_frontier))
                 .iter()
                 .any(|point| point.model_id == alert.model);
             if on_frontier {

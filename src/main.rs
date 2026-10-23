@@ -4,6 +4,7 @@ mod alerts;
 mod app;
 mod artificial_analysis_snapshot;
 mod bench;
+mod benchmark_cache;
 mod fetch;
 mod format;
 mod history;

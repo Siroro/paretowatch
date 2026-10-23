@@ -679,6 +679,10 @@ pub(crate) struct Settings {
     pub(crate) quiet_hours_start: u8,
     /// Local wall-clock hour (0-23) when quiet hours end.
     pub(crate) quiet_hours_end: u8,
+    /// Model ids deliberately hidden from the Pareto frontier: the orb stays
+    /// on the chart (faded) but the frontier line skips them, and frontier
+    /// entry/exit alerts ignore them.
+    pub(crate) hidden_frontier_models: Vec<String>,
 }
 
 impl Default for Settings {
@@ -695,7 +699,18 @@ impl Default for Settings {
             quiet_hours_enabled: false,
             quiet_hours_start: 22,
             quiet_hours_end: 7,
+            hidden_frontier_models: vec![],
         }
+    }
+}
+
+impl Settings {
+    /// Hidden-from-frontier ids as a lookup set.
+    pub(crate) fn hidden_frontier_set(&self) -> std::collections::HashSet<&str> {
+        self.hidden_frontier_models
+            .iter()
+            .map(String::as_str)
+            .collect()
     }
 }
 
@@ -964,7 +979,7 @@ pub(crate) struct PriceSnapshot {
     pub(crate) base_source: String,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub(crate) struct Benchmark {
     pub(crate) slug: String,
     pub(crate) name: String,

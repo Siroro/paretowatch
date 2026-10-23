@@ -1,3 +1,18 @@
+# ParetoWatch v0.22.0
+
+## Features
+
+- **Benchmark boards now survive restarts.** Every fetched board is persisted to a disk cache (atomic temp-file write, `%LOCALAPPDATA%/ParetoWatch/cache/benchmarks.json` on Windows) each time a source updates, and startup seeds the previous session's boards on top of the bundled AA snapshot — a restart used to lose every live board until the next six-hour refresh, and now the chart, composites, and alerts start from real data immediately (status line discloses "Loaded cached benchmark boards (saved …) — refreshing…"). The cache is best-effort by design: corrupt, missing, or version-drifted files are ignored and fresh fetches take over; the AA source's own bundled snapshot remains the always-available floor.
+- **Hide any model from the Pareto frontier.** Select a model and use the new "⊖ Hide from frontier" button in its detail card (next to the 🔔 alarm menu): the orb stays on the chart, faded, but the frontier line reroutes around it. Frontier entry/exit alerts ignore hidden models too — they cannot enter or leave a line they are not part of — while cheapest-above-score alerts deliberately keep considering them (price shopping is independent of the line). The toolbar shows "N models hidden from the frontier (faded)" with a "Show all on frontier" restore button, and per-model restore is the same detail-card button ("⊕ Show on frontier"). The hidden set persists in settings like every other preference, and toggling it rebuilds the chart, composite, and alert-status caches immediately.
+
+## Fixes
+
+- `semantic_alert_status` now takes the settings bundle instead of four loose weight arguments (arity lint).
+
+## Validation
+
+Formatting, locked check, locked test (168 tests), and Clippy with warnings denied all pass.
+
 # ParetoWatch v0.21.0
 
 ## Features

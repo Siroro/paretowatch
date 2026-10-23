@@ -23,6 +23,7 @@ use crate::artificial_analysis_snapshot::artificial_analysis_snapshot;
 use crate::bench::{
     BenchmarkConsensus, available_scaffolds, benchmark_consensus_for_quote, benchmarks_for_source,
 };
+use crate::benchmark_cache::{load_benchmark_cache, save_benchmark_cache};
 use crate::fetch::start_worker;
 use crate::history;
 use crate::history::track::blended_series;
@@ -30,8 +31,8 @@ use crate::notifications::{
     NotificationKind, NotificationLog, PriceMoveRecord, SharedNotifications, notify_alert,
 };
 use crate::pareto::{
-    ParetoCache, ParetoCacheKey, filter_hidden_groups, joined_points, pareto_frontier,
-    pricing_source_allows,
+    ParetoCache, ParetoCacheKey, filter_frontier_hidden, filter_hidden_groups, joined_points,
+    pareto_frontier, pricing_source_allows,
 };
 use crate::settings_store::{load_settings, save_settings};
 #[cfg(not(target_os = "linux"))]
@@ -214,15 +215,28 @@ impl ParetoWatchApp {
             settings.output_weight,
         );
 
+        let mut status_note: Option<String> = None;
+
         Self {
             settings,
             price_snapshot: None,
             benchmark_sets: {
+                // Bundled AA rows first (instant, offline), then the previous
+                // session's cached boards on top — a restart starts from real
+                // data everywhere instead of waiting for the six-hour refresh.
                 let mut sets = HashMap::new();
                 sets.insert(
                     BenchmarkSource::ArtificialAnalysisSnapshot,
                     artificial_analysis_snapshot(),
                 );
+                if let Some((cached, saved_at)) = load_benchmark_cache() {
+                    status_note = Some(format!(
+                        "Loaded cached benchmark boards (saved {saved_at}) — refreshing…"
+                    ));
+                    for (source, rows) in cached {
+                        sets.insert(source, rows);
+                    }
+                }
                 sets
             },
             benchmark_errors: HashMap::new(),
@@ -287,7 +301,7 @@ impl ParetoWatchApp {
             pareto_cache: None,
             alert_status_cache: HashMap::new(),
             consensus_cache: None,
-            status: "Starting…".into(),
+            status: status_note.take().unwrap_or_else(|| "Starting…".into()),
             last_price_error: None,
             is_visible: true,
             quitting: false,
@@ -388,6 +402,8 @@ impl ParetoWatchApp {
                     self.benchmark_errors.remove(&source);
                     self.data_version += 1;
                     data_dirty = true;
+                    // Persist the boards so the next restart starts from them.
+                    save_benchmark_cache(&self.benchmark_sets);
                 }
                 Ok(WorkerMessage::Benchmarks(source, Err(err))) => {
                     self.benchmark_errors.insert(source, err);
@@ -639,6 +655,11 @@ impl ParetoWatchApp {
             uncensored_filter: self.uncensored_filter,
             hide_catalog_prices: self.hide_catalog_prices,
             hidden_groups,
+            hidden_models: {
+                let mut models = self.settings.hidden_frontier_models.clone();
+                models.sort();
+                models
+            },
             input_weight: self.settings.input_weight,
             cache_read_weight: self.settings.cache_read_weight,
             output_weight: self.settings.output_weight,
@@ -693,7 +714,12 @@ impl ParetoWatchApp {
         // Hidden groups stay in `joined` so the legend can offer them back;
         // the chart and the frontier only see the enabled subset.
         let visible = filter_hidden_groups(&joined, &self.hidden_groups);
-        let frontier = pareto_frontier(&visible);
+        // Frontier-hidden models stay plotted (faded) but leave the frontier
+        // population, so neither the line nor entry/exit alerts can reach them.
+        let frontier = pareto_frontier(&filter_frontier_hidden(
+            &visible,
+            &self.settings.hidden_frontier_set(),
+        ));
         self.pareto_cache = Some(Arc::new(ParetoCache {
             key,
             benchmarks_present,
@@ -789,10 +815,7 @@ impl ParetoWatchApp {
                                 alert,
                                 quotes,
                                 &self.benchmark_sets,
-                                input_weight,
-                                cache_read_weight,
-                                output_weight,
-                                cache_fallback_pct,
+                                &self.settings,
                             )
                         };
                         self.alert_status_cache.insert(
@@ -893,6 +916,7 @@ impl ParetoWatchApp {
         };
         let notifications = Arc::clone(&self.notifications);
         let alerts = self.settings.alerts.clone();
+        let hidden_frontier = self.settings.hidden_frontier_set();
         for alert in alerts {
             if !alert.enabled || !alert.mode.benchmark_dependent() {
                 self.semantic_alert_state.remove(&alert.id);
@@ -1017,7 +1041,9 @@ impl ParetoWatchApp {
                     continue;
                 }
 
-                let frontier = pareto_frontier(&joined);
+                // Wildcard frontier membership ignores models hidden from the
+                // line: they cannot enter or exit what they are not part of.
+                let frontier = pareto_frontier(&filter_frontier_hidden(&joined, &hidden_frontier));
                 let membership: HashMap<String, String> = frontier
                     .iter()
                     .map(|p| (p.model_id.clone(), p.model.clone()))
@@ -1120,7 +1146,9 @@ impl ParetoWatchApp {
             let Some(target) = joined.iter().find(|point| point.model_id == alert.model) else {
                 continue;
             };
-            let frontier = pareto_frontier(&joined);
+            // Same rule as the wildcard membership above: hidden models are
+            // never on the line (a hidden target reads "off frontier").
+            let frontier = pareto_frontier(&filter_frontier_hidden(&joined, &hidden_frontier));
             let on_frontier = frontier.iter().any(|point| point.model_id == alert.model);
             let condition = match alert.mode {
                 AlertMode::EntersFrontier => on_frontier,
@@ -1214,6 +1242,40 @@ impl ParetoWatchApp {
             }
             self.semantic_alert_state.insert(alert.id, condition);
         }
+    }
+
+    /// Toggle one model's hidden-from-frontier state: the orb stays on the
+    /// chart (faded) but the frontier line and frontier entry/exit alerts
+    /// skip it. Persisted with every other setting.
+    fn toggle_frontier_hidden(&mut self, model_id: &str) {
+        match self
+            .settings
+            .hidden_frontier_models
+            .iter()
+            .position(|m| m == model_id)
+        {
+            Some(pos) => {
+                self.settings.hidden_frontier_models.remove(pos);
+            }
+            None => self
+                .settings
+                .hidden_frontier_models
+                .push(model_id.to_owned()),
+        }
+        // Frontier shape changed: rebuild every derived view (pareto cache,
+        // alert-status texts) instead of waiting for new data.
+        self.data_version += 1;
+        self.save_and_push_settings();
+    }
+
+    /// Bring every frontier-hidden model back onto the line.
+    fn restore_all_frontier_hidden(&mut self) {
+        if self.settings.hidden_frontier_models.is_empty() {
+            return;
+        }
+        self.settings.hidden_frontier_models.clear();
+        self.data_version += 1;
+        self.save_and_push_settings();
     }
 
     fn save_and_push_settings(&mut self) {

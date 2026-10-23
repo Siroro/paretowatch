@@ -519,6 +519,7 @@ impl ParetoWatchApp {
             return;
         }
         let frontier_names: std::collections::HashSet<&str> = frontier.iter().map(|p| p.model_id.as_str()).collect();
+        let hidden_frontier = self.settings.hidden_frontier_set();
         let selected_before = self.selected_pareto_model.clone();
         let search_query = self.pareto_search.clone();
         let search_active = !normalize(&search_query).replace(' ', "").is_empty();
@@ -662,10 +663,15 @@ impl ParetoWatchApp {
 
                 for (p, matches_search) in visible.iter().zip(search_matches.iter().copied()) {
                     let is_frontier = frontier_names.contains(p.model_id.as_str());
+                    let is_hidden = hidden_frontier.contains(p.model_id.as_str());
                     let is_selected = selected_before.as_deref() == Some(p.model_id.as_str());
                     let base = creator_color(&p.creator);
-                    // Non-matching models fade back so matches pop during search.
-                    let color = if matches_search {
+                    // Non-matching models fade back so matches pop during
+                    // search; frontier-hidden models stay faded even when
+                    // they match — hiding is a deliberate standing state.
+                    let color = if is_hidden {
+                        egui::Color32::from_rgba_unmultiplied(base.r(), base.g(), base.b(), 45)
+                    } else if matches_search {
                         base
                     } else {
                         egui::Color32::from_rgba_unmultiplied(base.r(), base.g(), base.b(), 55)
@@ -817,6 +823,17 @@ impl ParetoWatchApp {
                     if self.hidden_groups.len() == 1 { "" } else { "s" }
                 ));
             }
+            if !self.settings.hidden_frontier_models.is_empty() {
+                ui.separator();
+                ui.small(format!(
+                    "{} model{} hidden from the frontier (faded)",
+                    self.settings.hidden_frontier_models.len(),
+                    if self.settings.hidden_frontier_models.len() == 1 { "" } else { "s" }
+                ));
+                if ui.small_button("Show all on frontier").clicked() {
+                    self.restore_all_frontier_hidden();
+                }
+            }
             if self.modality_filter != ModalityFilter::All {
                 ui.small(self.modality_filter.label());
             }
@@ -865,8 +882,7 @@ impl ParetoWatchApp {
                 ui.label(egui::RichText::new("●").color(creator_color(&p.creator)).size(16.0));
                 ui.heading(&p.model);
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    ui.menu_button(egui::RichText::new("🔔").size(16.0), |ui| {
-                        if self.cost_basis == CostBasis::PerMillion
+                    ui.menu_button(egui::RichText::new("🔔").size(16.0), |ui| {                        if self.cost_basis == CostBasis::PerMillion
                             && ui.button("Price threshold").clicked()
                         {
                             self.alert_model = p.model_id.clone();
@@ -911,6 +927,28 @@ impl ParetoWatchApp {
                     })
                     .response
                     .on_hover_text("Add alarm");
+                    // Frontier visibility: hidden models keep a faded orb but
+                    // leave the frontier line and its entry/exit alerts.
+                    let hidden = self
+                        .settings
+                        .hidden_frontier_models
+                        .iter()
+                        .any(|m| m == &p.model_id);
+                    let toggle = if hidden {
+                        "⊕ Show on frontier"
+                    } else {
+                        "⊖ Hide from frontier"
+                    };
+                    if ui
+                        .button(toggle)
+                        .on_hover_text(
+                            "Hidden models stay on the chart (faded) — the frontier line \
+                             and frontier entry/exit alerts skip them",
+                        )
+                        .clicked()
+                    {
+                        self.toggle_frontier_hidden(&p.model_id);
+                    }
                 });
             });
             copyable_slug(ui, &p.model_id);

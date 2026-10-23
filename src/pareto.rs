@@ -50,6 +50,8 @@ pub(crate) struct ParetoCacheKey {
     pub(crate) hide_catalog_prices: bool,
     /// Canonical group labels currently toggled off in the legend, sorted.
     pub(crate) hidden_groups: Vec<String>,
+    /// Model ids deliberately hidden from the frontier (faded orbs), sorted.
+    pub(crate) hidden_models: Vec<String>,
     pub(crate) input_weight: f64,
     pub(crate) cache_read_weight: f64,
     pub(crate) output_weight: f64,
@@ -71,8 +73,9 @@ pub(crate) struct ParetoCache {
     pub(crate) joined: Vec<JoinedPoint>,
     /// The subset of `joined` whose group is enabled — what gets plotted.
     pub(crate) visible: Vec<JoinedPoint>,
-    /// Pareto frontier of `visible` only, so a hidden group cannot hold a
-    /// frontier spot while its orbs are off the chart.
+    /// Pareto frontier of `visible` minus models hidden from the frontier, so
+    /// a hidden group cannot hold a frontier spot while its orbs are off the
+    /// chart, and a hidden model cannot hold one while its orb is faded.
     pub(crate) frontier: Vec<JoinedPoint>,
 }
 
@@ -84,6 +87,20 @@ pub(crate) fn filter_hidden_groups(
     joined
         .iter()
         .filter(|p| !hidden_groups.contains(crate::theme::group_label(&p.creator)))
+        .cloned()
+        .collect()
+}
+
+/// Drops models deliberately hidden from the frontier. Hidden models stay on
+/// the chart (faded) — they only leave the frontier population, here and in
+/// frontier entry/exit alerts.
+pub(crate) fn filter_frontier_hidden<'a>(
+    joined: impl IntoIterator<Item = &'a JoinedPoint>,
+    hidden: &std::collections::HashSet<&str>,
+) -> Vec<JoinedPoint> {
+    joined
+        .into_iter()
+        .filter(|p| !hidden.contains(p.model_id.as_str()))
         .cloned()
         .collect()
 }
@@ -303,5 +320,41 @@ mod tests {
         // On: only live-market asks remain.
         assert!(pricing_source_allows(true, &live));
         assert!(!pricing_source_allows(true, &catalog));
+    }
+
+    #[test]
+    fn frontier_hidden_models_leave_the_line_but_not_the_chart() {
+        let joined = vec![
+            JoinedPoint {
+                model_id: "cheap".into(),
+                cost: 1.0,
+                score: 50.0,
+                ..crate::testfix::test_joined_point()
+            },
+            JoinedPoint {
+                model_id: "dominant".into(),
+                cost: 2.0,
+                score: 80.0,
+                ..crate::testfix::test_joined_point()
+            },
+            JoinedPoint {
+                model_id: "expensive".into(),
+                cost: 5.0,
+                score: 90.0,
+                ..crate::testfix::test_joined_point()
+            },
+        ];
+        // Sanity: all three are efficient before hiding.
+        assert_eq!(pareto_frontier(&joined).len(), 3);
+        // Hide the dominant middle point: the line reroutes through the
+        // remaining two, while `joined` (what the chart plots) is untouched.
+        let mut hidden = std::collections::HashSet::new();
+        hidden.insert("dominant");
+        let eligible = filter_frontier_hidden(&joined, &hidden);
+        assert_eq!(eligible.len(), 2);
+        assert!(joined.len() == 3);
+        let frontier = pareto_frontier(&eligible);
+        assert_eq!(frontier.len(), 2);
+        assert!(!frontier.iter().any(|p| p.model_id == "dominant"));
     }
 }
