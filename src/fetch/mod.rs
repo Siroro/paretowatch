@@ -13,6 +13,7 @@ pub(crate) mod revelo;
 pub(crate) mod swe_rebench;
 pub(crate) mod swebench_pro;
 pub(crate) mod terminal_bench;
+pub(crate) mod vals_sre;
 
 pub(crate) use aa_evals::*;
 pub(crate) use aa_index::*;
@@ -25,6 +26,7 @@ pub(crate) use revelo::*;
 pub(crate) use swe_rebench::*;
 pub(crate) use swebench_pro::*;
 pub(crate) use terminal_bench::*;
+pub(crate) use vals_sre::*;
 
 use std::collections::HashMap;
 use std::sync::mpsc::{self, Receiver, Sender};
@@ -179,6 +181,7 @@ pub(crate) fn fetch_benchmark_source(
         BenchmarkSource::AABriefcase => fetch_aa_briefcase(client),
         BenchmarkSource::AutomationBenchAA => fetch_automationbench_aa(client),
         BenchmarkSource::SWEBenchPro => fetch_swebench_pro(client),
+        BenchmarkSource::ValsSREBench => fetch_vals_sre_bench(client),
         BenchmarkSource::CompositeAgentic | BenchmarkSource::CompositeDeployment => {
             Err(anyhow!("Composite is derived locally and is not fetched"))
         }

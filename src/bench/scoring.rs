@@ -432,6 +432,12 @@ pub(crate) fn build_agentic_composite(
         // pairings (Claude Code / mini-swe-agent / Codex), so it joins the
         // harness-specific family like FrontierCode.
         (BenchmarkSource::SWEBenchPro, 0.15_f64),
+        // Vals' SRE Bench (added 0.24.0) runs every model under Vals' own
+        // standardized protocol on a private binary-RE task set — a uniform
+        // harness like SWE-rebench, so it stays fully weighted in both
+        // flavors — but reverse engineering is adjacent to, not the same
+        // construct as, agentic coding, so it carries a mid-tier weight.
+        (BenchmarkSource::ValsSREBench, 0.10_f64),
     ];
     let aliases = same_weights_sku_aliases();
 
@@ -2477,6 +2483,7 @@ mod tests {
             BenchmarkSource::AABriefcase,
             BenchmarkSource::AutomationBenchAA,
             BenchmarkSource::SWEBenchPro,
+            BenchmarkSource::ValsSREBench,
         ] {
             match fetch_benchmark_source(&client, source) {
                 Ok(rows) => {

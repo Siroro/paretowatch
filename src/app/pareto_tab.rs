@@ -131,6 +131,7 @@ impl ParetoWatchApp {
                     BenchmarkSource::AABriefcase => "Metric: Elo (blind pairwise, private tasks)",
                     BenchmarkSource::AutomationBenchAA => "Metric: partial score (no violations)",
                     BenchmarkSource::SWEBenchPro => "Metric: resolve rate (HARD set)",
+                    BenchmarkSource::ValsSREBench => "Metric: accuracy (binary RE tasks)",
                     _ => unreachable!(),
                 });
             }
@@ -596,6 +597,7 @@ impl ParetoWatchApp {
                 "AutomationBench-AA partial score".to_owned()
             }
             BenchmarkSource::SWEBenchPro => "SWE-Bench Pro V2 HARD resolve rate".to_owned(),
+            BenchmarkSource::ValsSREBench => "SRE Bench binary RE accuracy".to_owned(),
         };
 
         // The chart body scrolls as one page with the card and table below it,

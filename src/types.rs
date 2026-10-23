@@ -6,6 +6,7 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
 pub(crate) const SWE_REBENCH_URL: &str = "https://swe-rebench.com/";
+pub(crate) const VALS_SRE_BENCH_URL: &str = "https://www.vals.ai/benchmarks/srebench";
 pub(crate) const REVELO_CODE_INDEX_URL: &str = "https://research.revelo.com/code-index/";
 pub(crate) const FRONTIERCODE_URL: &str = "https://cognition.com/frontiercode";
 pub(crate) const ARTIFICIAL_ANALYSIS_URL: &str =
@@ -207,6 +208,7 @@ pub(crate) enum BenchmarkSource {
     AABriefcase,
     AutomationBenchAA,
     SWEBenchPro,
+    ValsSREBench,
 }
 
 /// Which question a composite answers. Capability/value asks "how good is the
@@ -242,6 +244,7 @@ impl BenchmarkSource {
             Self::AABriefcase => "AA-Briefcase (Elo)",
             Self::AutomationBenchAA => "AutomationBench-AA",
             Self::SWEBenchPro => "SWE-Bench Pro V2 HARD (Scale)",
+            Self::ValsSREBench => "SRE Bench (Vals)",
         }
     }
 
@@ -261,6 +264,7 @@ impl BenchmarkSource {
             Self::AABriefcase => "AA-Briefcase",
             Self::AutomationBenchAA => "AutomationBench",
             Self::SWEBenchPro => "SWE-Bench Pro",
+            Self::ValsSREBench => "SRE Bench",
         }
     }
 
@@ -304,7 +308,7 @@ impl BenchmarkSource {
         )
     }
 
-    pub(crate) fn remote_sources() -> [Self; 12] {
+    pub(crate) fn remote_sources() -> [Self; 13] {
         [
             // The AA Intelligence Index fetch overlays live leaderboard values
             // onto the bundled snapshot (it never fails — the bundle is the
@@ -321,10 +325,11 @@ impl BenchmarkSource {
             Self::AABriefcase,
             Self::AutomationBenchAA,
             Self::SWEBenchPro,
+            Self::ValsSREBench,
         ]
     }
 
-    pub(crate) fn consensus_sources() -> [Self; 12] {
+    pub(crate) fn consensus_sources() -> [Self; 13] {
         [
             Self::ArtificialAnalysisSnapshot,
             Self::SWERebench,
@@ -338,10 +343,11 @@ impl BenchmarkSource {
             Self::AABriefcase,
             Self::AutomationBenchAA,
             Self::SWEBenchPro,
+            Self::ValsSREBench,
         ]
     }
 
-    pub(crate) fn display_sources() -> [Self; 12] {
+    pub(crate) fn display_sources() -> [Self; 13] {
         Self::consensus_sources()
     }
 
@@ -366,6 +372,7 @@ impl BenchmarkSource {
                 "https://artificialanalysis.ai/evaluations/automationbench-aa"
             }
             Self::SWEBenchPro => "https://labs.scale.com/leaderboard/swe_bench_pro_public_v2",
+            Self::ValsSREBench => VALS_SRE_BENCH_URL,
         }
     }
 }

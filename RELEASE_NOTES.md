@@ -1,3 +1,13 @@
+# ParetoWatch v0.24.0
+
+## Features
+
+- **New benchmark board: SRE Bench (Vals).** vals.ai's agentic software-reverse-engineering benchmark joins the consensus grid, the composite, the Pareto board list, and the alert source picker: models must figure out what a real-world, contamination-free binary does without its source code, so the board is a security-adjacent sibling of the agentic coding boards. Vals runs every model under its own standardized protocol (uniform harness, like SWE-rebench), so it is fully weighted in both composite flavors; its mid-tier 0.10 weight reflects that reverse engineering is adjacent to, not the same construct as, agentic coding. The fetcher reads Vals' hashed `benchmark_view_sre_bench.*.json` data file, re-extracting its URL from the page HTML on every fetch because the hash changes with each update; rows carry the reasoning effort (and agent harness, when published) per model.
+
+## Validation
+
+Formatting, locked check, locked test (171 tests + 1 live vals.ai fetch test), and Clippy with warnings denied all pass. The live fetch returns all 35 leaderboard rows.
+
 # ParetoWatch v0.23.0
 
 ## Features
