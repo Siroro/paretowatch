@@ -1,3 +1,23 @@
+# ParetoWatch v0.25.0
+
+## Features
+
+- **New listings gets its own pane in Activity.** A third sub-tab — "New listings (N)" — collects every model the persistent history log first saw inside a selectable window (24h / 7 days / 30 days / all time, persisted with the rest of the session view). "New" survives restarts by construction: the same event log that feeds "new model listed" alerts records each model's first-ever sighting, so a relaunch never re-flags the catalogue and the button's count is the true number of first sightings in the window. When the history log itself is younger than the window, the pane says so ("History log begins … — models listed before that were never recorded as new") instead of implying the whole catalogue just appeared.
+- Each listing is a card with the full first-impression dossier:
+  - **Pricing as listed** — workload-blended $/1M beside the raw input / cache / output legs, live-market vs catalog, current discount, free-offer badge, 24h request and volume telemetry, vision/uncensored flags, and the first-seen timestamp with a live age band (NEW badge under 48h).
+  - **Benchmark coverage** — "benchmarked on N of 13 boards" per card, counted with the exact same matching rules as the consensus grid so the badge and the grid can never disagree; unbenchmarked models say so explicitly instead of silently missing from the Pareto chart.
+  - **Expandable detail ("▸ Benchmarks & history")** — the blended price step-chart since listing with the all-time low and the recorded price-change count; daily volume and requests-per-day mini charts once two telemetry days exist; the full source-by-source consensus grid (percentile, rank, score, matched row across all 13 leaderboards); and every provider ask in the model's market with workload pricing (the Pareto detail card's market-quality section, now shared).
+  - **One-click cross-links per listing** — show it on the Pareto chart, open it in the History tab, pin a floating price widget, or arm a price-threshold / any-change / all-time-low alert straight from the card.
+- Performance: listing rows rebuild only when data actually changes (price/board version or comparison controls); board-coverage counts are computed lazily for the rows on screen and memoized per data version; and the all-time view caps at the newest 300 cards (disclosed on screen when trimming).
+
+## Fixes
+
+- `cached_consensus` now takes the quote directly, so its single-slot cache is shared cleanly by the Pareto detail card and the listing cards; the market-quality provider grid was extracted from the Pareto detail card for reuse.
+
+## Validation
+
+Formatting, locked check, locked Clippy with warnings denied (`--all-targets`), and locked test (175 tests) all pass.
+
 # ParetoWatch v0.24.0
 
 ## Features

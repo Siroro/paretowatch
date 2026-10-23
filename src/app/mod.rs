@@ -66,6 +66,72 @@ enum Tab {
 enum ActivityTab {
     PriceMoves,
     Notifications,
+    NewListings,
+}
+
+/// How far back the Activity tab's New listings view reaches: models whose
+/// first-ever sighting in the persistent history log falls inside the window.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+enum NewListingsWindow {
+    Day1,
+    #[default]
+    Day7,
+    Day30,
+    AllTime,
+}
+
+impl NewListingsWindow {
+    fn label(self) -> &'static str {
+        match self {
+            Self::Day1 => "24h",
+            Self::Day7 => "7 days",
+            Self::Day30 => "30 days",
+            Self::AllTime => "All time",
+        }
+    }
+
+    fn seconds(self) -> Option<i64> {
+        match self {
+            Self::Day1 => Some(86_400),
+            Self::Day7 => Some(7 * 86_400),
+            Self::Day30 => Some(30 * 86_400),
+            Self::AllTime => None,
+        }
+    }
+}
+
+/// One card in the New listings view: a model the history log has recorded,
+/// joined with its live quote. `benchmark_sources` is filled lazily from the
+/// memoized coverage map in the cache because counting it walks every
+/// leaderboard row.
+#[derive(Debug, Clone)]
+struct NewListing {
+    slug: String,
+    display: String,
+    creator: String,
+    /// Unix seconds of the model's first-ever sighting (the history log's
+    /// `Added` event), so "newly listed" survives restarts.
+    added_ts: f64,
+    quote: Quote,
+    blended: f64,
+    benchmark_sources: usize,
+}
+
+/// New listings view backing data, rebuilt only when prices, boards, or the
+/// comparison controls change. Board-coverage counts are computed for the
+/// rows actually shown and memoized per data version.
+#[derive(Debug, Default)]
+struct NewListingsCache {
+    data_version: u64,
+    comparison_mode: ComparisonMode,
+    scaffold: String,
+    /// Every tracked model still priced in the snapshot, newest first.
+    rows: Vec<NewListing>,
+    coverage: HashMap<String, usize>,
+    /// Collapsed consensus-board rows for coverage counting, built once per
+    /// cache epoch — the per-source collapse is far too costly to repeat for
+    /// every row.
+    boards: Option<Vec<Vec<Benchmark>>>,
 }
 
 pub(crate) struct ParetoWatchApp {
@@ -89,6 +155,11 @@ pub(crate) struct ParetoWatchApp {
     activity_tab: ActivityTab,
     activity_model_filter: String,
     activity_kind_filter: Option<NotificationKind>,
+    /// How far back the New listings view reaches (persisted view state).
+    new_listings_window: NewListingsWindow,
+    /// Expanded card in the New listings view (transient, like searches).
+    new_listings_selected: Option<String>,
+    new_listings_cache: NewListingsCache,
     price_metric: PriceMetric,
     cost_basis: CostBasis,
     benchmark_source: BenchmarkSource,
@@ -260,6 +331,9 @@ impl ParetoWatchApp {
             activity_tab: ActivityTab::PriceMoves,
             activity_model_filter: String::new(),
             activity_kind_filter: None,
+            new_listings_window: NewListingsWindow::default(),
+            new_listings_selected: None,
+            new_listings_cache: NewListingsCache::default(),
             price_metric: PriceMetric::Blended,
             cost_basis: CostBasis::PerMillion,
             benchmark_source: BenchmarkSource::CompositeAgentic,
@@ -652,6 +726,55 @@ impl ParetoWatchApp {
         options
     }
 
+    /// Bring the New listings rows in sync with the current data: rebuild the
+    /// tracked-model join when prices/boards/version changed, and keep the
+    /// lazy coverage map bound to the same version.
+    fn ensure_new_listings(&mut self) {
+        let stale = {
+            let cache = &self.new_listings_cache;
+            cache.data_version != self.data_version
+                || cache.comparison_mode != self.comparison_mode
+                || cache.scaffold != self.common_scaffold
+        };
+        if !stale {
+            return;
+        }
+        let mut rows = Vec::new();
+        if let Some(snapshot) = self.price_snapshot.as_ref() {
+            for series in self.history.series_list() {
+                let Some(quote) = snapshot.quotes.iter().find(|q| q.model == series.slug) else {
+                    // Tracked once but no longer priced (delisted): never a
+                    // "new listing".
+                    continue;
+                };
+                rows.push(NewListing {
+                    slug: series.slug.clone(),
+                    display: series.display.clone(),
+                    creator: series.creator.clone(),
+                    added_ts: series.added_ts,
+                    blended: quote.price(
+                        PriceMetric::Blended,
+                        self.settings.input_weight,
+                        self.settings.cache_read_weight,
+                        self.settings.output_weight,
+                        self.settings.cache_read_fallback_pct,
+                    ),
+                    quote: quote.clone(),
+                    benchmark_sources: 0,
+                });
+            }
+        }
+        rows.sort_by(|a, b| b.added_ts.total_cmp(&a.added_ts));
+        self.new_listings_cache = NewListingsCache {
+            data_version: self.data_version,
+            comparison_mode: self.comparison_mode,
+            scaffold: self.common_scaffold.clone(),
+            rows,
+            coverage: HashMap::new(),
+            boards: None,
+        };
+    }
+
     fn pareto_cache_key(&self) -> ParetoCacheKey {
         let mut hidden_groups: Vec<String> = self.hidden_groups.iter().cloned().collect();
         hidden_groups.sort();
@@ -757,9 +880,11 @@ impl ParetoWatchApp {
             .cloned()
     }
 
-    /// Consensus panel ranks a quote across all eight leaderboards; cache it per
-    /// selection instead of re-ranking every frame.
-    fn cached_consensus(&mut self, model_id: &str) -> Option<BenchmarkConsensus> {
+    /// Consensus panel ranks a quote across every leaderboard; cache it per
+    /// selection instead of re-ranking every frame. Single-slot: only one
+    /// detail view asks per frame.
+    fn cached_consensus(&mut self, quote: &Quote) -> Option<BenchmarkConsensus> {
+        let model_id = quote.model.as_str();
         if let Some((version, mode, scaffold, cached_id, consensus)) = &self.consensus_cache
             && *version == self.data_version
             && *mode == self.comparison_mode
@@ -768,9 +893,8 @@ impl ParetoWatchApp {
         {
             return consensus.clone();
         }
-        let quote = self.selected_pareto_quote(model_id)?;
         let consensus = benchmark_consensus_for_quote(
-            &quote,
+            quote,
             &self.benchmark_sets,
             self.comparison_mode,
             &self.common_scaffold,

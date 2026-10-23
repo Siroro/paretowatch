@@ -19,7 +19,7 @@ use directories::ProjectDirs;
 use serde::{Deserialize, Serialize};
 
 use super::models_tab::{ModelsCacheFilter, ModelsSort, ModelsSource};
-use super::{ActivityTab, ParetoWatchApp, Tab};
+use super::{ActivityTab, NewListingsWindow, ParetoWatchApp, Tab};
 use crate::notifications::NotificationKind;
 use crate::types::{
     BenchmarkMetric, BenchmarkSource, ComparisonMode, CostBasis, LiquidityFilter, ModalityFilter,
@@ -35,6 +35,7 @@ pub(super) struct UiState {
     tab: Tab,
     activity_tab: ActivityTab,
     activity_kind_filter: Option<NotificationKind>,
+    new_listings_window: NewListingsWindow,
     // Pareto chart
     price_metric: PriceMetric,
     cost_basis: CostBasis,
@@ -70,6 +71,7 @@ impl Default for UiState {
             tab: Tab::Pareto,
             activity_tab: ActivityTab::PriceMoves,
             activity_kind_filter: None,
+            new_listings_window: NewListingsWindow::default(),
             price_metric: PriceMetric::Blended,
             cost_basis: CostBasis::PerMillion,
             benchmark_source: BenchmarkSource::CompositeAgentic,
@@ -129,6 +131,7 @@ impl ParetoWatchApp {
             tab: self.tab,
             activity_tab: self.activity_tab,
             activity_kind_filter: self.activity_kind_filter,
+            new_listings_window: self.new_listings_window,
             price_metric: self.price_metric,
             cost_basis: self.cost_basis,
             benchmark_source: self.benchmark_source,
@@ -162,6 +165,7 @@ impl ParetoWatchApp {
         self.tab = state.tab;
         self.activity_tab = state.activity_tab;
         self.activity_kind_filter = state.activity_kind_filter;
+        self.new_listings_window = state.new_listings_window;
         self.price_metric = state.price_metric;
         self.cost_basis = state.cost_basis;
         self.benchmark_source = state.benchmark_source;

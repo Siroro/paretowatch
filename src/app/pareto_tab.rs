@@ -878,13 +878,20 @@ impl ParetoWatchApp {
 
     fn pareto_detail_card(&mut self, ui: &mut egui::Ui, p: &JoinedPoint) {
         let selected_quote = self.selected_pareto_quote(&p.model_id);
-        let consensus = self.cached_consensus(&p.model_id);
+        let consensus = selected_quote
+            .as_ref()
+            .and_then(|quote| self.cached_consensus(quote));
         egui::Frame::group(ui.style()).show(ui, |ui| {
             ui.horizontal(|ui| {
-                ui.label(egui::RichText::new("●").color(creator_color(&p.creator)).size(16.0));
+                ui.label(
+                    egui::RichText::new("●")
+                        .color(creator_color(&p.creator))
+                        .size(16.0),
+                );
                 ui.heading(&p.model);
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    ui.menu_button(egui::RichText::new("🔔").size(16.0), |ui| {                        if self.cost_basis == CostBasis::PerMillion
+                    ui.menu_button(egui::RichText::new("🔔").size(16.0), |ui| {
+                        if self.cost_basis == CostBasis::PerMillion
                             && ui.button("Price threshold").clicked()
                         {
                             self.alert_model = p.model_id.clone();
@@ -977,10 +984,18 @@ impl ParetoWatchApp {
                 }
             });
             ui.horizontal_wrapped(|ui| {
-                ui.label(format!("Selected cost: ${:.4} {}", p.cost, self.cost_basis.unit()));
+                ui.label(format!(
+                    "Selected cost: ${:.4} {}",
+                    p.cost,
+                    self.cost_basis.unit()
+                ));
                 ui.separator();
                 ui.label(match self.benchmark_source {
-                    BenchmarkSource::LiveBench => format!("LiveBench {}: {:.1}", self.benchmark_metric.label(), p.score),
+                    BenchmarkSource::LiveBench => format!(
+                        "LiveBench {}: {:.1}",
+                        self.benchmark_metric.label(),
+                        p.score
+                    ),
                     _ => format!("{}: {:.1}", self.benchmark_source.short_label(), p.score),
                 });
                 ui.separator();
@@ -993,17 +1008,21 @@ impl ParetoWatchApp {
                 ui.label(format!("Output ${:.4}", p.output));
             });
             if self.cost_basis == CostBasis::EstimatedPerTask
-                && let Some(tokens) = p.tokens_per_task {
-                    ui.horizontal_wrapped(|ui| {
-                        ui.label(format!("Benchmark workload: {} tokens/task", format_compact_number(tokens)));
-                        if let Some(profile) = &p.token_profile {
-                            ui.separator();
-                            ui.small(profile);
-                        }
+                && let Some(tokens) = p.tokens_per_task
+            {
+                ui.horizontal_wrapped(|ui| {
+                    ui.label(format!(
+                        "Benchmark workload: {} tokens/task",
+                        format_compact_number(tokens)
+                    ));
+                    if let Some(profile) = &p.token_profile {
                         ui.separator();
-                        ui.small("repriced with current Surplus blended rate");
-                    });
-                }
+                        ui.small(profile);
+                    }
+                    ui.separator();
+                    ui.small("repriced with current Surplus blended rate");
+                });
+            }
             ui.horizontal_wrapped(|ui| {
                 let mut shown = false;
                 if !p.creator.is_empty() {
@@ -1023,111 +1042,16 @@ impl ParetoWatchApp {
                     if shown {
                         ui.separator();
                     }
-                    ui.label(format!("{} match: {}", self.benchmark_source.short_label(), p.benchmark_name));
+                    ui.label(format!(
+                        "{} match: {}",
+                        self.benchmark_source.short_label(),
+                        p.benchmark_name
+                    ));
                 }
             });
 
             if let Some(quote) = &selected_quote {
-                let header = if quote.live_market {
-                    let trust = match quote.provider_trusted {
-                        Some(true) => "trusted",
-                        Some(false) => "untrusted",
-                        None => "trust unknown",
-                    };
-                    format!(
-                        "Market quality: {trust} \u{00b7} {} healthy sellers",
-                        quote.healthy_seller_count.unwrap_or(0)
-                    )
-                } else {
-                    "Market quality: comparison/catalog quote".to_owned()
-                };
-                ui.collapsing(header, |ui| {
-                    if quote.live_market {
-                        ui.horizontal_wrapped(|ui| {
-                            match quote.provider_trusted {
-                                Some(true) => { ui.colored_label(egui::Color32::from_rgb(54, 179, 126), "trusted provider"); }
-                                Some(false) => { ui.colored_label(egui::Color32::from_rgb(224, 86, 86), "untrusted provider"); }
-                                None => { ui.label("trust unknown"); }
-                            }
-                            ui.separator();
-                            ui.label(format!("{} healthy sellers", quote.healthy_seller_count.unwrap_or(0)));
-                            if let Some(total) = quote.seller_count {
-                                ui.separator();
-                                ui.label(format!("{total} total sellers"));
-                            }
-                            if let Some(requests) = quote.requests_24h {
-                                ui.separator();
-                                ui.label(format!("{} requests / 24h", format_compact_number(requests as f64)));
-                            }
-                            if let Some(volume) = quote.volume_24h {
-                                ui.separator();
-                                ui.label(format!("{} volume / 24h", format_compact_usd(volume)));
-                            }
-                            if let Some(discount) = quote.discount_pct {
-                                ui.separator();
-                                let direction = quote.discount_direction.as_deref().unwrap_or("stable");
-                                let label = if self.settings.include_cache_read_in_discount {
-                                    format!("{discount:.1}% workload discount vs list \u{00b7} {direction}")
-                                } else {
-                                    format!("{discount:.1}% discount \u{00b7} {direction}")
-                                };
-                                ui.colored_label(discount_color(discount), label);
-                            }
-                        });
-                        if quote.free_offer_listed {
-                            ui.small(
-                                "* A seller is listing this model free (100% off). Shown prices are the \
-                                 cheapest ask that actually costs money; the published market best is $0.",
-                            );
-                        }
-                    } else {
-                        ui.label("market metadata unavailable on comparison/catalog quote");
-                    }
-                    if !quote.market_options.is_empty() {
-                        ui.add_space(3.0);
-                        ui.small("All providers in this market (workload $/1M at current weights, \u{25cf} = plotted):");
-                        egui::Grid::new("market_quality_providers").striped(true).show(ui, |ui| {
-                            ui.strong("");
-                            ui.strong("Provider");
-                            ui.strong("Input");
-                            ui.strong("Cache read");
-                            ui.strong("Output");
-                            ui.strong("Workload");
-                            ui.strong("Trust");
-                            ui.strong("Healthy");
-                            ui.end_row();
-                            for option in &quote.market_options {
-                                ui.label(if option.provider == quote.provider { "\u{25cf}" } else { "" });
-                                ui.label(&option.provider);
-                                ui.label(format!("${:.4}", option.input));
-                                ui.label(match option.cache_read {
-                                    Some(rate) => format!("${rate:.4}"),
-                                    None => "\u{2014}".to_owned(),
-                                });
-                                ui.label(format!("${:.4}", option.output));
-                                ui.label(format!(
-                                    "${:.4}",
-                                    option.workload_price(
-                                        self.settings.input_weight,
-                                        self.settings.cache_read_weight,
-                                        self.settings.output_weight,
-                                        self.settings.cache_read_fallback_pct,
-                                    )
-                                ));
-                                ui.label(match option.trusted {
-                                    Some(true) => "trusted",
-                                    Some(false) => "untrusted",
-                                    None => "\u{2014}",
-                                });
-                                ui.label(match option.healthy_seller_count {
-                                    Some(count) => format!("{count}"),
-                                    None => "\u{2014}".to_owned(),
-                                });
-                                ui.end_row();
-                            }
-                        });
-                    }
-                });
+                self.market_quality_section(ui, quote);
             }
 
             if let Some(consensus) = &consensus {
@@ -1138,26 +1062,133 @@ impl ParetoWatchApp {
                         .max_height(220.0)
                         .auto_shrink([true, true])
                         .show(ui, |ui| {
-                            egui::Grid::new("selected_consensus_grid").striped(true).show(ui, |ui| {
-                                ui.strong("Benchmark");
-                                ui.strong("Percentile");
-                                ui.strong("Rank");
-                                ui.strong("Score");
-                                ui.strong("Matched row");
-                                ui.end_row();
-                                for entry in &consensus.entries {
-                                    ui.label(entry.source.short_label());
-                                    ui.label(format_percentile(entry.percentile));
-                                    ui.label(format!("#{}/{}", entry.rank, entry.total));
-                                    ui.label(format!("{:.1}", entry.score));
-                                    ui.label(&entry.benchmark_name);
+                            egui::Grid::new("selected_consensus_grid")
+                                .striped(true)
+                                .show(ui, |ui| {
+                                    ui.strong("Benchmark");
+                                    ui.strong("Percentile");
+                                    ui.strong("Rank");
+                                    ui.strong("Score");
+                                    ui.strong("Matched row");
                                     ui.end_row();
-                                }
-                            });
+                                    for entry in &consensus.entries {
+                                        ui.label(entry.source.short_label());
+                                        ui.label(format_percentile(entry.percentile));
+                                        ui.label(format!("#{}/{}", entry.rank, entry.total));
+                                        ui.label(format!("{:.1}", entry.score));
+                                        ui.label(&entry.benchmark_name);
+                                        ui.end_row();
+                                    }
+                                });
                         });
                 });
             }
+        });
+    }
 
+    /// "Market quality" collapsible: headline trust/seller/telemetry metadata
+    /// plus every provider ask in this model's market with workload pricing.
+    /// Shared by the Pareto detail card and the New listings cards.
+    pub(super) fn market_quality_section(&self, ui: &mut egui::Ui, quote: &Quote) {
+        let header = if quote.live_market {
+            let trust = match quote.provider_trusted {
+                Some(true) => "trusted",
+                Some(false) => "untrusted",
+                None => "trust unknown",
+            };
+            format!(
+                "Market quality: {trust} \u{00b7} {} healthy sellers",
+                quote.healthy_seller_count.unwrap_or(0)
+            )
+        } else {
+            "Market quality: comparison/catalog quote".to_owned()
+        };
+        ui.collapsing(header, |ui| {
+            if quote.live_market {
+                ui.horizontal_wrapped(|ui| {
+                    match quote.provider_trusted {
+                        Some(true) => { ui.colored_label(egui::Color32::from_rgb(54, 179, 126), "trusted provider"); }
+                        Some(false) => { ui.colored_label(egui::Color32::from_rgb(224, 86, 86), "untrusted provider"); }
+                        None => { ui.label("trust unknown"); }
+                    }
+                    ui.separator();
+                    ui.label(format!("{} healthy sellers", quote.healthy_seller_count.unwrap_or(0)));
+                    if let Some(total) = quote.seller_count {
+                        ui.separator();
+                        ui.label(format!("{total} total sellers"));
+                    }
+                    if let Some(requests) = quote.requests_24h {
+                        ui.separator();
+                        ui.label(format!("{} requests / 24h", format_compact_number(requests as f64)));
+                    }
+                    if let Some(volume) = quote.volume_24h {
+                        ui.separator();
+                        ui.label(format!("{} volume / 24h", format_compact_usd(volume)));
+                    }
+                    if let Some(discount) = quote.discount_pct {
+                        ui.separator();
+                        let direction = quote.discount_direction.as_deref().unwrap_or("stable");
+                        let label = if self.settings.include_cache_read_in_discount {
+                            format!("{discount:.1}% workload discount vs list \u{00b7} {direction}")
+                        } else {
+                            format!("{discount:.1}% discount \u{00b7} {direction}")
+                        };
+                        ui.colored_label(discount_color(discount), label);
+                    }
+                });
+                if quote.free_offer_listed {
+                    ui.small(
+                        "* A seller is listing this model free (100% off). Shown prices are the \
+                         cheapest ask that actually costs money; the published market best is $0.",
+                    );
+                }
+            } else {
+                ui.label("market metadata unavailable on comparison/catalog quote");
+            }
+            if !quote.market_options.is_empty() {
+                ui.add_space(3.0);
+                ui.small("All providers in this market (workload $/1M at current weights, \u{25cf} = plotted):");
+                egui::Grid::new("market_quality_providers").striped(true).show(ui, |ui| {
+                    ui.strong("");
+                    ui.strong("Provider");
+                    ui.strong("Input");
+                    ui.strong("Cache read");
+                    ui.strong("Output");
+                    ui.strong("Workload");
+                    ui.strong("Trust");
+                    ui.strong("Healthy");
+                    ui.end_row();
+                    for option in &quote.market_options {
+                        ui.label(if option.provider == quote.provider { "\u{25cf}" } else { "" });
+                        ui.label(&option.provider);
+                        ui.label(format!("${:.4}", option.input));
+                        ui.label(match option.cache_read {
+                            Some(rate) => format!("${rate:.4}"),
+                            None => "\u{2014}".to_owned(),
+                        });
+                        ui.label(format!("${:.4}", option.output));
+                        ui.label(format!(
+                            "${:.4}",
+                            option.workload_price(
+                                self.settings.input_weight,
+                                self.settings.cache_read_weight,
+                                self.settings.output_weight,
+                                self.settings.cache_read_fallback_pct,
+                            )
+                        ));
+                        ui.label(match option.trusted {
+                            Some(true) => "trusted",
+                            Some(false) => "untrusted",
+                            None => "\u{2014}",
+                        });
+                        ui.label(match option.healthy_seller_count {
+                            Some(count) => format!("{count}"),
+                            None => "\u{2014}".to_owned(),
+                        });
+                        ui.end_row();
+                    }
+                });
+            }
         });
     }
 
