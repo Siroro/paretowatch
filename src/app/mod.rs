@@ -7,6 +7,7 @@ mod alerts_tab;
 mod models_tab;
 mod pareto_tab;
 mod settings_tab;
+mod ui_state;
 
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
@@ -15,6 +16,7 @@ use std::sync::mpsc::{self, Receiver, Sender, TryRecvError};
 
 use chrono::{Duration, Utc};
 use eframe::egui;
+use serde::{Deserialize, Serialize};
 
 use crate::alerts::{
     ListingChange, detect_delisted, detect_price_changes, frontier_changes, semantic_alert_status,
@@ -50,7 +52,7 @@ use crate::worker::{WorkerCommand, WorkerMessage};
 #[cfg(not(target_os = "linux"))]
 use tray_icon::TrayIcon;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 enum Tab {
     Pareto,
     Models,
@@ -60,7 +62,7 @@ enum Tab {
     Settings,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 enum ActivityTab {
     PriceMoves,
     Notifications,
@@ -74,6 +76,12 @@ pub(crate) struct ParetoWatchApp {
     history: history::HistoryTracker,
     history_ui: history::HistoryUiState,
     widgets: widgets::PriceWidgetManager,
+    /// Pinned price widgets to re-spawn once the first price snapshot
+    /// arrives (restored from the persisted UI state).
+    pending_pin_restore: Option<Vec<String>>,
+    /// Last UI state written to disk; the update tick compares against it so
+    /// writes only happen on real changes.
+    last_saved_ui_state: Option<ui_state::UiState>,
     worker_tx: Sender<WorkerCommand>,
     worker_rx: Receiver<WorkerMessage>,
     ui_rx: Receiver<UiCommand>,
@@ -217,7 +225,7 @@ impl ParetoWatchApp {
 
         let mut status_note: Option<String> = None;
 
-        Self {
+        let mut app = Self {
             settings,
             price_snapshot: None,
             benchmark_sets: {
@@ -243,6 +251,8 @@ impl ParetoWatchApp {
             history: history::HistoryTracker::open(&history::history_log_path()),
             history_ui: history::HistoryUiState::default(),
             widgets: widgets::PriceWidgetManager::default(),
+            pending_pin_restore: None,
+            last_saved_ui_state: None,
             worker_tx,
             worker_rx,
             ui_rx,
@@ -309,7 +319,14 @@ impl ParetoWatchApp {
             weights_applied_at: None,
             #[cfg(not(target_os = "linux"))]
             _tray: tray,
+        };
+
+        // Restore the previous session's working view (tab, filters, sorts,
+        // legend chips, selection, pinned widgets) before the first frame.
+        if let Some(state) = ui_state::load_ui_state() {
+            app.apply_ui_state(&state);
         }
+        app
     }
 
     fn set_visible(&mut self, ctx: &egui::Context, visible: bool) {
@@ -1278,6 +1295,36 @@ impl ParetoWatchApp {
         self.save_and_push_settings();
     }
 
+    /// Re-pin the models from the restored session once prices exist: the
+    /// widget window needs a live quote before it can spawn rows, so this
+    /// waits for the first snapshot and then fires once.
+    fn restore_pending_pins(&mut self, ctx: &egui::Context) {
+        let Some(models) = self.pending_pin_restore.take() else {
+            return;
+        };
+        let Some(snapshot) = self.price_snapshot.as_ref() else {
+            self.pending_pin_restore = Some(models);
+            return;
+        };
+        for model_id in &models {
+            // Restored pins land near the top-left of the main window's
+            // monitor (spawn_position clamps on-screen); models that vanished
+            // from the catalogue are skipped by spawn itself.
+            let near = ctx
+                .input(|i| i.viewport().outer_rect)
+                .map(|root| root.left_top() + egui::vec2(24.0, 24.0))
+                .unwrap_or_else(|| egui::Pos2::new(60.0, 60.0));
+            self.widgets.spawn(
+                ctx,
+                Some(snapshot),
+                &self.settings,
+                self.liquidity_filter,
+                model_id,
+                near,
+            );
+        }
+    }
+
     fn save_and_push_settings(&mut self) {
         self.settings.poll_seconds = self.settings.poll_seconds.max(30);
         if self.settings.input_weight.max(0.0)
@@ -1374,6 +1421,8 @@ impl eframe::App for ParetoWatchApp {
             self.widgets.request_repaints(ctx);
         }
         self.widgets.prune_closed();
+        self.restore_pending_pins(ctx);
+        self.persist_ui_state_if_changed();
     }
 
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {

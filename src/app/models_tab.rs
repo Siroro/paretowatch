@@ -8,6 +8,7 @@
 //! snapshot borrow.
 
 use eframe::egui;
+use serde::{Deserialize, Serialize};
 
 use crate::bench::normalize;
 use crate::format::{format_compact_number, format_compact_usd, format_price_tick, format_usd};
@@ -22,7 +23,7 @@ use crate::types::{
 use super::{ParetoWatchApp, Tab};
 
 /// Which feed the table rows come from.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
 pub(super) enum ModelsSource {
     #[default]
     All,
@@ -50,7 +51,7 @@ impl ModelsSource {
 
 /// Cache-pricing availability filter; the rate it tests is the same
 /// best-available cache rate the calculator bills.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
 pub(super) enum ModelsCacheFilter {
     #[default]
     Any,
@@ -76,7 +77,7 @@ impl ModelsCacheFilter {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
 pub(super) enum ModelsSort {
     #[default]
     Name,

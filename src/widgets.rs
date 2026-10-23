@@ -35,7 +35,7 @@ pub(crate) const BASE_FONT_SIZE: f32 = 10.0;
 pub(crate) const PINNED_FONT_MIN: f32 = 8.0;
 pub(crate) const PINNED_FONT_MAX: f32 = 16.0;
 
-const WINDOW_WIDTH: f32 = 240.0;
+pub(crate) const WINDOW_WIDTH: f32 = 240.0;
 /// Everything around the row list (title, separators, footer, frame
 /// margins), measured from a real `window_frame` layout at
 /// `BASE_FONT_SIZE` (see `window_size_estimate_tracks_measured_layout`).
@@ -198,6 +198,15 @@ pub(crate) struct PriceWidgetManager {
 }
 
 impl PriceWidgetManager {
+    /// Model ids currently pinned, in pin order — the persisted slice for
+    /// session restore.
+    pub(crate) fn pinned_model_ids(&self) -> Vec<String> {
+        self.window
+            .as_ref()
+            .map(|window| window.rows.iter().map(|row| row.model_id.clone()).collect())
+            .unwrap_or_default()
+    }
+
     pub(crate) fn spawn(
         &mut self,
         ctx: &egui::Context,

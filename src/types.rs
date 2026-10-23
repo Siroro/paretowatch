@@ -432,7 +432,7 @@ pub(crate) enum LiquidityFilter {
 
 /// Chart modality filter. Vision detection comes from `/v1/models`
 /// architecture metadata; models without modality data count as text-only.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
 pub(crate) enum ModalityFilter {
     #[default]
     All,
@@ -461,7 +461,7 @@ impl ModalityFilter {
 /// Safety-tuning filter, shared by the Pareto chart and the Models tab.
 /// Uncensored detection comes from the listing text (see
 /// [`is_uncensored_model`]); everything else counts as safety-tuned.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
 pub(crate) enum UncensoredFilter {
     #[default]
     All,

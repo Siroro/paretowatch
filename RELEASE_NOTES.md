@@ -1,3 +1,14 @@
+# ParetoWatch v0.23.0
+
+## Features
+
+- **The whole working view now survives restarts.** A new `ui_state.json` (beside `config.json`) persists every durable UI preference and restores it on launch: the active tab and Activity pane, the Pareto chart's price metric, cost basis, benchmark source and metric, comparison mode and scaffold, liquidity/modality/uncensored filters, the hide-catalog-only toggle, log-price axis, legend chips toggled off, the selected model, the Models tab's creator/source/modality/uncensored/cache filters and sort column+direction, the cost calculator's model and provider — and **the pinned price widgets**, which re-spawn automatically once the first price snapshot arrives (models that left the catalogue are skipped silently). Writes happen only when something actually changed, so a force-killed session loses at most its final moments.
+- Deliberately NOT persisted: search boxes, the half-composed alert form, and per-frame caches — a stale search filter would hide models on reopen with no visible reason. `config.json` keeps its role as the deliberate-settings file (poll interval, weights, alerts, quiet hours); `ui_state.json` is the session view. Missing, corrupt, or version-drifted state files fall back to defaults.
+
+## Validation
+
+Formatting, locked check, locked test (169 tests), and Clippy with warnings denied all pass.
+
 # ParetoWatch v0.22.0
 
 ## Features
