@@ -23,55 +23,46 @@ use crate::types::{
 };
 use crate::worker::WorkerCommand;
 
+use super::controls::{option_row, popover_button, radio_list};
 use super::{ParetoWatchApp, Tab};
 
 impl ParetoWatchApp {
     pub(super) fn pareto_tab(&mut self, ui: &mut egui::Ui) {
         let mut chart_axes_changed = false;
+        let mut reset_zoom = false;
         let scaffold_options = self.cached_scaffolds();
+
+        // One compact toolbar row. The axis selectors and the search box stay
+        // on screen because they change the chart every time; everything else
+        // hides behind the Filters and Workload mix popovers so the chart,
+        // not the controls, owns the window.
         ui.horizontal_wrapped(|ui| {
             ui.label("Price:");
-            egui::ComboBox::from_id_salt("price_metric")
-                .selected_text(self.price_metric.label())
+            let mut axis = (self.price_metric, self.cost_basis);
+            egui::ComboBox::from_id_salt("price_axis")
+                .selected_text(price_axis_label(axis))
                 .show_ui(ui, |ui| {
-                    for metric in [
-                        PriceMetric::Blended,
-                        PriceMetric::Input,
-                        PriceMetric::Output,
-                    ] {
+                    for option in PRICE_AXES {
                         if ui
-                            .selectable_value(&mut self.price_metric, metric, metric.label())
+                            .selectable_value(&mut axis, option, price_axis_label(option))
                             .changed()
                         {
-                            if self.price_metric != PriceMetric::Blended {
-                                self.cost_basis = CostBasis::PerMillion;
+                            // A new cost basis changes what the plotted price
+                            // means, so the selection's card would lie; a new
+                            // metric on the same basis only re-scales x.
+                            if option.1 != self.cost_basis {
+                                self.selected_pareto_model = None;
                             }
+                            self.price_metric = option.0;
+                            self.cost_basis = option.1;
                             chart_axes_changed = true;
                         }
                     }
                 });
 
-            if self.price_metric == PriceMetric::Blended {
-                ui.separator();
-                ui.label("Cost basis:");
-                egui::ComboBox::from_id_salt("cost_basis")
-                    .selected_text(self.cost_basis.label())
-                    .show_ui(ui, |ui| {
-                        for basis in [CostBasis::PerMillion, CostBasis::EstimatedPerTask] {
-                            if ui
-                                .selectable_value(&mut self.cost_basis, basis, basis.label())
-                                .changed()
-                            {
-                                chart_axes_changed = true;
-                                self.selected_pareto_model = None;
-                            }
-                        }
-                    });
-            }
-
             ui.separator();
             ui.label("Benchmark:");
-            egui::ComboBox::from_id_salt("benchmark_source")
+            let combo = egui::ComboBox::from_id_salt("benchmark_source")
                 .selected_text(self.benchmark_source.label())
                 .show_ui(ui, |ui| {
                     for source in [
@@ -90,9 +81,15 @@ impl ParetoWatchApp {
                         }
                     }
                 });
+            // Composite rows disclose their method on the axis label and
+            // LiveBench picks its metric below; every raw board reports one
+            // fixed metric, which rides along as a hover note.
+            if let Some(metric) = benchmark_metric_note(self.benchmark_source) {
+                combo.response.on_hover_text(metric);
+            }
 
-            ui.separator();
             if self.benchmark_source == BenchmarkSource::LiveBench {
+                ui.separator();
                 ui.label("Quality:");
                 egui::ComboBox::from_id_salt("benchmark_metric")
                     .selected_text(self.benchmark_metric.label())
@@ -114,95 +111,290 @@ impl ParetoWatchApp {
                             }
                         }
                     });
-            } else if !self.benchmark_source.is_composite() {
-                // Composite row names already disclose their method; a separate
-                // metric note would just repeat it in the toolbar.
-                ui.label(match self.benchmark_source {
-                    BenchmarkSource::ArtificialAnalysisSnapshot => {
-                        "Metric: Intelligence Index (live + snapshot fallback)"
-                    }
-                    BenchmarkSource::SWERebench => "Metric: Result@1",
-                    BenchmarkSource::TerminalBench3 => "Metric: accuracy",
-                    BenchmarkSource::TerminalBench4 => "Metric: accuracy",
-                    BenchmarkSource::DeepSWE11 => "Metric: pass@1",
-                    BenchmarkSource::ReveloCodeIndex => "Metric: Code Index",
-                    BenchmarkSource::DesignArena => "Metric: Design Elo (blinded votes)",
-                    BenchmarkSource::FrontierCode => "Metric: mergeability score",
-                    BenchmarkSource::AABriefcase => "Metric: Elo (blind pairwise, private tasks)",
-                    BenchmarkSource::AutomationBenchAA => "Metric: partial score (no violations)",
-                    BenchmarkSource::SWEBenchPro => "Metric: resolve rate (HARD set)",
-                    BenchmarkSource::ValsSREBench => "Metric: accuracy (binary RE tasks)",
-                    _ => unreachable!(),
-                });
             }
 
-            if self.price_metric == PriceMetric::Blended {
-                ui.label("Fresh input");
-                if ui
-                    .add(
-                        egui::DragValue::new(&mut self.settings.input_weight)
-                            .speed(0.1)
-                            .range(0.0..=100.0),
-                    )
-                    .changed()
-                {
-                    self.settings_dirty = true;
-                }
-                ui.label("Cache read");
-                if ui
-                    .add(
-                        egui::DragValue::new(&mut self.settings.cache_read_weight)
-                            .speed(0.1)
-                            .range(0.0..=100.0),
-                    )
-                    .changed()
-                {
-                    self.settings_dirty = true;
-                }
-                ui.label("Output");
-                if ui
-                    .add(
-                        egui::DragValue::new(&mut self.settings.output_weight)
-                            .speed(0.1)
-                            .range(0.0..=100.0),
-                    )
-                    .changed()
-                {
-                    self.settings_dirty = true;
-                }
-                ui.label("Assumed cache %").on_hover_text(
-                    "Cache-read price assumed for models with no published cache rate \
-                         (no provider ask and no catalogue price), as a share of the fresh-input \
-                         price. Published rates are always preferred.",
-                );
-                if ui
-                    .add(
-                        egui::DragValue::new(&mut self.settings.cache_read_fallback_pct)
-                            .speed(1.0)
-                            .range(0.0..=100.0)
-                            .suffix("%"),
-                    )
-                    .changed()
-                {
-                    self.settings_dirty = true;
-                }
-                if self.settings_dirty && ui.button("Apply weights").clicked() {
-                    self.save_and_push_settings();
-                    self.weights_applied_at = Some(ui.input(|i| i.time));
-                    chart_axes_changed = true;
-                    let _ = self.worker_tx.send(WorkerCommand::Refresh);
-                }
-                if let Some(at) = self.weights_applied_at {
-                    const APPLIED_SECS: f64 = 2.5;
-                    let age = ui.input(|i| i.time) - at;
-                    if age < APPLIED_SECS {
-                        ui.colored_label(PRICE_DOWN, "✓ Applied");
-                        ui.ctx()
-                            .request_repaint_after(std::time::Duration::from_secs_f64(
-                                (APPLIED_SECS - age).max(0.05),
-                            ));
+            ui.separator();
+            let search_edit = egui::TextEdit::singleline(&mut self.pareto_search)
+                .hint_text("highlight models, creators…")
+                .desired_width(200.0)
+                .clip_text(true);
+            ui.add(search_edit);
+            if !self.pareto_search.trim().is_empty()
+                && ui.small_button("✗").on_hover_text("Clear search").clicked()
+            {
+                self.pareto_search.clear();
+            }
+
+            // Everything else lives behind two popover buttons. The count on
+            // the Filters button says how many non-default filters are
+            // shaping the chart, so a quiet chart is never a mystery.
+            let active_filters =
+                usize::from(self.comparison_mode != ComparisonMode::BestAvailableAgent)
+                    + usize::from(self.liquidity_filter != LiquidityFilter::Any)
+                    + usize::from(self.modality_filter != ModalityFilter::All)
+                    + usize::from(self.uncensored_filter != UncensoredFilter::All)
+                    + usize::from(self.hide_catalog_prices);
+            let filters_label = if active_filters > 0 {
+                format!("Filters · {active_filters} ▾")
+            } else {
+                "Filters ▾".to_owned()
+            };
+            popover_button(
+                ui,
+                "pareto_filters",
+                egui::RichText::new(filters_label),
+                Some("Comparison basis, market quality, modality, safety, and price-axis options"),
+                |ui| {
+                    ui.set_min_width(400.0);
+                    egui::Grid::new("pareto_filter_grid")
+                        .num_columns(2)
+                        .show(ui, |ui| {
+                            ui.label("Comparison").on_hover_text(
+                                "How leaderboard rows are matched to priced models: the model's \
+                                 own capability row, its best row under any agent harness, or one \
+                                 fixed scaffold every model must use.",
+                            );
+                            if option_row(
+                                ui,
+                                &mut self.comparison_mode,
+                                &[
+                                    (ComparisonMode::ModelCapability, "Model capability"),
+                                    (ComparisonMode::BestAvailableAgent, "Best available agent"),
+                                    (ComparisonMode::CommonScaffold, "Same/common scaffold"),
+                                ],
+                            ) {
+                                chart_axes_changed = true;
+                                reset_zoom = true;
+                                self.selected_pareto_model = None;
+                            }
+                            ui.end_row();
+
+                            ui.label("Market quality").on_hover_text(
+                                "Keep only models whose market clears a liquidity bar — a \
+                                 trusted provider, or a floor on healthy sellers.",
+                            );
+                            if option_row(
+                                ui,
+                                &mut self.liquidity_filter,
+                                &[
+                                    (LiquidityFilter::Any, "Any"),
+                                    (LiquidityFilter::Trusted, "Trusted"),
+                                    (LiquidityFilter::Healthy3, "3+ healthy"),
+                                    (LiquidityFilter::Healthy10, "10+ healthy"),
+                                ],
+                            ) {
+                                chart_axes_changed = true;
+                                self.selected_pareto_model = None;
+                            }
+                            ui.end_row();
+
+                            ui.label("Modality");
+                            if option_row(
+                                ui,
+                                &mut self.modality_filter,
+                                &[
+                                    (ModalityFilter::All, "All"),
+                                    (ModalityFilter::Vision, "Vision"),
+                                    (ModalityFilter::TextOnly, "Text-only"),
+                                ],
+                            ) {
+                                chart_axes_changed = true;
+                                reset_zoom = true;
+                                self.selected_pareto_model = None;
+                            }
+                            ui.end_row();
+
+                            ui.label("Safety");
+                            if option_row(
+                                ui,
+                                &mut self.uncensored_filter,
+                                &[
+                                    (UncensoredFilter::All, "All"),
+                                    (UncensoredFilter::Uncensored, "Uncensored"),
+                                    (UncensoredFilter::SafetyTuned, "Safety-tuned"),
+                                ],
+                            ) {
+                                chart_axes_changed = true;
+                                reset_zoom = true;
+                                self.selected_pareto_model = None;
+                            }
+                            ui.end_row();
+                        });
+                    if self.comparison_mode == ComparisonMode::CommonScaffold {
+                        ui.label("Scaffold (every model scored under it):");
+                        let scaffold_rows: Vec<(String, String)> = scaffold_options
+                            .iter()
+                            .map(|s| (s.clone(), s.clone()))
+                            .collect();
+                        egui::ScrollArea::vertical()
+                            .max_height(150.0)
+                            .auto_shrink([false, false])
+                            .show(ui, |ui| {
+                                if radio_list(ui, &mut self.common_scaffold, &scaffold_rows) {
+                                    chart_axes_changed = true;
+                                    self.selected_pareto_model = None;
+                                }
+                            });
                     }
-                }
+                    ui.separator();
+                    if ui
+                        .checkbox(&mut self.log_price_axis, "Log price axis")
+                        .changed()
+                    {
+                        reset_zoom = true;
+                    }
+                    if ui
+                        .checkbox(&mut self.hide_catalog_prices, "Hide catalog-only prices")
+                        .on_hover_text(
+                            "Remove models with no live-market ask — their price is only the \
+                             Surplus catalog/comparison list price",
+                        )
+                        .changed()
+                    {
+                        chart_axes_changed = true;
+                        reset_zoom = true;
+                        self.selected_pareto_model = None;
+                    }
+                },
+            );
+
+            if self.price_metric == PriceMetric::Blended {
+                let mix_label =
+                    format!("Workload mix{} ▾", if self.settings_dirty { " ●" } else { "" });
+                popover_button(
+                    ui,
+                    "pareto_weights",
+                    egui::RichText::new(mix_label),
+                    Some(
+                        "Workload mix behind the blended price (fresh input / cache read / output)",
+                    ),
+                    |ui| {
+                        ui.set_min_width(320.0);
+                        ui.strong("Workload mix");
+                        ui.small(
+                            "Share of a token workload billed at each leg. Apply saves the mix, \
+                             refreshes prices, and re-renders every view.",
+                        );
+                        ui.horizontal(|ui| {
+                            for (label, mix) in [
+                                ("Agentic 15/80/5", (15.0, 80.0, 5.0)),
+                                ("No-cache 95/0/5", (95.0, 0.0, 5.0)),
+                                ("Balanced 50/0/50", (50.0, 0.0, 50.0)),
+                            ] {
+                                if ui.small_button(label).clicked() {
+                                    self.settings.input_weight = mix.0;
+                                    self.settings.cache_read_weight = mix.1;
+                                    self.settings.output_weight = mix.2;
+                                    self.settings_dirty = true;
+                                }
+                            }
+                        });
+                        let total = self.settings.input_weight.max(0.0)
+                            + self.settings.cache_read_weight.max(0.0)
+                            + self.settings.output_weight.max(0.0);
+                        if total > f64::EPSILON {
+                            ui.small(format!(
+                                "Current mix: {:.0}% fresh input · {:.0}% cache read · {:.0}% output",
+                                self.settings.input_weight.max(0.0) / total * 100.0,
+                                self.settings.cache_read_weight.max(0.0) / total * 100.0,
+                                self.settings.output_weight.max(0.0) / total * 100.0,
+                            ));
+                        }
+                        egui::Grid::new("pareto_weights_grid")
+                            .num_columns(2)
+                            .show(ui, |ui| {
+                                ui.label("Fresh input");
+                                if ui
+                                    .add(
+                                        egui::DragValue::new(&mut self.settings.input_weight)
+                                            .speed(0.1)
+                                            .range(0.0..=100.0),
+                                    )
+                                    .changed()
+                                {
+                                    self.settings_dirty = true;
+                                }
+                                ui.end_row();
+                                ui.label("Cache read");
+                                if ui
+                                    .add(
+                                        egui::DragValue::new(&mut self.settings.cache_read_weight)
+                                            .speed(0.1)
+                                            .range(0.0..=100.0),
+                                    )
+                                    .changed()
+                                {
+                                    self.settings_dirty = true;
+                                }
+                                ui.end_row();
+                                ui.label("Output");
+                                if ui
+                                    .add(
+                                        egui::DragValue::new(&mut self.settings.output_weight)
+                                            .speed(0.1)
+                                            .range(0.0..=100.0),
+                                    )
+                                    .changed()
+                                {
+                                    self.settings_dirty = true;
+                                }
+                                ui.end_row();
+                                ui.label("Assumed cache %").on_hover_text(
+                                    "Cache-read price assumed for models with no published cache \
+                                     rate (no provider ask and no catalogue price), as a share of \
+                                     the fresh-input price. Published rates are always preferred.",
+                                );
+                                if ui
+                                    .add(
+                                        egui::DragValue::new(
+                                            &mut self.settings.cache_read_fallback_pct,
+                                        )
+                                        .speed(1.0)
+                                        .range(0.0..=100.0)
+                                        .suffix("%"),
+                                    )
+                                    .changed()
+                                {
+                                    self.settings_dirty = true;
+                                }
+                                ui.end_row();
+                            });
+                        ui.horizontal(|ui| {
+                            if ui
+                                .add_enabled(self.settings_dirty, egui::Button::new("Apply"))
+                                .on_hover_text("Save the workload mix and refresh")
+                                .clicked()
+                            {
+                                self.save_and_push_settings();
+                                self.weights_applied_at = Some(ui.input(|i| i.time));
+                                chart_axes_changed = true;
+                                let _ = self.worker_tx.send(WorkerCommand::Refresh);
+                            }
+                            if let Some(at) = self.weights_applied_at {
+                                const APPLIED_SECS: f64 = 2.5;
+                                let age = ui.input(|i| i.time) - at;
+                                if age < APPLIED_SECS {
+                                    ui.colored_label(PRICE_DOWN, "✓ Applied");
+                                    ui.ctx().request_repaint_after(
+                                        std::time::Duration::from_secs_f64(
+                                            (APPLIED_SECS - age).max(0.05),
+                                        ),
+                                    );
+                                }
+                            }
+                        });
+                    },
+                );
+            }
+
+            if ui
+                .small_button("Reset zoom")
+                .on_hover_text(
+                    "Fit every visible model again (double-clicking the chart works too)",
+                )
+                .clicked()
+            {
+                reset_zoom = true;
             }
         });
 
@@ -210,170 +402,22 @@ impl ParetoWatchApp {
             ui.small("Est. $/task = benchmark-observed tokens/task × current Surplus blended $/1M. Benchmark-reported historical dollar costs are never used.");
         }
 
-        ui.horizontal_wrapped(|ui| {
-            ui.label("Comparison:");
-            egui::ComboBox::from_id_salt("comparison_mode")
-                .selected_text(self.comparison_mode.label())
-                .show_ui(ui, |ui| {
-                    for mode in [
-                        ComparisonMode::ModelCapability,
-                        ComparisonMode::BestAvailableAgent,
-                        ComparisonMode::CommonScaffold,
-                    ] {
-                        if ui
-                            .selectable_value(&mut self.comparison_mode, mode, mode.label())
-                            .changed()
-                        {
-                            chart_axes_changed = true;
-                            self.selected_pareto_model = None;
-                        }
-                    }
-                });
-            if self.comparison_mode == ComparisonMode::CommonScaffold {
-                ui.label("Scaffold:");
-                egui::ComboBox::from_id_salt("common_scaffold")
-                    .width(180.0)
-                    .selected_text(&self.common_scaffold)
-                    .show_ui(ui, |ui| {
-                        for scaffold in &scaffold_options {
-                            if ui
-                                .selectable_value(
-                                    &mut self.common_scaffold,
-                                    scaffold.clone(),
-                                    scaffold,
-                                )
-                                .changed()
-                            {
-                                chart_axes_changed = true;
-                                self.selected_pareto_model = None;
-                            }
-                        }
-                    });
-            }
-            ui.separator();
-            ui.label("Market quality:");
-            egui::ComboBox::from_id_salt("liquidity_filter")
-                .selected_text(self.liquidity_filter.label())
-                .show_ui(ui, |ui| {
-                    for filter in [
-                        LiquidityFilter::Any,
-                        LiquidityFilter::Trusted,
-                        LiquidityFilter::Healthy3,
-                        LiquidityFilter::Healthy10,
-                    ] {
-                        if ui
-                            .selectable_value(&mut self.liquidity_filter, filter, filter.label())
-                            .changed()
-                        {
-                            chart_axes_changed = true;
-                            self.selected_pareto_model = None;
-                        }
-                    }
-                });
-        });
-
-        // Chart controls: modality and safety filters (e.g. vision-only,
-        // uncensored-only), search highlight, and zoom/selection toggles —
-        // pinned above the scrolling chart body.
-        ui.add_space(4.0);
-        let mut reset_zoom = chart_axes_changed;
-        ui.horizontal_wrapped(|ui| {
-            ui.label("Show:");
-            egui::ComboBox::from_id_salt("modality_filter")
-                .selected_text(self.modality_filter.label())
-                .show_ui(ui, |ui| {
-                    for filter in [
-                        ModalityFilter::All,
-                        ModalityFilter::Vision,
-                        ModalityFilter::TextOnly,
-                    ] {
-                        if ui
-                            .selectable_value(&mut self.modality_filter, filter, filter.label())
-                            .changed()
-                        {
-                            chart_axes_changed = true;
-                            reset_zoom = true;
-                            self.selected_pareto_model = None;
-                        }
-                    }
-                });
-            ui.separator();
-            ui.label("Safety:");
-            egui::ComboBox::from_id_salt("uncensored_filter")
-                .selected_text(self.uncensored_filter.label())
-                .show_ui(ui, |ui| {
-                    for filter in [
-                        UncensoredFilter::All,
-                        UncensoredFilter::Uncensored,
-                        UncensoredFilter::SafetyTuned,
-                    ] {
-                        if ui
-                            .selectable_value(&mut self.uncensored_filter, filter, filter.label())
-                            .changed()
-                        {
-                            chart_axes_changed = true;
-                            reset_zoom = true;
-                            self.selected_pareto_model = None;
-                        }
-                    }
-                });
-            ui.separator();
-            ui.label("Search:");
-            let search_edit = egui::TextEdit::singleline(&mut self.pareto_search)
-                .hint_text("highlight models, creators…")
-                .desired_width(220.0)
-                .clip_text(true);
-            ui.add(search_edit);
-            if !self.pareto_search.trim().is_empty() && ui.small_button("✗ Clear search").clicked()
-            {
-                self.pareto_search.clear();
-            }
-            ui.separator();
-            if ui.small_button("Reset zoom").clicked() {
-                reset_zoom = true;
-            }
-            if ui
-                .checkbox(&mut self.log_price_axis, "Log price axis")
-                .changed()
-            {
-                reset_zoom = true;
-            }
-            if ui
-                .checkbox(&mut self.hide_catalog_prices, "Hide catalog-only prices")
-                .on_hover_text(
-                    "Remove models with no live-market ask — their price is only the Surplus \
-                     catalog/comparison list price",
-                )
-                .changed()
-            {
-                reset_zoom = true;
-                self.selected_pareto_model = None;
-            }
-            if self.selected_pareto_model.is_some()
-                && ui.small_button("✗ Clear selection").clicked()
-            {
-                self.selected_pareto_model = None;
-            }
-        });
-        ui.add_space(2.0);
-        ui.small("Wheel: zoom · middle-drag: pan · right-drag: box zoom · double-click: reset · click an orb: inspect · right-click an orb: add to price window");
-
-        // Resolved before the controls so the legend can toggle groups without
+        // Resolved before the controls so the legend can toggle providers without
         // borrowing `self` inside the scroll closure; the call is cached, so
         // the chart body below sees the same view.
         let view = self.ensure_pareto_view();
 
-        // Clickable colour legend for the model groups (creators) in the
-        // current join. Clicking a chip hides that group's orbs; clicking a
-        // disabled chip brings it back. Hidden chips stay listed (dimmed,
-        // struck through) at the end so they are always re-enableable.
+        // The provider legend collapsed to a strip: a colour-dot preview plus
+        // one button. The clickable chips live inside the popover, so a
+        // twenty-provider palette cannot eat three wrapped rows above the
+        // chart.
         if let Some(cache) = view.as_deref() {
             let mut legend_groups: HashMap<&str, usize> = HashMap::new();
             for p in &cache.joined {
                 *legend_groups.entry(group_label(&p.creator)).or_insert(0) += 1;
             }
             let mut legend: Vec<(&str, usize)> = legend_groups.into_iter().collect();
-            // Enabled groups first, biggest first; hidden chips trail at the
+            // Enabled providers first, biggest first; hidden chips trail at the
             // end so a disabled family can always be found again.
             legend.sort_by(|a, b| {
                 let a_hidden = self.hidden_groups.contains(a.0);
@@ -383,49 +427,118 @@ impl ParetoWatchApp {
                     .then_with(|| b.1.cmp(&a.1))
                     .then_with(|| a.0.cmp(b.0))
             });
+            let hidden_count = legend
+                .iter()
+                .filter(|(name, _)| self.hidden_groups.contains(*name))
+                .count();
             ui.add_space(4.0);
-            ui.horizontal_wrapped(|ui| {
-                ui.strong("Groups");
-                ui.separator();
-                for (name, count) in legend {
-                    let is_hidden = self.hidden_groups.contains(name);
-                    let base = creator_color(name);
-                    let dot = if is_hidden {
-                        egui::Color32::from_rgba_unmultiplied(base.r(), base.g(), base.b(), 80)
-                    } else {
-                        base
-                    };
-                    let chip = egui::RichText::new(format!("● {name} ({count})"))
-                        .color(dot)
-                        .size(13.0);
-                    let chip = if is_hidden {
-                        chip.strikethrough()
-                    } else {
-                        chip
-                    };
-                    if ui.small_button(chip).clicked() {
-                        if is_hidden {
-                            self.hidden_groups.remove(name);
-                        } else {
-                            self.hidden_groups.insert(name.to_owned());
-                            // A selection hidden along with its group would
-                            // point at an invisible orb; drop it with the
-                            // group.
-                            if let Some(selected_id) = &self.selected_pareto_model
-                                && let Some(p) =
-                                    cache.joined.iter().find(|p| &p.model_id == selected_id)
-                                && group_label(&p.creator) == name
-                            {
-                                self.selected_pareto_model = None;
-                            }
-                        }
-                        reset_zoom = true;
-                    }
-                    ui.add_space(2.0);
+            ui.horizontal(|ui| {
+                for &(name, _) in legend
+                    .iter()
+                    .filter(|(name, _)| !self.hidden_groups.contains(*name))
+                    .take(8)
+                {
+                    ui.label(
+                        egui::RichText::new("●")
+                            .color(creator_color(name))
+                            .size(11.0),
+                    );
                 }
+                let label = if hidden_count > 0 {
+                    format!("Providers · {hidden_count}/{} hidden ▾", legend.len())
+                } else {
+                    "Providers ▾".to_owned()
+                };
+                popover_button(
+                    ui,
+                    "pareto_groups",
+                    egui::RichText::new(label),
+                    Some(
+                        "Chart colour legend by provider — click a chip to hide or show its models",
+                    ),
+                    |ui| {
+                        ui.set_min_width(380.0);
+                        ui.horizontal(|ui| {
+                            if hidden_count > 0 && ui.small_button("Show all").clicked() {
+                                self.hidden_groups.clear();
+                                reset_zoom = true;
+                            }
+                            if hidden_count < legend.len() && ui.small_button("Hide all").clicked()
+                            {
+                                for &(name, _) in &legend {
+                                    self.hidden_groups.insert(name.to_owned());
+                                }
+                                // The selection is hidden along with every
+                                // provider; drop it instead of pointing at an
+                                // invisible orb.
+                                self.selected_pareto_model = None;
+                                reset_zoom = true;
+                            }
+                        });
+                        // Clicking a chip hides that provider's orbs; clicking
+                        // a disabled chip brings it back. Hidden chips stay
+                        // listed (dimmed, struck through) so they are always
+                        // re-enableable.
+                        ui.horizontal_wrapped(|ui| {
+                            for &(name, count) in &legend {
+                                let is_hidden = self.hidden_groups.contains(name);
+                                let base = creator_color(name);
+                                let dot = if is_hidden {
+                                    egui::Color32::from_rgba_unmultiplied(
+                                        base.r(),
+                                        base.g(),
+                                        base.b(),
+                                        80,
+                                    )
+                                } else {
+                                    base
+                                };
+                                let chip = egui::RichText::new(format!("● {name} ({count})"))
+                                    .color(dot)
+                                    .size(13.0);
+                                let chip = if is_hidden {
+                                    chip.strikethrough()
+                                } else {
+                                    chip
+                                };
+                                if ui.small_button(chip).clicked() {
+                                    if is_hidden {
+                                        self.hidden_groups.remove(name);
+                                    } else {
+                                        self.hidden_groups.insert(name.to_owned());
+                                        // A selection hidden along with its
+                                        // provider would point at an
+                                        // invisible orb; drop it too.
+                                        if let Some(selected_id) = &self.selected_pareto_model
+                                            && let Some(p) = cache
+                                                .joined
+                                                .iter()
+                                                .find(|p| &p.model_id == selected_id)
+                                            && group_label(&p.creator) == name
+                                        {
+                                            self.selected_pareto_model = None;
+                                        }
+                                    }
+                                    reset_zoom = true;
+                                }
+                                ui.add_space(2.0);
+                            }
+                        });
+                    },
+                );
             });
             ui.add_space(2.0);
         }
+
+        ui.label(
+            egui::RichText::new(
+                "Wheel: zoom · middle-drag: pan · right-drag: box zoom · double-click: reset · click an orb: inspect · right-click an orb: pin a price widget",
+            )
+            .small()
+            .weak(),
+        );
+
+        let reset_zoom = reset_zoom || chart_axes_changed;
 
         // The whole chart body scrolls as one page so the detail card and
         // frontier table can never be pushed out of the viewport.
@@ -516,7 +629,7 @@ impl ParetoWatchApp {
             return;
         }
         if visible.is_empty() {
-            ui.label("Every group is hidden — click a disabled group chip above to bring models back.");
+            ui.label("Every provider is hidden — open Providers above and re-enable a chip to bring models back.");
             return;
         }
         let frontier_names: std::collections::HashSet<&str> = frontier.iter().map(|p| p.model_id.as_str()).collect();
@@ -602,9 +715,10 @@ impl ParetoWatchApp {
 
         // The chart body scrolls as one page with the card and table below it,
         // so the plot takes a fixed share of the window instead of whatever is
-        // left after the (variable) detail card.
+        // left after the (variable) detail card. The single toolbar row leaves
+        // more of that window for the chart itself.
         let screen_height = ui.ctx().input(|i| i.viewport_rect().height());
-        let plot_height = (screen_height * 0.55).clamp(320.0, 720.0);
+        let plot_height = (screen_height * 0.58).clamp(320.0, 760.0);
         // Bigger, calmer chart typography; restored right after the plot so the
         // detail cards below keep their normal sizing.
         let saved_style = ui.style().clone();
@@ -699,7 +813,7 @@ impl ParetoWatchApp {
                             .filled(false),
                         );
                     } else if search_active && matches_search {
-                        // Search matches get a slim halo in their group colour.
+                        // Search matches get a slim halo in their provider colour.
                         plot_ui.points(
                             Points::new(
                                 format!("search_ring_{}", p.model_id),
@@ -744,7 +858,7 @@ impl ParetoWatchApp {
                         continue;
                     }
                     let plot_x = price_to_plot_x(p.cost, log_price_axis);
-                    // Search-only matches carry their group colour; frontier and
+                    // Search-only matches carry their provider colour; frontier and
                     // selection labels stay in the calm near-white.
                     let label_color = if search_active && !is_frontier && !is_selected {
                         creator_color(&p.creator)
@@ -820,7 +934,7 @@ impl ParetoWatchApp {
             ui.strong(format!("{} matched models", visible.len()));
             if !self.hidden_groups.is_empty() {
                 ui.small(format!(
-                    "{} group{} hidden via legend chips",
+                    "{} provider{} hidden in Providers",
                     self.hidden_groups.len(),
                     if self.hidden_groups.len() == 1 { "" } else { "s" }
                 ));
@@ -836,11 +950,27 @@ impl ParetoWatchApp {
                     self.restore_all_frontier_hidden();
                 }
             }
+            // One quiet line listing every non-default filter, so a thin
+            // chart always says why it is thin.
+            let mut active_filters: Vec<String> = Vec::new();
+            if self.comparison_mode != ComparisonMode::BestAvailableAgent {
+                active_filters.push(self.comparison_mode.label().to_owned());
+            }
+            if self.liquidity_filter != LiquidityFilter::Any {
+                active_filters.push(self.liquidity_filter.label().to_owned());
+            }
             if self.modality_filter != ModalityFilter::All {
-                ui.small(self.modality_filter.label());
+                active_filters.push(self.modality_filter.label().to_owned());
             }
             if self.uncensored_filter != UncensoredFilter::All {
-                ui.small(self.uncensored_filter.label());
+                active_filters.push(self.uncensored_filter.label().to_owned());
+            }
+            if self.hide_catalog_prices {
+                active_filters.push("catalog-only hidden".to_owned());
+            }
+            if !active_filters.is_empty() {
+                ui.separator();
+                ui.small(format!("Filters: {}", active_filters.join(" · ")));
             }
             ui.separator();
             ui.strong(format!("{} Pareto-efficient", frontier.len()));
@@ -890,6 +1020,13 @@ impl ParetoWatchApp {
                 );
                 ui.heading(&p.model);
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    if ui
+                        .small_button("✗")
+                        .on_hover_text("Clear the selection")
+                        .clicked()
+                    {
+                        self.selected_pareto_model = None;
+                    }
                     ui.menu_button(egui::RichText::new("🔔").size(16.0), |ui| {
                         if self.cost_basis == CostBasis::PerMillion
                             && ui.button("Price threshold").clicked()
@@ -1300,6 +1437,52 @@ impl ParetoWatchApp {
                     ui.end_row();
                 }
             });
+    }
+}
+
+/// The selectable price-axis settings. Metric and cost basis pair up in one
+/// selector because the estimated per-task basis only exists for the blended
+/// metric — a standalone basis combo next to the metric combo mostly
+/// offered impossible combinations.
+const PRICE_AXES: [(PriceMetric, CostBasis); 4] = [
+    (PriceMetric::Blended, CostBasis::PerMillion),
+    (PriceMetric::Blended, CostBasis::EstimatedPerTask),
+    (PriceMetric::Input, CostBasis::PerMillion),
+    (PriceMetric::Output, CostBasis::PerMillion),
+];
+
+fn price_axis_label(axis: (PriceMetric, CostBasis)) -> &'static str {
+    match axis {
+        (PriceMetric::Blended, CostBasis::PerMillion) => "Blended · $/1M",
+        (PriceMetric::Blended, CostBasis::EstimatedPerTask) => "Blended · est. $/task",
+        (PriceMetric::Input, CostBasis::PerMillion) => "Input · $/1M",
+        (PriceMetric::Output, CostBasis::PerMillion) => "Output · $/1M",
+        _ => unreachable!("input/output metrics have no per-task basis"),
+    }
+}
+
+/// Hover note for the benchmark selector: the fixed metric each raw board
+/// reports. Composites disclose their method on the axis label instead, and
+/// LiveBench chooses its metric from the Quality selector.
+fn benchmark_metric_note(source: BenchmarkSource) -> Option<&'static str> {
+    match source {
+        BenchmarkSource::ArtificialAnalysisSnapshot => {
+            Some("Metric: Intelligence Index (live + snapshot fallback)")
+        }
+        BenchmarkSource::SWERebench => Some("Metric: Result@1"),
+        BenchmarkSource::TerminalBench3 => Some("Metric: accuracy"),
+        BenchmarkSource::TerminalBench4 => Some("Metric: accuracy"),
+        BenchmarkSource::DeepSWE11 => Some("Metric: pass@1"),
+        BenchmarkSource::ReveloCodeIndex => Some("Metric: Code Index"),
+        BenchmarkSource::DesignArena => Some("Metric: Design Elo (blinded votes)"),
+        BenchmarkSource::FrontierCode => Some("Metric: mergeability score"),
+        BenchmarkSource::AABriefcase => Some("Metric: Elo (blind pairwise, private tasks)"),
+        BenchmarkSource::AutomationBenchAA => Some("Metric: partial score (no violations)"),
+        BenchmarkSource::SWEBenchPro => Some("Metric: resolve rate (HARD set)"),
+        BenchmarkSource::ValsSREBench => Some("Metric: accuracy (binary RE tasks)"),
+        BenchmarkSource::CompositeAgentic
+        | BenchmarkSource::CompositeDeployment
+        | BenchmarkSource::LiveBench => None,
     }
 }
 

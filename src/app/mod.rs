@@ -4,6 +4,7 @@
 
 mod activity_tab;
 mod alerts_tab;
+mod controls;
 mod models_tab;
 mod pareto_tab;
 mod settings_tab;
@@ -240,7 +241,7 @@ pub(crate) struct ParetoWatchApp {
     is_visible: bool,
     quitting: bool,
     settings_dirty: bool,
-    /// egui clock time of the last "Apply weights" click, for the transient
+    /// egui clock time of the last workload-mix Apply click, for the transient
     /// ✓ Applied confirmation next to the button.
     weights_applied_at: Option<f64>,
     #[cfg(not(target_os = "linux"))]
@@ -1492,7 +1493,9 @@ impl ParetoWatchApp {
         ui.horizontal(|ui| {
             ui.heading("ParetoWatch");
             ui.separator();
-            ui.label(&self.status);
+            // Quiet companion to the heading: present, but not competing with
+            // the tab bar below for attention.
+            ui.label(egui::RichText::new(&self.status).small().weak());
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 if ui.button("↻").on_hover_text("Refresh now").clicked() {
                     let _ = self.worker_tx.send(WorkerCommand::Refresh);

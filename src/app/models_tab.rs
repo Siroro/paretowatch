@@ -20,6 +20,7 @@ use crate::types::{
     assumed_cache_price, token_workload_cost,
 };
 
+use super::controls::{option_row, popover_button, radio_list};
 use super::{ParetoWatchApp, Tab};
 
 /// Which feed the table rows come from.
@@ -32,14 +33,6 @@ pub(super) enum ModelsSource {
 }
 
 impl ModelsSource {
-    fn label(self) -> &'static str {
-        match self {
-            Self::All => "All sources",
-            Self::LiveMarket => "Live market",
-            Self::Catalog => "Catalog / comparison",
-        }
-    }
-
     fn allows(self, quote: &Quote) -> bool {
         match self {
             Self::All => true,
@@ -60,14 +53,6 @@ pub(super) enum ModelsCacheFilter {
 }
 
 impl ModelsCacheFilter {
-    fn label(self) -> &'static str {
-        match self {
-            Self::Any => "Any cache pricing",
-            Self::Priced => "Has cache price",
-            Self::NoCachePrice => "No cache price",
-        }
-    }
-
     fn allows(self, quote: &Quote) -> bool {
         match self {
             Self::Any => true,
@@ -329,92 +314,112 @@ impl ParetoWatchApp {
         let mut creators: Vec<(&str, usize)> = creator_counts.into_iter().collect();
         creators.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(b.0)));
 
+        // Search stays on the bar; the five secondary selectors share one
+        // Filters popover, mirroring the Pareto toolbar.
         ui.horizontal_wrapped(|ui| {
             ui.label("Search:");
             ui.add(
                 egui::TextEdit::singleline(&mut self.models_search)
                     .hint_text("model, creator…")
-                    .desired_width(180.0)
+                    .desired_width(200.0)
                     .clip_text(true),
             );
+            if !self.models_search.trim().is_empty()
+                && ui.small_button("✗").on_hover_text("Clear search").clicked()
+            {
+                self.models_search.clear();
+            }
             ui.separator();
-            ui.label("Creator:");
-            egui::ComboBox::from_id_salt("models_creator")
-                .width(150.0)
-                .selected_text(self.models_creator.as_deref().unwrap_or("All creators"))
-                .show_ui(ui, |ui| {
-                    let mut picked = self.models_creator.clone().unwrap_or_default();
-                    if ui
-                        .selectable_value(&mut picked, String::new(), "All creators")
-                        .changed()
-                    {
-                        self.models_creator = None;
-                    }
-                    for (name, count) in &creators {
-                        if ui
-                            .selectable_value(
-                                &mut picked,
-                                (*name).to_owned(),
-                                format!("{name} ({count})"),
-                            )
-                            .changed()
-                        {
-                            self.models_creator = Some((*name).to_owned());
-                        }
-                    }
-                });
-            ui.separator();
-            ui.label("Source:");
-            egui::ComboBox::from_id_salt("models_source")
-                .selected_text(self.models_source.label())
-                .show_ui(ui, |ui| {
-                    for source in [
-                        ModelsSource::All,
-                        ModelsSource::LiveMarket,
-                        ModelsSource::Catalog,
-                    ] {
-                        ui.selectable_value(&mut self.models_source, source, source.label());
-                    }
-                });
-            ui.separator();
-            ui.label("Modality:");
-            egui::ComboBox::from_id_salt("models_modality")
-                .selected_text(self.models_modality.label())
-                .show_ui(ui, |ui| {
-                    for filter in [
-                        ModalityFilter::All,
-                        ModalityFilter::Vision,
-                        ModalityFilter::TextOnly,
-                    ] {
-                        ui.selectable_value(&mut self.models_modality, filter, filter.label());
-                    }
-                });
-            ui.separator();
-            ui.label("Safety:");
-            egui::ComboBox::from_id_salt("models_uncensored")
-                .selected_text(self.models_uncensored.label())
-                .show_ui(ui, |ui| {
-                    for filter in [
-                        UncensoredFilter::All,
-                        UncensoredFilter::Uncensored,
-                        UncensoredFilter::SafetyTuned,
-                    ] {
-                        ui.selectable_value(&mut self.models_uncensored, filter, filter.label());
-                    }
-                });
-            ui.separator();
-            ui.label("Cache:");
-            egui::ComboBox::from_id_salt("models_cache")
-                .selected_text(self.models_cache.label())
-                .show_ui(ui, |ui| {
-                    for filter in [
-                        ModelsCacheFilter::Any,
-                        ModelsCacheFilter::Priced,
-                        ModelsCacheFilter::NoCachePrice,
-                    ] {
-                        ui.selectable_value(&mut self.models_cache, filter, filter.label());
-                    }
-                });
+
+            let active_filters = usize::from(self.models_source != ModelsSource::All)
+                + usize::from(self.models_modality != ModalityFilter::All)
+                + usize::from(self.models_uncensored != UncensoredFilter::All)
+                + usize::from(self.models_cache != ModelsCacheFilter::Any)
+                + usize::from(self.models_creator.is_some());
+            let filters_label = if active_filters > 0 {
+                format!("Filters · {active_filters} ▾")
+            } else {
+                "Filters ▾".to_owned()
+            };
+            popover_button(
+                ui,
+                "models_filters",
+                egui::RichText::new(filters_label),
+                Some("Creator, source, modality, safety, and cache-pricing filters"),
+                |ui| {
+                    ui.set_min_width(360.0);
+                    egui::Grid::new("models_filter_grid")
+                        .num_columns(2)
+                        .show(ui, |ui| {
+                            ui.label("Source").on_hover_text(
+                                "Whether the price comes from the live Surplus market or only \
+                                 the comparison/catalog list.",
+                            );
+                            option_row(
+                                ui,
+                                &mut self.models_source,
+                                &[
+                                    (ModelsSource::All, "All"),
+                                    (ModelsSource::LiveMarket, "Live market"),
+                                    (ModelsSource::Catalog, "Catalog"),
+                                ],
+                            );
+                            ui.end_row();
+                            ui.label("Modality");
+                            option_row(
+                                ui,
+                                &mut self.models_modality,
+                                &[
+                                    (ModalityFilter::All, "All"),
+                                    (ModalityFilter::Vision, "Vision"),
+                                    (ModalityFilter::TextOnly, "Text-only"),
+                                ],
+                            );
+                            ui.end_row();
+                            ui.label("Safety");
+                            option_row(
+                                ui,
+                                &mut self.models_uncensored,
+                                &[
+                                    (UncensoredFilter::All, "All"),
+                                    (UncensoredFilter::Uncensored, "Uncensored"),
+                                    (UncensoredFilter::SafetyTuned, "Safety-tuned"),
+                                ],
+                            );
+                            ui.end_row();
+                            ui.label("Cache pricing").on_hover_text(
+                                "Has any published cache-read rate (provider ask or catalogue \
+                                 list price) vs none at all.",
+                            );
+                            option_row(
+                                ui,
+                                &mut self.models_cache,
+                                &[
+                                    (ModelsCacheFilter::Any, "Any"),
+                                    (ModelsCacheFilter::Priced, "Priced"),
+                                    (ModelsCacheFilter::NoCachePrice, "No cache price"),
+                                ],
+                            );
+                            ui.end_row();
+                        });
+                    ui.label("Creator:");
+                    let mut creator = self.models_creator.clone().unwrap_or_default();
+                    let mut creator_rows = vec![(String::new(), "All creators".to_owned())];
+                    creator_rows.extend(
+                        creators
+                            .iter()
+                            .map(|(name, count)| ((*name).to_owned(), format!("{name} ({count})"))),
+                    );
+                    egui::ScrollArea::vertical()
+                        .max_height(180.0)
+                        .auto_shrink([false, false])
+                        .show(ui, |ui| {
+                            if radio_list(ui, &mut creator, &creator_rows) {
+                                self.models_creator = (!creator.is_empty()).then_some(creator);
+                            }
+                        });
+                },
+            );
         });
     }
 

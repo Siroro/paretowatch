@@ -1,3 +1,26 @@
+# ParetoWatch v0.26.0
+
+## Features
+
+- **The main screen got a full go-over: three dense control rows collapsed into one compact toolbar.** The Pareto tab's toolbar had accreted a row of axis selectors plus four inline workload drag fields, a second row of comparison/market-quality combos, and a third row of modality/safety/search/zoom controls — six-plus wrapped lines of chrome above the chart. It is now:
+  - **One toolbar row** holding only the things that reshape the chart on every use: the Price axis selector, the Benchmark selector (LiveBench's Quality metric appears beside it when relevant), the search box with its inline clear button, two popover buttons, and Reset zoom.
+  - **Price metric and cost basis merged into one selector** — "Blended · $/1M", "Blended · est. $/task", "Input · $/1M", "Output · $/1M" — since the per-task basis only exists for the blended metric, the old side-by-side combo pair mostly offered impossible combinations. Each raw board's fixed metric (Result@1, pass@1, Elo…) moved from an inline label to a hover on the Benchmark selector.
+  - **A "Filters · N ▾" popover** (with a live count of active filters) carrying the comparison basis, market-quality bar, modality, safety, the common-scaffold picker, and the log-axis / hide-catalog-only toggles. Options render as segmented button rows rather than nested combo boxes, so picking several filters never dismisses the panel; it closes only on an outside click or Escape.
+  - **A "Workload mix ▾" popover** (replacing the four inline weight fields) with the fresh-input / cache-read / output / assumed-cache-% drag values, the Settings tab's Agentic / No-cache / Balanced presets, a live "Current mix: N% / N% / N%" readout, and Apply (with the ✓ confirmation and an ● on the toolbar button while edits are unsaved).
+  - **The status line under the chart now lists every non-default filter** ("Filters: Best available agent · trusted · catalog-only hidden"), so a thin chart always says why it is thin.
+- **The creator legend shrank from up to three wrapped chip rows to one strip.** A colour-dot preview of the visible providers plus a "Providers ▾" button opens the popover with the full clickable chip grid (click to hide/show a provider's models) and new Show all / Hide all shortcuts — Hide all enabling focus-one-provider workflows. The strip button reads "Providers · 2/24 hidden ▾" while any are hidden. (The legend was previously labelled "Groups"; it is now "Providers" everywhere, including the hidden-count status line and the all-hidden empty-state message.)
+- **Models tab matches**: the five secondary selectors (Creator, Source, Modality, Safety, Cache pricing) fold into the same "Filters · N ▾" popover beside the search box, with the creator picker as a scrollable single-choice list with per-provider counts.
+- Smaller polish: the selected-model detail card gained a ✗ clear-selection button in its header; the chart-interaction hint line is now quiet small grey text instead of a full-size row; the top-bar status text no longer shouts at body size; and the plot claims a slightly larger share of the window now that the chrome above it is one row (0.55→0.58 of the viewport height).
+
+## Notes
+
+- The popover panels are a deliberate middle ground between menus and dialogs (egui `Popup` with close-on-outside-click): drag values, checkboxes, search fields, and chip grids stay interactive in place instead of dismissing on first click the way menu items do.
+- Nothing about the persisted UI state changed: `hidden_groups` keeps its field name and on-disk key, so restored sessions (hidden providers, filters, selection) carry over untouched.
+
+## Validation
+
+Formatting, locked check, locked Clippy with warnings denied (`--all-targets`), and locked test (175 tests) all pass.
+
 # ParetoWatch v0.25.0
 
 ## Features
