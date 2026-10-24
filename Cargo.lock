@@ -3055,7 +3055,7 @@ dependencies = [
 
 [[package]]
 name = "paretowatch"
-version = "0.26.0"
+version = "0.26.1"
 dependencies = [
  "anyhow",
  "chrono",

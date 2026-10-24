@@ -1,3 +1,13 @@
+# ParetoWatch v0.26.1
+
+## Fixes
+
+- Dropped the colour-dot preview that sat in front of the "Providers ▾" button. Unlabelled dots could not actually map a colour to a provider (the popover does that), so the strip is now just the button — quieter, nothing functional lost.
+
+## Validation
+
+Formatting, locked check, locked Clippy with warnings denied (`--all-targets`), and locked test (175 tests) all pass.
+
 # ParetoWatch v0.26.0
 
 ## Features
