@@ -407,10 +407,9 @@ impl ParetoWatchApp {
         // the chart body below sees the same view.
         let view = self.ensure_pareto_view();
 
-        // The provider legend collapsed to a strip: a colour-dot preview plus
-        // one button. The clickable chips live inside the popover, so a
-        // twenty-provider palette cannot eat three wrapped rows above the
-        // chart.
+        // The provider legend collapsed to one button. The clickable chips
+        // live inside the popover, so a twenty-provider palette cannot eat
+        // three wrapped rows above the chart.
         if let Some(cache) = view.as_deref() {
             let mut legend_groups: HashMap<&str, usize> = HashMap::new();
             for p in &cache.joined {
@@ -433,17 +432,6 @@ impl ParetoWatchApp {
                 .count();
             ui.add_space(4.0);
             ui.horizontal(|ui| {
-                for &(name, _) in legend
-                    .iter()
-                    .filter(|(name, _)| !self.hidden_groups.contains(*name))
-                    .take(8)
-                {
-                    ui.label(
-                        egui::RichText::new("●")
-                            .color(creator_color(name))
-                            .size(11.0),
-                    );
-                }
                 let label = if hidden_count > 0 {
                     format!("Providers · {hidden_count}/{} hidden ▾", legend.len())
                 } else {
