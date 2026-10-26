@@ -1,7 +1,9 @@
 //! Message protocol shared between the UI thread and the background fetch
 //! worker.
 
-use crate::types::{Benchmark, BenchmarkSource, ModelPerformance, PriceSnapshot, Settings};
+use crate::types::{
+    AaSpeedSnapshot, Benchmark, BenchmarkSource, ModelPerformance, PriceSnapshot, Settings,
+};
 
 #[derive(Debug)]
 pub(crate) enum WorkerCommand {
@@ -21,4 +23,7 @@ pub(crate) enum WorkerMessage {
     /// pull attempted: an attempted model with no row failed, so its last
     /// cached row survives upstream and the caller can back off retrying.
     Performance(Vec<ModelPerformance>, Vec<String>),
+    /// AA's standardized speed table, a side product of the Intelligence
+    /// Index leaderboard fetch.
+    AaSpeed(Result<AaSpeedSnapshot, String>),
 }

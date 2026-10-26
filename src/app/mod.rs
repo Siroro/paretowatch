@@ -19,6 +19,7 @@ use chrono::{Duration, Utc};
 use eframe::egui;
 use serde::{Deserialize, Serialize};
 
+use crate::aa_speed_cache::{load_aa_speed_cache, save_aa_speed_cache};
 use crate::alerts::{
     ListingChange, detect_delisted, detect_price_changes, frontier_changes, semantic_alert_status,
 };
@@ -28,7 +29,9 @@ use crate::bench::{
 };
 use crate::benchmark_cache::{load_benchmark_cache, save_benchmark_cache};
 use crate::fetch::start_worker;
-use crate::fetch::{PERFORMANCE_REFRESH_SECS, PERFORMANCE_RETRY_BACKOFF_SECS, performance_key};
+use crate::fetch::{
+    PERFORMANCE_REFRESH_SECS, PERFORMANCE_RETRY_BACKOFF_SECS, aa_speed_for_quote, performance_key,
+};
 use crate::history;
 use crate::history::track::blended_series;
 use crate::notifications::{
@@ -44,10 +47,10 @@ use crate::settings_store::{load_settings, save_settings};
 use crate::tray::create_tray;
 use crate::tray::{UiCommand, install_tray_event_handlers};
 use crate::types::{
-    ANY_MODEL, AlertDirection, AlertMode, AlertRearm, AlertRule, AlertSound, Benchmark,
-    BenchmarkMetric, BenchmarkSource, ComparisonMode, CostBasis, LiquidityFilter, ModalityFilter,
-    MoveDirection, PerformanceSnapshot, PriceMetric, PriceSnapshot, Quote, Settings,
-    UncensoredFilter, default_common_scaffold,
+    ANY_MODEL, AaSpeedEntry, AaSpeedSnapshot, AlertDirection, AlertMode, AlertRearm, AlertRule,
+    AlertSound, Benchmark, BenchmarkMetric, BenchmarkSource, ComparisonMode, CostBasis,
+    LiquidityFilter, ModalityFilter, MoveDirection, PerformanceSnapshot, PriceMetric,
+    PriceSnapshot, Quote, Settings, UncensoredFilter, default_common_scaffold,
 };
 use crate::widgets;
 use crate::worker::{WorkerCommand, WorkerMessage};
@@ -137,6 +140,14 @@ struct NewListingsCache {
     boards: Option<Vec<Vec<Benchmark>>>,
 }
 
+/// Memoized quote→AA-speed join: (data version it was built at, the speed
+/// table's fetch time, the per-model entry map).
+type AaSpeedJoin = (
+    u64,
+    Option<chrono::DateTime<Utc>>,
+    Arc<HashMap<String, AaSpeedEntry>>,
+);
+
 pub(crate) struct ParetoWatchApp {
     settings: Settings,
     price_snapshot: Option<PriceSnapshot>,
@@ -146,6 +157,14 @@ pub(crate) struct ParetoWatchApp {
     /// selected and refreshed on the slow background pass; persisted across
     /// restarts via the disk cache.
     performance: PerformanceSnapshot,
+    /// AA's standardized speed table (side product of the Intelligence Index
+    /// leaderboard fetch, same six-hour cadence, persisted across restarts).
+    aa_speed: Option<AaSpeedSnapshot>,
+    aa_speed_error: Option<String>,
+    /// Memoized quote → AA-speed join, keyed on the data version and the
+    /// table's fetch time (the fuzzy matcher runs per quote per entry, so
+    /// it must never run per UI frame).
+    aa_speed_join: Option<AaSpeedJoin>,
     /// Normalized model ids with a performance fetch in flight (sent, no
     /// reply yet) — prevents re-requesting the same model every frame.
     performance_pending: HashSet<String>,
@@ -358,6 +377,9 @@ impl ParetoWatchApp {
             performance: PerformanceSnapshot {
                 rows: cached_performance,
             },
+            aa_speed: load_aa_speed_cache().map(|(snapshot, _)| snapshot),
+            aa_speed_error: None,
+            aa_speed_join: None,
             performance_pending: HashSet::new(),
             performance_backoff: HashMap::new(),
             last_performance_sweep: None,
@@ -613,6 +635,16 @@ impl ParetoWatchApp {
                 Ok(WorkerMessage::Benchmarks(source, Err(err))) => {
                     self.benchmark_errors.insert(source, err);
                 }
+                Ok(WorkerMessage::AaSpeed(Ok(snapshot))) => {
+                    save_aa_speed_cache(&snapshot);
+                    self.aa_speed = Some(snapshot);
+                    self.aa_speed_error = None;
+                    self.data_version += 1;
+                    data_dirty = true;
+                }
+                Ok(WorkerMessage::AaSpeed(Err(err))) => {
+                    self.aa_speed_error = Some(err);
+                }
                 Ok(WorkerMessage::Performance(rows, attempted)) => {
                     let arrived: HashSet<String> =
                         rows.iter().map(|row| performance_key(&row.model)).collect();
@@ -866,6 +898,32 @@ impl ParetoWatchApp {
         let options = available_scaffolds(&self.benchmark_sets);
         self.scaffold_cache = Some((self.data_version, options.clone()));
         options
+    }
+
+    /// Quote model id → matched AA standardized-speed entry, memoized per
+    /// data version and speed-table fetch time: the join runs the fuzzy
+    /// matcher over every entry for every quote, which must never happen per
+    /// UI frame. `None` while no speed table (or no prices) exists.
+    fn aa_speed_lookup(&mut self) -> Option<Arc<HashMap<String, AaSpeedEntry>>> {
+        let fetched_at = self.aa_speed.as_ref().map(|s| s.fetched_at);
+        if let Some((version, at, join)) = &self.aa_speed_join
+            && *version == self.data_version
+            && *at == fetched_at
+        {
+            return Some(Arc::clone(join));
+        }
+        let snapshot = self.aa_speed.as_ref()?;
+        let prices = self.price_snapshot.as_ref()?;
+        let mut join: HashMap<String, AaSpeedEntry> = HashMap::new();
+        for quote in &prices.quotes {
+            if let Some(entry) = aa_speed_for_quote(&snapshot.entries, quote) {
+                join.insert(quote.model.clone(), entry.clone());
+            }
+        }
+        self.aa_speed_join = Some((self.data_version, fetched_at, Arc::new(join)));
+        self.aa_speed_join
+            .as_ref()
+            .map(|(_, _, join)| Arc::clone(join))
     }
 
     /// Bring the New listings rows in sync with the current data: rebuild the
@@ -1761,6 +1819,22 @@ impl eframe::App for ParetoWatchApp {
                              Performance API (24h rolling), fetched when a model is selected \
                              and refreshed every 6 hours; cached across restarts",
                         );
+                    }
+                    if let Some(snapshot) = &self.aa_speed {
+                        ui.separator();
+                        ui.small(format!(
+                            "AA speed benchmarks: {} models",
+                            snapshot.entries.len()
+                        ))
+                        .on_hover_text(
+                            "Standardized median tokens/s and time-to-first-token measured \
+                             under Artificial Analysis's uniform protocol — the primary speed \
+                             figures, since the live-market feed only publishes coarse histogram \
+                             buckets",
+                        );
+                    } else if let Some(err) = &self.aa_speed_error {
+                        ui.separator();
+                        ui.small(format!("AA speed benchmarks unavailable: {err}"));
                     }
                 });
                 if let Some(err) = &self.last_price_error {

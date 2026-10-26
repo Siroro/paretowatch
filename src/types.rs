@@ -1122,6 +1122,45 @@ pub(crate) struct PerformanceSnapshot {
     pub(crate) rows: HashMap<String, ModelPerformance>,
 }
 
+/// Artificial Analysis's standardized speed benchmark for one model family.
+/// These are AA's own controlled generations under a uniform protocol —
+/// true full-precision medians — rather than marketplace traffic, so they
+/// are the primary speed figures wherever a model matches; the live-market
+/// feed's `tps_p50`/`ttft_p50_ms` (coarse histogram buckets pooled across
+/// all sellers) stay as the secondary "market reality" numbers.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub(crate) struct AaSpeedEntry {
+    /// Canonical match key of the family base name — the same rule the
+    /// Intelligence Index overlay matches by.
+    pub(crate) key: String,
+    /// Family base display name, post-alias.
+    pub(crate) name: String,
+    /// AA's creator label, gating the fuzzy tier of the quote join.
+    pub(crate) creator: String,
+    /// Reasoning-effort variant the numbers read (e.g. "max"), folded by
+    /// the same preference order as the Intelligence Index.
+    pub(crate) effort: Option<String>,
+    pub(crate) median_tps: Option<f64>,
+    pub(crate) tps_p05: Option<f64>,
+    pub(crate) tps_p25: Option<f64>,
+    pub(crate) tps_p75: Option<f64>,
+    pub(crate) tps_p95: Option<f64>,
+    /// Median time to first token, in seconds (converted to ms for display).
+    pub(crate) median_ttft_s: Option<f64>,
+    pub(crate) ttft_p95_s: Option<f64>,
+    /// Median end-to-end response time, in seconds.
+    pub(crate) median_e2e_s: Option<f64>,
+}
+
+/// One read of AA's standardized speed table (bundled in the same leaderboard
+/// payload as the Intelligence Index; refreshed on the same six-hour cadence
+/// and persisted across restarts).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub(crate) struct AaSpeedSnapshot {
+    pub(crate) entries: Vec<AaSpeedEntry>,
+    pub(crate) fetched_at: DateTime<Utc>,
+}
+
 impl PerformanceSnapshot {
     /// Lookup by model id, normalizing punctuation/case the same way the
     /// market overlay join does (catalog and market spellings of a live

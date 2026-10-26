@@ -1,5 +1,6 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
+mod aa_speed_cache;
 mod alerts;
 mod app;
 mod artificial_analysis_snapshot;

@@ -214,6 +214,30 @@ struct ModelsRow<'a> {
     blended: f64,
     /// Best-available cache rate (`None` when nobody publishes one).
     cache_read: Option<f64>,
+    /// AA standardized-speed family matched to the quote, when one exists —
+    /// the primary speed figures (true medians vs the market feed's coarse
+    /// buckets).
+    aa_speed: Option<crate::types::AaSpeedEntry>,
+}
+
+impl ModelsRow<'_> {
+    /// The throughput a speed filter or sort should test: AA's standardized
+    /// median where the family matched, else the live-market bucket.
+    fn resolved_throughput(&self) -> Option<f64> {
+        self.aa_speed
+            .as_ref()
+            .and_then(|entry| entry.median_tps)
+            .or(self.quote.throughput_p50)
+    }
+
+    /// The TTFT (in ms) a filter or sort should test, same resolution order.
+    fn resolved_ttft_ms(&self) -> Option<f64> {
+        self.aa_speed
+            .as_ref()
+            .and_then(|entry| entry.median_ttft_s)
+            .map(|s| s * 1000.0)
+            .or(self.quote.ttft_p50_ms)
+    }
 }
 
 impl ParetoWatchApp {
@@ -248,6 +272,7 @@ impl ParetoWatchApp {
         let safety = self.models_uncensored;
         let cache_filter = self.models_cache;
         let speed_filter = self.models_speed;
+        let aa_speed = self.aa_speed_lookup();
         let weights = (
             self.settings.input_weight,
             self.settings.cache_read_weight,
@@ -261,13 +286,16 @@ impl ParetoWatchApp {
             .filter(|quote| modality.allows(quote.vision))
             .filter(|quote| safety.allows(quote.uncensored))
             .filter(|quote| cache_filter.allows(quote))
-            .filter(|quote| speed_filter.allows(quote.throughput_p50))
             .filter(|quote| {
                 creator
                     .as_deref()
                     .is_none_or(|c| group_label(&quote.creator) == c)
             })
             .map(|quote| ModelsRow {
+                aa_speed: aa_speed
+                    .as_ref()
+                    .and_then(|join| join.get(&quote.model))
+                    .cloned(),
                 quote,
                 blended: quote.price(
                     PriceMetric::Blended,
@@ -278,6 +306,9 @@ impl ParetoWatchApp {
                 ),
                 cache_read: quote.best_available_cache_read(),
             })
+            // Speed filters test the resolved figure: AA's standardized
+            // median where the family matched, else the market bucket.
+            .filter(|row| speed_filter.allows(row.resolved_throughput()))
             .collect();
         sort_models_rows(&mut rows, self.models_sort, self.models_sort_desc);
 
@@ -414,10 +445,11 @@ impl ParetoWatchApp {
                             );
                             ui.end_row();
                             ui.label("Speed").on_hover_text(
-                                "Market-wide median tokens/second over the last 24h, from \
-                                 Surplus route telemetry on the live market feed. Measured \
-                                 keeps only models with speed data; the thresholds cut the \
-                                 slow tail. Per-provider numbers live on each model's detail.",
+                                "Tokens/second over AA's standardized benchmark where the model \
+                                 matched (true medians under a uniform protocol), else the \
+                                 live-market feed's coarse bucket. Measured keeps only models \
+                                 with speed data; the thresholds cut the slow tail. Per-provider \
+                                 numbers live on each model's detail.",
                             );
                             let speed_options =
                                 SpeedFilter::ALL.map(|filter| (filter, filter.label()));
@@ -644,37 +676,89 @@ impl ParetoWatchApp {
                     .on_hover_text("Market telemetry only; catalog rows carry none");
             }
         }
-        match quote.throughput_p50 {
+        // Speed cells lead with AA's standardized median (true percentile,
+        // uniform protocol); the live-market bucket is the fallback and is
+        // marked † so the two sources are never confused for each other.
+        match row
+            .aa_speed
+            .as_ref()
+            .and_then(|entry| entry.median_tps)
+            .or(quote.throughput_p50)
+        {
             Some(tps) => {
-                let uptime = quote
-                    .uptime_pct
-                    .map(|pct| format!(" · {pct:.1}% uptime"))
-                    .unwrap_or_default();
-                ui.label(format_throughput(tps)).on_hover_text(format!(
-                    "Median tokens/second across every provider routing this model, last 24h \
-                     ({} streaming samples{uptime}). Per-provider split in the calculator \
-                     and detail card.",
-                    quote.tps_samples.unwrap_or(0),
-                ));
+                let standardized = row.aa_speed.as_ref().and_then(|e| e.median_tps) == Some(tps);
+                let label = if standardized {
+                    format_throughput(tps)
+                } else {
+                    format!("{}†", format_throughput(tps))
+                };
+                let hover = if let Some(entry) = row.aa_speed.as_ref().filter(|_| standardized) {
+                    let band = match (entry.tps_p05, entry.tps_p95) {
+                        (Some(lo), Some(hi)) => {
+                            format!(
+                                " · p05–p95 {}–{}",
+                                format_throughput(lo),
+                                format_throughput(hi)
+                            )
+                        }
+                        _ => String::new(),
+                    };
+                    format!(
+                        "AA standardized benchmark{}: median of their controlled generations \
+                         under a uniform protocol.{}",
+                        entry
+                            .effort
+                            .as_deref()
+                            .map(|e| format!(" ({e} variant)"))
+                            .unwrap_or_default(),
+                        band,
+                    )
+                } else {
+                    format!(
+                        "Live-market bucket: the feed publishes only coarse histogram midpoints \
+                         ({} streaming samples in 24h) pooled across every seller — treat as \
+                         approximate. AA has no standardized read for this model.",
+                        quote.tps_samples.unwrap_or(0),
+                    )
+                };
+                ui.label(label).on_hover_text(hover);
             }
             None => {
                 ui.label(egui::RichText::new("—").weak()).on_hover_text(
-                    "No throughput telemetry for this market in the last 24h (or catalog-only \
-                     row)",
+                    "No speed data: not in AA's standardized table and no live-market \
+                     throughput telemetry in 24h",
                 );
             }
         }
-        match quote.ttft_p50_ms {
+        match row
+            .aa_speed
+            .as_ref()
+            .and_then(|entry| entry.median_ttft_s)
+            .map(|s| s * 1000.0)
+            .or(quote.ttft_p50_ms)
+        {
             Some(ms) => {
-                ui.label(format_latency_ms(ms)).on_hover_text(format!(
-                    "Median time to first token across every provider routing this model, last \
-                     24h ({} streaming samples)",
-                    quote.ttft_samples.unwrap_or(0),
-                ));
+                let standardized = row
+                    .aa_speed
+                    .as_ref()
+                    .and_then(|e| e.median_ttft_s.map(|s| s * 1000.0))
+                    == Some(ms);
+                let label = if standardized {
+                    format_latency_ms(ms)
+                } else {
+                    format!("{}†", format_latency_ms(ms))
+                };
+                ui.label(label).on_hover_text(if standardized {
+                    "AA standardized benchmark: median time to first token under their uniform \
+                     protocol"
+                } else {
+                    "Live-market bucket: coarse histogram midpoint pooled across every seller \
+                     (24h) — treat as approximate"
+                });
             }
             None => {
                 ui.label(egui::RichText::new("—").weak())
-                    .on_hover_text("No time-to-first-token telemetry in the last 24h");
+                    .on_hover_text("No time-to-first-token data from either source");
             }
         }
         match quote.discount_pct {
@@ -970,6 +1054,57 @@ impl ParetoWatchApp {
             }
         });
 
+        // AA standardized speed for the priced model: the true-median
+        // reference beside whatever the marketplace telemetry says.
+        if let Some(entry) = self
+            .aa_speed_lookup()
+            .and_then(|join| join.get(&quote.model).cloned())
+        {
+            ui.add_space(4.0);
+            ui.horizontal_wrapped(|ui| {
+                ui.strong("AA speed:");
+                match (entry.median_tps, entry.median_ttft_s) {
+                    (Some(tps), Some(ttft)) => ui.label(format!(
+                        "{} \u{00b7} TTFT {}",
+                        format_throughput(tps),
+                        format_latency_ms(ttft * 1000.0)
+                    )),
+                    (Some(tps), None) => ui.label(format_throughput(tps)),
+                    (None, Some(ttft)) => {
+                        ui.label(format!("TTFT {}", format_latency_ms(ttft * 1000.0)))
+                    }
+                    (None, None) => ui.label("—"),
+                };
+                if let Some(e2e) = entry.median_e2e_s {
+                    ui.separator();
+                    ui.label(format!("end-to-end {}", format_latency_ms(e2e * 1000.0)));
+                }
+            })
+            .response
+            .on_hover_text({
+                let band = match (entry.tps_p05, entry.tps_p95) {
+                    (Some(lo), Some(hi)) => {
+                        format!(
+                            " · p05–p95 {}–{}",
+                            format_throughput(lo),
+                            format_throughput(hi)
+                        )
+                    }
+                    _ => String::new(),
+                };
+                format!(
+                    "Median of AA's controlled generations under a uniform protocol{} — the \
+                     standardized reference, independent of any marketplace route.{}",
+                    entry
+                        .effort
+                        .as_deref()
+                        .map(|e| format!(" ({e} variant)"))
+                        .unwrap_or_default(),
+                    band,
+                )
+            });
+        }
+
         // Per-provider speed: fetched on demand for the model the calculator
         // is pricing, then cached (see ensure_performance).
         self.ensure_performance(&quote.model, ON_DEMAND_REFRESH_SECS);
@@ -1119,15 +1254,17 @@ fn sort_models_rows(rows: &mut [ModelsRow<'_>], sort: ModelsSort, desc: bool) {
         |row: &ModelsRow<'_>| row.quote.requests_24h.map_or(f64::INFINITY, |r| r as f64);
     let volume_key = |row: &ModelsRow<'_>| row.quote.volume_24h.unwrap_or(f64::INFINITY);
     // Missing speed telemetry sinks in the ascending (fastest-TTFT-first and
-    // price-style) order, matching the other optional columns.
-    let ttft_key = |row: &ModelsRow<'_>| row.quote.ttft_p50_ms.unwrap_or(f64::INFINITY);
+    // price-style) order, matching the other optional columns. Both speed
+    // keys test the resolved figure: AA's standardized median where the
+    // family matched, else the live-market bucket.
+    let ttft_key = |row: &ModelsRow<'_>| row.resolved_ttft_ms().unwrap_or(f64::INFINITY);
     rows.sort_by(|a, b| {
         // Throughput's default order is fastest-first (descending), where a
         // sink-last key would float the unmeasured rows to the top, so that
         // arm applies the direction itself and keeps unmeasured rows last in
         // both directions.
         if sort == ModelsSort::Throughput {
-            return match (a.quote.throughput_p50, b.quote.throughput_p50) {
+            return match (a.resolved_throughput(), b.resolved_throughput()) {
                 (Some(_), None) => std::cmp::Ordering::Less,
                 (None, Some(_)) => std::cmp::Ordering::Greater,
                 (Some(x), Some(y)) => {
@@ -1324,16 +1461,19 @@ mod tests {
                 quote: &unmeasured,
                 blended: 0.0,
                 cache_read: None,
+                aa_speed: None,
             },
             ModelsRow {
                 quote: &slow,
                 blended: 0.0,
                 cache_read: None,
+                aa_speed: None,
             },
             ModelsRow {
                 quote: &fast,
                 blended: 0.0,
                 cache_read: None,
+                aa_speed: None,
             },
         ];
         fn names<'a>(rows: &[ModelsRow<'a>]) -> Vec<&'a str> {
@@ -1361,6 +1501,73 @@ mod tests {
     }
 
     #[test]
+    fn aa_standardized_figures_override_market_buckets() {
+        // A slow market bucket (73.3) under an AA read of 150 tok/s: the
+        // resolved figure must be AA's, for sorting and filtering both.
+        let mut quote = test_quote("aa-model", 1.0, true);
+        quote.throughput_p50 = Some(73.3);
+        quote.ttft_p50_ms = Some(5546.0);
+        let entry = crate::types::AaSpeedEntry {
+            key: "aa model".into(),
+            name: "AA Model".into(),
+            creator: "Test".into(),
+            effort: None,
+            median_tps: Some(150.0),
+            tps_p05: Some(120.0),
+            tps_p25: Some(135.0),
+            tps_p75: Some(170.0),
+            tps_p95: Some(200.0),
+            median_ttft_s: Some(0.4),
+            ttft_p95_s: Some(0.9),
+            median_e2e_s: Some(3.0),
+        };
+        let row = ModelsRow {
+            quote: &quote,
+            blended: 0.0,
+            cache_read: None,
+            aa_speed: Some(entry),
+        };
+        assert!((row.resolved_throughput().unwrap() - 150.0).abs() < 1e-9);
+        assert!((row.resolved_ttft_ms().unwrap() - 400.0).abs() < 1e-9);
+        // The AA figure clears a bar the market bucket would fail; a
+        // market-only model keeps its bucket.
+        assert!(SpeedFilter::T100.allows(row.resolved_throughput()));
+        let mut market_only = test_quote("market-only", 1.0, true);
+        market_only.throughput_p50 = Some(73.3);
+        let fallback = ModelsRow {
+            quote: &market_only,
+            blended: 0.0,
+            cache_read: None,
+            aa_speed: None,
+        };
+        assert!((fallback.resolved_throughput().unwrap() - 73.3).abs() < 1e-9);
+        assert!(!SpeedFilter::T100.allows(fallback.resolved_throughput()));
+
+        // Sorting interleaves the two sources on the resolved figure.
+        let mut rows = vec![
+            ModelsRow {
+                blended: 0.0,
+                cache_read: None,
+                quote: &market_only,
+                aa_speed: None,
+            },
+            ModelsRow {
+                blended: 0.0,
+                cache_read: None,
+                quote: &quote,
+                aa_speed: row.aa_speed.clone(),
+            },
+        ];
+        sort_models_rows(&mut rows, ModelsSort::Throughput, true);
+        assert_eq!(
+            rows.iter()
+                .map(|r| r.quote.model.as_str())
+                .collect::<Vec<_>>(),
+            ["aa-model", "market-only"]
+        );
+    }
+
+    #[test]
     fn usage_sorts_order_reported_values_and_sink_missing_telemetry() {
         let mut busy = test_quote("busy-model", 1.0, true);
         busy.requests_24h = Some(14_000);
@@ -1376,16 +1583,19 @@ mod tests {
                 quote: &unreported,
                 blended: 0.0,
                 cache_read: None,
+                aa_speed: None,
             },
             ModelsRow {
                 quote: &busy,
                 blended: 0.0,
                 cache_read: None,
+                aa_speed: None,
             },
             ModelsRow {
                 quote: &quiet,
                 blended: 0.0,
                 cache_read: None,
+                aa_speed: None,
             },
         ];
         fn names<'a>(rows: &[ModelsRow<'a>]) -> Vec<&'a str> {

@@ -47,15 +47,25 @@ pub(crate) struct LiveEntry {
 
 impl LiveEntry {
     fn preference(&self) -> usize {
-        if self.non_reasoning {
-            return 0;
-        }
-        let rank = |e: &str| NAMED_EFFORTS.iter().position(|t| *t == e).unwrap_or(0) + 1;
-        1 + self.effort.as_deref().map_or(0, rank)
+        variant_preference(self.effort.as_deref(), self.non_reasoning)
     }
 }
 
 pub(crate) fn fetch_artificial_analysis_index(client: &Client) -> Result<Vec<Benchmark>> {
+    let (index, _speed) = fetch_aa_index_and_speed(client);
+    index
+}
+
+/// One leaderboard download, two products: the Intelligence Index overlay
+/// (never fails — the bundled snapshot is the offline fallback) and the
+/// standardized-speed table (fails outright when the payload is unusable,
+/// so the UI can say so instead of silently showing nothing).
+pub(crate) fn fetch_aa_index_and_speed(
+    client: &Client,
+) -> (
+    Result<Vec<Benchmark>>,
+    Result<crate::types::AaSpeedSnapshot, String>,
+) {
     let bundled = artificial_analysis_snapshot();
     let html = match fetch_text(
         client,
@@ -63,22 +73,17 @@ pub(crate) fn fetch_artificial_analysis_index(client: &Client) -> Result<Vec<Ben
         "AA Intelligence Index leaderboard",
     ) {
         Ok(html) => html,
-        // The bundled snapshot is the offline fallback: this source never
-        // fails, it just serves yesterday's reads.
-        Err(_) => return Ok(bundled),
+        Err(err) => return (Ok(bundled), Err(format!("{err:#}"))),
     };
     let version = parse_index_version(&html);
     let entries = parse_live_entries(&html);
     if entries.is_empty() {
-        return Ok(bundled);
+        return (Ok(bundled), Err("payload carried no model entries".into()));
     }
     let date = chrono::Local::now().format("%Y-%m-%d").to_string();
-    Ok(overlay_live_rows(
-        bundled,
-        &entries,
-        version.as_deref(),
-        &date,
-    ))
+    let rows = overlay_live_rows(bundled, &entries, version.as_deref(), &date);
+    let speed = super::aa_speed::parse_aa_speed_snapshot(&html);
+    (Ok(rows), speed)
 }
 
 /// The payload names the board ("Artificial Analysis Intelligence Index
@@ -140,9 +145,11 @@ pub(crate) fn parse_live_entries(html: &str) -> Vec<LiveEntry> {
     out
 }
 
-/// Split a leaderboard `shortName` into a family entry, folding the
-/// non-reasoning marker into the variant class.
-fn classify_short_name(short: &str, score: f64) -> Option<LiveEntry> {
+/// Split a leaderboard `shortName` into its family identity: canonical key,
+/// base display name (post-alias), reasoning-effort variant, and the
+/// non-reasoning marker. Shared by the Intelligence Index reads and the
+/// standardized-speed reads so both fold variants identically.
+pub(crate) fn classify_aa_name(short: &str) -> Option<(String, String, Option<String>, bool)> {
     let trimmed = short.trim();
     let mut non_reasoning = false;
     let mut probe = trimmed;
@@ -161,9 +168,26 @@ fn classify_short_name(short: &str, score: f64) -> Option<LiveEntry> {
         return None;
     }
     let base = alias_display_name(&base).to_owned();
+    Some((benchmark_model_key(&base), base, effort, non_reasoning))
+}
+
+/// Variant preference order shared by every AA read: bare > named efforts
+/// (max first) > explicit non-reasoning.
+pub(crate) fn variant_preference(effort: Option<&str>, non_reasoning: bool) -> usize {
+    if non_reasoning {
+        return 0;
+    }
+    let rank = |e: &str| NAMED_EFFORTS.iter().position(|t| *t == e).unwrap_or(0) + 1;
+    1 + effort.map_or(0, rank)
+}
+
+/// Split a leaderboard `shortName` into a family entry, folding the
+/// non-reasoning marker into the variant class.
+fn classify_short_name(short: &str, score: f64) -> Option<LiveEntry> {
+    let (key, name, effort, non_reasoning) = classify_aa_name(short)?;
     Some(LiveEntry {
-        key: benchmark_model_key(&base),
-        name: base,
+        key,
+        name,
         score,
         effort,
         non_reasoning,

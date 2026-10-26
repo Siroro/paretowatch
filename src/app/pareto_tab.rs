@@ -1180,26 +1180,86 @@ impl ParetoWatchApp {
             });
 
             if let Some(quote) = &selected_quote {
-                // Market-wide speed summary; the per-provider split joins in
-                // the market-quality grid below.
+                // Speed summary: AA's standardized medians lead (true
+                // percentiles under a uniform protocol); the live-market
+                // buckets follow as the marketplace-reality secondary. The
+                // per-provider split joins in the market-quality grid below.
+                let aa_entry = self
+                    .aa_speed_lookup()
+                    .and_then(|join| join.get(&quote.model).cloned());
                 ui.horizontal_wrapped(|ui| {
                     ui.label("Speed:");
+                    if let Some(entry) = &aa_entry {
+                        match (entry.median_tps, entry.median_ttft_s) {
+                            (Some(tps), Some(ttft)) => {
+                                ui.label(format!(
+                                    "{} \u{00b7} TTFT {}",
+                                    format_throughput(tps),
+                                    format_latency_ms(ttft * 1000.0)
+                                ));
+                            }
+                            (Some(tps), None) => {
+                                ui.label(format_throughput(tps));
+                            }
+                            (None, Some(ttft)) => {
+                                ui.label(format!("TTFT {}", format_latency_ms(ttft * 1000.0)));
+                            }
+                            (None, None) => {}
+                        };
+                        let band = match (entry.tps_p05, entry.tps_p95) {
+                            (Some(lo), Some(hi)) => format!(
+                                " \u{00b7} p05\u{2013}p95 {}\u{2013}{}",
+                                format_throughput(lo),
+                                format_throughput(hi)
+                            ),
+                            _ => String::new(),
+                        };
+                        ui.small(format!("AA standardized{band}"))
+                            .on_hover_text(format!(
+                                "Median of AA's controlled generations under a uniform \
+                             protocol{} \u{2014} independent of any marketplace route",
+                                entry
+                                    .effort
+                                    .as_deref()
+                                    .map(|e| format!(" ({e} variant)"))
+                                    .unwrap_or_default(),
+                            ));
+                    }
                     match (quote.throughput_p50, quote.ttft_p50_ms) {
-                        (Some(tps), Some(ttft)) => ui.label(format!(
-                            "{} \u{00b7} TTFT {}",
-                            format_throughput(tps),
-                            format_latency_ms(ttft)
-                        )),
-                        (Some(tps), None) => ui.label(format_throughput(tps)),
-                        (None, Some(ttft)) => ui.label(format!("TTFT {}", format_latency_ms(ttft))),
-                        (None, None) => ui.label(egui::RichText::new("no 24h telemetry").weak()),
+                        (Some(tps), Some(ttft)) => {
+                            ui.label(format!(
+                                "{}\u{2020} \u{00b7} TTFT {}\u{2020}",
+                                format_throughput(tps),
+                                format_latency_ms(ttft)
+                            ));
+                        }
+                        (Some(tps), None) => {
+                            ui.label(format!("{}\u{2020}", format_throughput(tps)));
+                        }
+                        (None, Some(ttft)) => {
+                            ui.label(format!("TTFT {}\u{2020}", format_latency_ms(ttft)));
+                        }
+                        (None, None) => {}
                     };
                     if let Some(pct) = quote.uptime_pct {
                         ui.separator();
                         ui.label(format!("{pct:.1}% uptime"));
                     }
-                    ui.separator();
-                    ui.small("market-wide medians \u{00b7} 24h");
+                    if quote.throughput_p50.is_some() || quote.ttft_p50_ms.is_some() {
+                        ui.separator();
+                        ui.small("\u{2020} market buckets \u{00b7} 24h")
+                            .on_hover_text(
+                                "Live-market medians pooled across every seller \u{2014} the feed \
+                             publishes only coarse histogram midpoints, so treat them as \
+                             approximate",
+                            );
+                    }
+                    if aa_entry.is_none()
+                        && quote.throughput_p50.is_none()
+                        && quote.ttft_p50_ms.is_none()
+                    {
+                        ui.label(egui::RichText::new("no speed data").weak());
+                    }
                 });
                 // Selecting the card is the on-demand trigger for this
                 // model's per-provider breakdown.

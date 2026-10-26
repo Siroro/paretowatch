@@ -4,6 +4,7 @@
 
 pub(crate) mod aa_evals;
 pub(crate) mod aa_index;
+pub(crate) mod aa_speed;
 pub(crate) mod deepswe;
 pub(crate) mod design_arena;
 pub(crate) mod frontiercode;
@@ -18,6 +19,7 @@ pub(crate) mod vals_sre;
 
 pub(crate) use aa_evals::*;
 pub(crate) use aa_index::*;
+pub(crate) use aa_speed::*;
 pub(crate) use deepswe::*;
 pub(crate) use design_arena::*;
 pub(crate) use frontiercode::*;
@@ -102,8 +104,18 @@ pub(crate) fn start_worker(
                     let benchmark_tx = msg_tx.clone();
                     let benchmark_ctx = ctx.clone();
                     thread::spawn(move || {
-                        let result = fetch_benchmark_source(&benchmark_client, source)
-                            .map_err(|e| format!("{e:#}"));
+                        // The AA leaderboard download yields two products —
+                        // the Intelligence Index overlay and the
+                        // standardized-speed table — so that source sends
+                        // both messages from one fetch.
+                        let result = if source == BenchmarkSource::ArtificialAnalysisSnapshot {
+                            let (index, speed) = fetch_aa_index_and_speed(&benchmark_client);
+                            let _ = benchmark_tx.send(WorkerMessage::AaSpeed(speed));
+                            index.map_err(|e| format!("{e:#}"))
+                        } else {
+                            fetch_benchmark_source(&benchmark_client, source)
+                                .map_err(|e| format!("{e:#}"))
+                        };
                         let _ = benchmark_tx.send(WorkerMessage::Benchmarks(source, result));
                         benchmark_ctx.request_repaint();
                     });

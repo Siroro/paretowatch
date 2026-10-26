@@ -1,3 +1,23 @@
+# ParetoWatch v0.28.0
+
+## Features
+
+- **Speed numbers you can trust: AA's standardized benchmarks are now the primary speed figures.** The Surplus market feed's tok/s and TTFT turned out to be coarse histogram-bucket midpoints — all 136 measured markets share just 21 distinct throughput values (19 different models "measure" exactly 73.3 tok/s), and 178 markets collapse into 15 distinct TTFT values — so small differences between models are literally invisible in that data. Artificial Analysis measures the same constructs properly, and their leaderboard payload — the exact page the app already downloads every six hours for the Intelligence Index — carries per-model medians with full precision: median tokens/second with p05/p25/p75/p95, median time-to-first-token with percentiles, and end-to-end response time, all under their uniform controlled protocol (161 records folding to 99 model families on the current board, every value distinct). Zero new HTTP requests:
+  - **Models tab**: the tok/s and TTFT columns now show AA's standardized medians wherever the model matches, with the distribution (p05–p95) and the effort variant in the hover. Models AA doesn't track fall back to the live-market bucket, marked with † and a hover saying plainly that it's a coarse pooled midpoint. Sorting and the Speed filter test the resolved figure — AA first, market bucket second — so filtering at ≥100 tok/s now means "AA measured ≥100".
+  - **Pareto detail card**: the speed line shows both sources — AA's standardized read first, the market buckets after it under a † marker ("market buckets · 24h"), so the standardized and marketplace-reality numbers sit side by side instead of being confused for each other.
+  - **Cost calculator**: an "AA speed" line (median tok/s · TTFT · end-to-end, p05–p95 band in the hover) above the per-provider route grid, so the standardized reference and the Surplus-route reality are one glance apart.
+  - The table rides the benchmark cadence (one leaderboard download yields both the Intelligence Index and the speed reads), persists in its own disk cache (`aa-speed.json`) so restarts start warm, and the footer discloses coverage ("AA speed benchmarks: N models").
+- **Variant folding for speed deliberately differs from the Intelligence Index.** AA lists many models per effort variant, and throughput barely moves between variants — but time-to-first-token at max effort includes queue/fallback time that scales with effort (Claude Opus 5.5 measures 9 s TTFT at low effort and 706 s at max on the same board). Speed therefore folds to the calmest variant — bare entry first, then low→max efforts — while intelligence keeps preferring max effort; the chosen variant is disclosed in every hover.
+
+## Notes
+
+- The quote→family join reuses the benchmark matcher (exact canonical key, then the 0.80 fuzzy bar with creator compatibility and the release-tag fallback), so a model matches the same AA family its benchmark scores do.
+- AA's speed is measured under their harness (standardized prompts, controlled generations), not on Surplus routes — it answers "how fast is this model", while the market buckets and the per-provider route grid answer "what does traffic on this marketplace actually see". The three are now visually distinguished everywhere they appear.
+
+## Validation
+
+Formatting, locked check, locked Clippy with warnings denied (`--all-targets`), and locked test (190 tests) all pass. The parser was additionally smoke-tested against the live leaderboard payload (99 families, all values distinct, effort folding verified).
+
 # ParetoWatch v0.27.0
 
 ## Features
