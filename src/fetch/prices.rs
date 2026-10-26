@@ -198,6 +198,11 @@ fn apply_market_overlay(
         q.discount_direction = market.discount_direction.clone();
         q.free_offer_listed = market.free_offer_listed;
         q.market_options = market.provider_options.clone();
+        q.throughput_p50 = market.throughput_p50;
+        q.tps_samples = market.tps_samples;
+        q.ttft_p50_ms = market.ttft_p50_ms;
+        q.ttft_samples = market.ttft_samples;
+        q.uptime_pct = market.uptime_pct;
         q.live_market = true;
         overlay_count += 1;
     }
@@ -343,6 +348,11 @@ pub(crate) fn parse_price_matrix(value: &Value, settings: &Settings) -> Result<V
                 live_market: false,
                 vision: false,
                 uncensored,
+                throughput_p50: None,
+                tps_samples: None,
+                ttft_p50_ms: None,
+                ttft_samples: None,
+                uptime_pct: None,
             });
         }
     }
@@ -406,6 +416,11 @@ pub(crate) fn parse_model_catalog(value: &Value) -> Result<Vec<Quote>> {
             live_market: false,
             vision: catalog_supports_vision(model),
             uncensored,
+            throughput_p50: None,
+            tps_samples: None,
+            ttft_p50_ms: None,
+            ttft_samples: None,
+            uptime_pct: None,
         });
     }
     Ok(out)
@@ -591,6 +606,14 @@ pub(crate) struct MarketOverlay {
     pub(crate) discount_direction: Option<String>,
     pub(crate) free_offer_listed: bool,
     pub(crate) provider_options: Vec<ProviderMarketQuote>,
+    /// Market-wide median tokens/second over the last 24h (feed telemetry).
+    pub(crate) throughput_p50: Option<f64>,
+    pub(crate) tps_samples: Option<u64>,
+    /// Market-wide median time-to-first-token in milliseconds.
+    pub(crate) ttft_p50_ms: Option<f64>,
+    pub(crate) ttft_samples: Option<u64>,
+    /// Share of routed requests that did not fail, last 24h.
+    pub(crate) uptime_pct: Option<f64>,
 }
 
 pub(crate) const SURPLUS_MARKET_MICRO_USD_PER_USD: f64 = 1_000_000.0;
@@ -806,6 +829,18 @@ pub(crate) fn parse_market_overlay(root: &Value, settings: &Settings) -> Vec<Mar
         )
         .filter(|n| n.is_finite());
         let discount_direction = first_string_path(entry, &[&["discount_trend", "direction"]]);
+        // Route telemetry, market-wide across every provider (24h rolling):
+        // median throughput, median time-to-first-token, and uptime. The
+        // per-provider split lives in the Provider Performance API.
+        let count_at = |key: &str| {
+            first_number_path(entry, &[&[key]]).and_then(|n| (n >= 0.0).then_some(n as u64))
+        };
+        let throughput_p50 =
+            first_number_path(entry, &[&["tps_p50"]]).filter(|v| v.is_finite() && *v >= 0.0);
+        let ttft_p50_ms =
+            first_number_path(entry, &[&["ttft_p50_ms"]]).filter(|v| v.is_finite() && *v >= 0.0);
+        let uptime_pct =
+            first_number_path(entry, &[&["uptime_pct"]]).filter(|v| v.is_finite() && *v >= 0.0);
 
         out.push(MarketOverlay {
             model,
@@ -825,6 +860,11 @@ pub(crate) fn parse_market_overlay(root: &Value, settings: &Settings) -> Vec<Mar
             discount_direction,
             free_offer_listed,
             provider_options,
+            throughput_p50,
+            tps_samples: count_at("tps_samples"),
+            ttft_p50_ms,
+            ttft_samples: count_at("ttft_samples"),
+            uptime_pct,
         });
     }
     out
@@ -869,6 +909,11 @@ mod tests {
                 "healthy_seller_count": 59,
                 "requests_24h": 641,
                 "volume_24h": 203913,
+                "tps_p50": 133.6,
+                "tps_samples": 210,
+                "ttft_p50_ms": 679,
+                "ttft_samples": 2054,
+                "uptime_pct": 43.7,
                 "discount_trend": {"current_discount_pct": 37.83, "direction": "tightening"},
                 "providers": [
                     {"provider": "bedrock", "trusted": true, "healthy_seller_count": 5,
@@ -890,6 +935,25 @@ mod tests {
         assert!((rows[0].volume_24h.unwrap() - 0.203913).abs() < 1e-12);
         assert_eq!(rows[0].discount_direction.as_deref(), Some("tightening"));
         assert!(!rows[0].free_offer_listed);
+        assert!((rows[0].throughput_p50.unwrap() - 133.6).abs() < 1e-12);
+        assert_eq!(rows[0].tps_samples, Some(210));
+        assert_eq!(rows[0].ttft_p50_ms, Some(679.0));
+        assert_eq!(rows[0].ttft_samples, Some(2054));
+        assert_eq!(rows[0].uptime_pct, Some(43.7));
+
+        // Telemetry lands on the overlaid quote alongside the prices.
+        let mut quotes = vec![test_quote("openai-gpt-oss-120b", 1.0, false)];
+        apply_market_overlay(
+            &mut quotes,
+            vec![rows.into_iter().next().unwrap()],
+            &Settings::default(),
+        );
+        let q = &quotes[0];
+        assert!((q.throughput_p50.unwrap() - 133.6).abs() < 1e-12);
+        assert_eq!(q.ttft_p50_ms, Some(679.0));
+        assert_eq!(q.tps_samples, Some(210));
+        assert_eq!(q.ttft_samples, Some(2054));
+        assert_eq!(q.uptime_pct, Some(43.7));
     }
 
     #[test]

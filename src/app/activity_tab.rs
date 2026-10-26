@@ -753,6 +753,9 @@ impl ParetoWatchApp {
             });
         });
 
+        // The expanded listing detail is one of the on-demand triggers for
+        // this model's per-provider route breakdown.
+        self.ensure_performance(&row.quote.model, crate::fetch::ON_DEMAND_REFRESH_SECS);
         self.market_quality_section(ui, &row.quote);
     }
 }

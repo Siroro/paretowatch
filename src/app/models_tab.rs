@@ -11,12 +11,16 @@ use eframe::egui;
 use serde::{Deserialize, Serialize};
 
 use crate::bench::normalize;
-use crate::format::{format_compact_number, format_compact_usd, format_price_tick, format_usd};
+use crate::fetch::{ON_DEMAND_REFRESH_SECS, performance_key};
+use crate::format::{
+    format_compact_number, format_compact_usd, format_latency_ms, format_price_tick,
+    format_throughput, format_usd,
+};
 use crate::theme::{
     PRICE_DOWN, copyable_slug, creator_color, discount_color, free_offer_badge, group_label,
 };
 use crate::types::{
-    AlertMode, CostBasis, ModalityFilter, PriceMetric, Quote, UncensoredFilter,
+    AlertMode, CostBasis, ModalityFilter, PriceMetric, Quote, SpeedFilter, UncensoredFilter,
     assumed_cache_price, token_workload_cost,
 };
 
@@ -73,6 +77,10 @@ pub(super) enum ModelsSort {
     Discount,
     Requests24h,
     Volume24h,
+    /// Market-wide median tokens/second (24h route telemetry).
+    Throughput,
+    /// Market-wide median time-to-first-token.
+    Ttft,
 }
 
 /// Where the cache-read rate a calculation bills came from.
@@ -239,6 +247,7 @@ impl ParetoWatchApp {
         let modality = self.models_modality;
         let safety = self.models_uncensored;
         let cache_filter = self.models_cache;
+        let speed_filter = self.models_speed;
         let weights = (
             self.settings.input_weight,
             self.settings.cache_read_weight,
@@ -252,6 +261,7 @@ impl ParetoWatchApp {
             .filter(|quote| modality.allows(quote.vision))
             .filter(|quote| safety.allows(quote.uncensored))
             .filter(|quote| cache_filter.allows(quote))
+            .filter(|quote| speed_filter.allows(quote.throughput_p50))
             .filter(|quote| {
                 creator
                     .as_deref()
@@ -280,6 +290,7 @@ impl ParetoWatchApp {
                 self.models_modality = ModalityFilter::All;
                 self.models_uncensored = UncensoredFilter::All;
                 self.models_cache = ModelsCacheFilter::Any;
+                self.models_speed = SpeedFilter::Any;
             }
         });
         ui.small(
@@ -335,6 +346,7 @@ impl ParetoWatchApp {
                 + usize::from(self.models_modality != ModalityFilter::All)
                 + usize::from(self.models_uncensored != UncensoredFilter::All)
                 + usize::from(self.models_cache != ModelsCacheFilter::Any)
+                + usize::from(self.models_speed != SpeedFilter::Any)
                 + usize::from(self.models_creator.is_some());
             let filters_label = if active_filters > 0 {
                 format!("Filters · {active_filters} ▾")
@@ -401,6 +413,16 @@ impl ParetoWatchApp {
                                 ],
                             );
                             ui.end_row();
+                            ui.label("Speed").on_hover_text(
+                                "Market-wide median tokens/second over the last 24h, from \
+                                 Surplus route telemetry on the live market feed. Measured \
+                                 keeps only models with speed data; the thresholds cut the \
+                                 slow tail. Per-provider numbers live on each model's detail.",
+                            );
+                            let speed_options =
+                                SpeedFilter::ALL.map(|filter| (filter, filter.label()));
+                            option_row(ui, &mut self.models_speed, &speed_options);
+                            ui.end_row();
                         });
                     ui.label("Creator:");
                     let mut creator = self.models_creator.clone().unwrap_or_default();
@@ -464,6 +486,8 @@ impl ParetoWatchApp {
                     ui.strong("Provider");
                     header(ui, "Req /24h", ModelsSort::Requests24h);
                     header(ui, "Vol /24h", ModelsSort::Volume24h);
+                    header(ui, "tok/s", ModelsSort::Throughput);
+                    header(ui, "TTFT", ModelsSort::Ttft);
                     header(ui, "Disc", ModelsSort::Discount);
                     ui.strong("");
                     ui.end_row();
@@ -478,8 +502,9 @@ impl ParetoWatchApp {
                 self.models_sort_desc = !self.models_sort_desc;
             } else {
                 self.models_sort = sort;
-                // Cheapest-first for price columns, A→Z for names.
-                self.models_sort_desc = false;
+                // Cheapest-first for price columns, A→Z for names, and
+                // fastest-first for throughput (higher is better there).
+                self.models_sort_desc = sort == ModelsSort::Throughput;
             }
         }
     }
@@ -574,8 +599,30 @@ impl ParetoWatchApp {
         if let Some(total) = quote.seller_count {
             market_info.push(format!("{total} total"));
         }
+        // Per-provider speed from the route analytics join, when this model's
+        // breakdown has been fetched.
+        let market_perf = self.performance.get(&quote.model);
+        if let Some(perf) = market_perf {
+            for option in &quote.market_options {
+                if let Some(route) = perf.provider(&option.provider) {
+                    let speed = match (route.tps_p50, route.ttft_p50_ms) {
+                        (Some(tps), Some(ttft)) => {
+                            format!(
+                                "{} · TTFT {}",
+                                format_throughput(tps),
+                                format_latency_ms(ttft)
+                            )
+                        }
+                        (Some(tps), None) => format_throughput(tps),
+                        (None, Some(ttft)) => format!("TTFT {}", format_latency_ms(ttft)),
+                        (None, None) => continue,
+                    };
+                    market_info.push(format!("{}: {speed}", option.provider));
+                }
+            }
+        }
         if !market_info.is_empty() {
-            provider_label.on_hover_text(market_info.join(" · "));
+            provider_label.on_hover_text(market_info.join("\n"));
         }
         match quote.requests_24h {
             Some(requests) => {
@@ -595,6 +642,39 @@ impl ParetoWatchApp {
             None => {
                 ui.label(egui::RichText::new("—").weak())
                     .on_hover_text("Market telemetry only; catalog rows carry none");
+            }
+        }
+        match quote.throughput_p50 {
+            Some(tps) => {
+                let uptime = quote
+                    .uptime_pct
+                    .map(|pct| format!(" · {pct:.1}% uptime"))
+                    .unwrap_or_default();
+                ui.label(format_throughput(tps)).on_hover_text(format!(
+                    "Median tokens/second across every provider routing this model, last 24h \
+                     ({} streaming samples{uptime}). Per-provider split in the calculator \
+                     and detail card.",
+                    quote.tps_samples.unwrap_or(0),
+                ));
+            }
+            None => {
+                ui.label(egui::RichText::new("—").weak()).on_hover_text(
+                    "No throughput telemetry for this market in the last 24h (or catalog-only \
+                     row)",
+                );
+            }
+        }
+        match quote.ttft_p50_ms {
+            Some(ms) => {
+                ui.label(format_latency_ms(ms)).on_hover_text(format!(
+                    "Median time to first token across every provider routing this model, last \
+                     24h ({} streaming samples)",
+                    quote.ttft_samples.unwrap_or(0),
+                ));
+            }
+            None => {
+                ui.label(egui::RichText::new("—").weak())
+                    .on_hover_text("No time-to-first-token telemetry in the last 24h");
             }
         }
         match quote.discount_pct {
@@ -890,6 +970,89 @@ impl ParetoWatchApp {
             }
         });
 
+        // Per-provider speed: fetched on demand for the model the calculator
+        // is pricing, then cached (see ensure_performance).
+        self.ensure_performance(&quote.model, ON_DEMAND_REFRESH_SECS);
+        let route_key = performance_key(&quote.model);
+        if let Some(perf) = self.performance.get(&quote.model) {
+            ui.add_space(4.0);
+            egui::CollapsingHeader::new("Route performance · 24h")
+                .default_open(true)
+                .show(ui, |ui| {
+                    egui::Grid::new("calc_route_perf")
+                        .striped(true)
+                        .show(ui, |ui| {
+                            ui.strong("");
+                            ui.strong("Provider").on_hover_text(
+                                "Every provider route observed on this model's market, busiest \
+                                 first. ● marks the provider whose prices the calculator bills.",
+                            );
+                            ui.strong("tok/s");
+                            ui.strong("TTFT p50");
+                            ui.strong("p95 total");
+                            ui.strong("Uptime");
+                            ui.strong("Req /24h");
+                            ui.end_row();
+                            for route in perf.providers_by_traffic() {
+                                let billed = match self.calc_provider.as_deref() {
+                                    Some(name) => name == route.provider,
+                                    None => route.provider == quote.provider,
+                                };
+                                // The billed route's numbers stand out.
+                                let cell = |text: String| {
+                                    let rich = egui::RichText::new(text);
+                                    if billed { rich.strong() } else { rich }
+                                };
+                                let dash = || egui::RichText::new("\u{2014}").weak();
+                                ui.label(if billed { "\u{25cf}" } else { "" });
+                                ui.label(&route.provider);
+                                ui.label(match route.tps_p50 {
+                                    Some(tps) => cell(format_throughput(tps)),
+                                    None => dash(),
+                                })
+                                .on_hover_text(
+                                    match (route.tps_p50, route.tps_samples) {
+                                        (Some(_), Some(n)) => {
+                                            format!("Median of {n} streaming completions")
+                                        }
+                                        _ => "No throughput samples on this route".to_owned(),
+                                    },
+                                );
+                                ui.label(match route.ttft_p50_ms {
+                                    Some(ms) => cell(format_latency_ms(ms)),
+                                    None => dash(),
+                                });
+                                ui.label(match route.p95_latency_ms {
+                                    Some(ms) => cell(format_latency_ms(ms)),
+                                    None => dash(),
+                                });
+                                ui.label(match route.uptime_pct {
+                                    Some(pct) => cell(format!("{pct:.1}%")),
+                                    None => dash(),
+                                });
+                                ui.label(match route.requests {
+                                    Some(n) => cell(format_compact_number(n as f64)),
+                                    None => dash(),
+                                });
+                                ui.end_row();
+                            }
+                        });
+                    ui.small(
+                        "Median speed and latency of actual Surplus traffic per provider route, \
+                         rolling 24h.",
+                    );
+                });
+        } else if self.performance_pending.contains(&route_key) {
+            ui.add_space(4.0);
+            ui.horizontal(|ui| {
+                ui.spinner();
+                ui.small("Fetching route analytics…");
+            });
+        } else if self.performance_backoff.contains_key(&route_key) {
+            ui.add_space(4.0);
+            ui.small("Route analytics unavailable for this model — retrying later.");
+        }
+
         ui.with_layout(egui::Layout::bottom_up(egui::Align::LEFT), |ui| {
             ui.separator();
             ui.horizontal(|ui| {
@@ -955,7 +1118,25 @@ fn sort_models_rows(rows: &mut [ModelsRow<'_>], sort: ModelsSort, desc: bool) {
     let requests_key =
         |row: &ModelsRow<'_>| row.quote.requests_24h.map_or(f64::INFINITY, |r| r as f64);
     let volume_key = |row: &ModelsRow<'_>| row.quote.volume_24h.unwrap_or(f64::INFINITY);
+    // Missing speed telemetry sinks in the ascending (fastest-TTFT-first and
+    // price-style) order, matching the other optional columns.
+    let ttft_key = |row: &ModelsRow<'_>| row.quote.ttft_p50_ms.unwrap_or(f64::INFINITY);
     rows.sort_by(|a, b| {
+        // Throughput's default order is fastest-first (descending), where a
+        // sink-last key would float the unmeasured rows to the top, so that
+        // arm applies the direction itself and keeps unmeasured rows last in
+        // both directions.
+        if sort == ModelsSort::Throughput {
+            return match (a.quote.throughput_p50, b.quote.throughput_p50) {
+                (Some(_), None) => std::cmp::Ordering::Less,
+                (None, Some(_)) => std::cmp::Ordering::Greater,
+                (Some(x), Some(y)) => {
+                    let key = x.total_cmp(&y);
+                    if desc { key.reverse() } else { key }.then_with(|| by_name(a, b))
+                }
+                (None, None) => by_name(a, b),
+            };
+        }
         let ordering = match sort {
             ModelsSort::Name => by_name(a, b),
             ModelsSort::Input => a
@@ -981,6 +1162,10 @@ fn sort_models_rows(rows: &mut [ModelsRow<'_>], sort: ModelsSort, desc: bool) {
             ModelsSort::Volume24h => volume_key(a)
                 .total_cmp(&volume_key(b))
                 .then_with(|| by_name(a, b)),
+            ModelsSort::Ttft => ttft_key(a)
+                .total_cmp(&ttft_key(b))
+                .then_with(|| by_name(a, b)),
+            ModelsSort::Throughput => unreachable!("handled above"),
         };
         if desc { ordering.reverse() } else { ordering }
     });
@@ -1123,6 +1308,56 @@ mod tests {
         no_cache.market_options.clear();
         assert!(!ModelsCacheFilter::Priced.allows(&no_cache));
         assert!(ModelsCacheFilter::NoCachePrice.allows(&no_cache));
+    }
+
+    #[test]
+    fn speed_sorts_order_measured_rows_and_sink_unmeasured_in_both_directions() {
+        let mut fast = test_quote("fast-model", 1.0, true);
+        fast.throughput_p50 = Some(133.6);
+        fast.ttft_p50_ms = Some(679.0);
+        let mut slow = test_quote("slow-model", 1.0, true);
+        slow.throughput_p50 = Some(18.0);
+        slow.ttft_p50_ms = Some(5546.0);
+        let unmeasured = test_quote("unmeasured-model", 1.0, true);
+        let mut rows = vec![
+            ModelsRow {
+                quote: &unmeasured,
+                blended: 0.0,
+                cache_read: None,
+            },
+            ModelsRow {
+                quote: &slow,
+                blended: 0.0,
+                cache_read: None,
+            },
+            ModelsRow {
+                quote: &fast,
+                blended: 0.0,
+                cache_read: None,
+            },
+        ];
+        fn names<'a>(rows: &[ModelsRow<'a>]) -> Vec<&'a str> {
+            rows.iter().map(|row| row.quote.model.as_str()).collect()
+        }
+
+        // Throughput's default view: fastest first, unmeasured last.
+        sort_models_rows(&mut rows, ModelsSort::Throughput, true);
+        assert_eq!(
+            names(&rows),
+            ["fast-model", "slow-model", "unmeasured-model"]
+        );
+        // Flipped: slowest first, unmeasured still last.
+        sort_models_rows(&mut rows, ModelsSort::Throughput, false);
+        assert_eq!(
+            names(&rows),
+            ["slow-model", "fast-model", "unmeasured-model"]
+        );
+        // TTFT ascending (default): snappiest first, unmeasured last.
+        sort_models_rows(&mut rows, ModelsSort::Ttft, false);
+        assert_eq!(
+            names(&rows),
+            ["fast-model", "slow-model", "unmeasured-model"]
+        );
     }
 
     #[test]

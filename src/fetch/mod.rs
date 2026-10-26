@@ -8,6 +8,7 @@ pub(crate) mod deepswe;
 pub(crate) mod design_arena;
 pub(crate) mod frontiercode;
 pub(crate) mod livebench;
+pub(crate) mod performance;
 pub(crate) mod prices;
 pub(crate) mod revelo;
 pub(crate) mod swe_rebench;
@@ -21,6 +22,7 @@ pub(crate) use deepswe::*;
 pub(crate) use design_arena::*;
 pub(crate) use frontiercode::*;
 pub(crate) use livebench::*;
+pub(crate) use performance::*;
 pub(crate) use prices::*;
 pub(crate) use revelo::*;
 pub(crate) use swe_rebench::*;
@@ -114,6 +116,20 @@ pub(crate) fn start_worker(
                 Ok(WorkerCommand::UpdateSettings(new_settings)) => {
                     settings = new_settings;
                     alert_state.retain(|id, _| settings.alerts.iter().any(|a| a.id == *id));
+                }
+                Ok(WorkerCommand::FetchPerformance(models)) => {
+                    // Route analytics are polled per model (no bulk endpoint),
+                    // so this is usually one URL — but it must never block the
+                    // 30-second pricing loop or the tray UI.
+                    let perf_client = client.clone();
+                    let perf_tx = msg_tx.clone();
+                    let perf_ctx = ctx.clone();
+                    thread::spawn(move || {
+                        let attempted = models.clone();
+                        let rows = fetch_models_performance(&perf_client, &models);
+                        let _ = perf_tx.send(WorkerMessage::Performance(rows, attempted));
+                        perf_ctx.request_repaint();
+                    });
                 }
                 Ok(WorkerCommand::Quit) => break,
                 Err(mpsc::RecvTimeoutError::Timeout) => {}

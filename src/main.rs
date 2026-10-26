@@ -10,6 +10,7 @@ mod format;
 mod history;
 mod notifications;
 mod pareto;
+mod performance_cache;
 mod settings_store;
 #[cfg(test)]
 mod testfix;

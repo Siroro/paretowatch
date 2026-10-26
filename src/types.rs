@@ -2,8 +2,12 @@
 //! rows, plus their small pure helpers (price blending, liquidity filters,
 //! labels). No fetching, scoring, or UI code lives in this module.
 
+use std::collections::HashMap;
+
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
+
+use crate::bench::matching::normalize;
 
 pub(crate) const SWE_REBENCH_URL: &str = "https://swe-rebench.com/";
 pub(crate) const VALS_SRE_BENCH_URL: &str = "https://www.vals.ai/benchmarks/srebench";
@@ -465,6 +469,54 @@ impl ModalityFilter {
     }
 }
 
+/// Speed filter, shared by the Models tab table. The measured value is the
+/// market-wide median tokens/second from the live market feed's 24h rolling
+/// telemetry (`Quote::throughput_p50`); models without speed data pass only
+/// the Any option — Measured exists to single out the rows that do have it.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
+pub(crate) enum SpeedFilter {
+    #[default]
+    Any,
+    Measured,
+    T25,
+    T50,
+    T100,
+    T150,
+}
+
+impl SpeedFilter {
+    pub(crate) const ALL: [Self; 6] = [
+        Self::Any,
+        Self::Measured,
+        Self::T25,
+        Self::T50,
+        Self::T100,
+        Self::T150,
+    ];
+
+    pub(crate) fn label(self) -> &'static str {
+        match self {
+            Self::Any => "Any",
+            Self::Measured => "Measured",
+            Self::T25 => "25+",
+            Self::T50 => "50+",
+            Self::T100 => "100+",
+            Self::T150 => "150+",
+        }
+    }
+
+    pub(crate) fn allows(self, throughput_p50: Option<f64>) -> bool {
+        match self {
+            Self::Any => true,
+            Self::Measured => throughput_p50.is_some(),
+            Self::T25 => throughput_p50.is_some_and(|tps| tps >= 25.0),
+            Self::T50 => throughput_p50.is_some_and(|tps| tps >= 50.0),
+            Self::T100 => throughput_p50.is_some_and(|tps| tps >= 100.0),
+            Self::T150 => throughput_p50.is_some_and(|tps| tps >= 150.0),
+        }
+    }
+}
+
 /// Safety-tuning filter, shared by the Pareto chart and the Models tab.
 /// Uncensored detection comes from the listing text (see
 /// [`is_uncensored_model`]); everything else counts as safety-tuned.
@@ -795,6 +847,20 @@ pub(crate) struct Quote {
     /// policy metadata, so this is name/creator detection, not a claim about
     /// the weights' internals.
     pub(crate) uncensored: bool,
+    /// Market-wide median generation speed in tokens/second over the last
+    /// 24h, from the live market feed's route telemetry. `None` when the
+    /// market carried no throughput samples (most catalog-only rows).
+    pub(crate) throughput_p50: Option<f64>,
+    /// Streaming observations behind `throughput_p50`.
+    pub(crate) tps_samples: Option<u64>,
+    /// Market-wide median time-to-first-token in milliseconds over the last
+    /// 24h. `None` when the market carried no TTFT samples.
+    pub(crate) ttft_p50_ms: Option<f64>,
+    /// Streaming observations behind `ttft_p50_ms`.
+    pub(crate) ttft_samples: Option<u64>,
+    /// Share of requests across the whole market that did not fail, over the
+    /// last 24h.
+    pub(crate) uptime_pct: Option<f64>,
 }
 
 impl Quote {
@@ -986,6 +1052,88 @@ pub(crate) struct PriceSnapshot {
     pub(crate) base_source: String,
 }
 
+/// Speed and reliability of one provider's route to a model, aggregated from
+/// actual Surplus traffic over a rolling 24h window (the Provider Performance
+/// API). Every field is optional: providers without streaming telemetry still
+/// report requests/uptime, and quiet providers report nothing but the name.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub(crate) struct ProviderPerformance {
+    pub(crate) provider: String,
+    pub(crate) requests: Option<u64>,
+    pub(crate) failures: Option<u64>,
+    pub(crate) sellers: Option<u64>,
+    pub(crate) uptime_pct: Option<f64>,
+    pub(crate) avg_latency_ms: Option<f64>,
+    pub(crate) p50_latency_ms: Option<f64>,
+    pub(crate) p95_latency_ms: Option<f64>,
+    pub(crate) ttft_p50_ms: Option<f64>,
+    pub(crate) ttft_p90_ms: Option<f64>,
+    pub(crate) ttft_samples: Option<u64>,
+    /// Median tokens/second observed on streaming completions.
+    pub(crate) tps_p50: Option<f64>,
+    pub(crate) tps_samples: Option<u64>,
+}
+
+/// Per-provider route performance for one model. Provider names share the
+/// namespace with the market feed's provider rows, so the two join directly.
+/// `fetched_at` drives the on-demand staleness check and the slow background
+/// refresh, and persists with the disk cache between restarts.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub(crate) struct ModelPerformance {
+    pub(crate) model: String,
+    #[serde(default = "default_performance_fetched_at")]
+    pub(crate) fetched_at: DateTime<Utc>,
+    pub(crate) providers: Vec<ProviderPerformance>,
+}
+
+fn default_performance_fetched_at() -> DateTime<Utc> {
+    DateTime::<Utc>::MIN_UTC
+}
+
+impl ModelPerformance {
+    pub(crate) fn provider(&self, name: &str) -> Option<&ProviderPerformance> {
+        self.providers.iter().find(|p| p.provider == name)
+    }
+
+    /// Rows ordered busiest-first for display: request volume leads, then
+    /// throughput, so quiet routes never outrank the traffic they serve.
+    pub(crate) fn providers_by_traffic(&self) -> Vec<&ProviderPerformance> {
+        let mut rows: Vec<&ProviderPerformance> = self.providers.iter().collect();
+        rows.sort_by(|a, b| {
+            let requests = |p: &ProviderPerformance| p.requests.unwrap_or(0);
+            requests(b)
+                .cmp(&requests(a))
+                .then_with(|| {
+                    let tps = |p: &ProviderPerformance| p.tps_p50.unwrap_or(f64::NEG_INFINITY);
+                    tps(b).total_cmp(&tps(a))
+                })
+                .then_with(|| a.provider.cmp(&b.provider))
+        });
+        rows
+    }
+}
+
+/// The cached per-model route analytics: one row per model the app has
+/// fetched (on demand at selection, refreshed by the slow background pass,
+/// persisted across restarts). Rows merge individually — a failed refetch
+/// leaves the previous row in place.
+#[derive(Debug, Clone, Default)]
+pub(crate) struct PerformanceSnapshot {
+    pub(crate) rows: HashMap<String, ModelPerformance>,
+}
+
+impl PerformanceSnapshot {
+    /// Lookup by model id, normalizing punctuation/case the same way the
+    /// market overlay join does (catalog and market spellings of a live
+    /// model normalize identically — that equality is what overlaid the
+    /// quote in the first place).
+    pub(crate) fn get(&self, model: &str) -> Option<&ModelPerformance> {
+        self.rows
+            .get(model)
+            .or_else(|| self.rows.get(&normalize(model)))
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub(crate) struct Benchmark {
     pub(crate) slug: String,
@@ -1009,6 +1157,24 @@ pub(crate) struct Benchmark {
 mod tests {
     use super::*;
     use crate::testfix::test_quote;
+
+    fn test_provider_performance() -> ProviderPerformance {
+        ProviderPerformance {
+            provider: String::new(),
+            requests: None,
+            failures: None,
+            sellers: None,
+            uptime_pct: None,
+            avg_latency_ms: None,
+            p50_latency_ms: None,
+            p95_latency_ms: None,
+            ttft_p50_ms: None,
+            ttft_p90_ms: None,
+            ttft_samples: None,
+            tps_p50: None,
+            tps_samples: None,
+        }
+    }
 
     #[test]
     fn alert_rules_from_pre_move_filter_configs_keep_defaults() {
@@ -1330,6 +1496,112 @@ mod tests {
         assert!(!ModalityFilter::Vision.allows(false));
         assert!(!ModalityFilter::TextOnly.allows(true));
         assert!(ModalityFilter::TextOnly.allows(false));
+    }
+
+    #[test]
+    fn speed_filter_partitions_by_measured_throughput() {
+        let fast = Some(133.6);
+        let mid = Some(73.3);
+        let slow = Some(18.0);
+        for (filter, value, expected) in [
+            (SpeedFilter::Any, None, true),
+            (SpeedFilter::Any, slow, true),
+            (SpeedFilter::Measured, None, false),
+            (SpeedFilter::Measured, slow, true),
+            (SpeedFilter::T25, slow, false),
+            (SpeedFilter::T25, Some(25.0), true),
+            (SpeedFilter::T50, mid, true),
+            (SpeedFilter::T50, slow, false),
+            (SpeedFilter::T100, mid, false),
+            (SpeedFilter::T100, fast, true),
+            (SpeedFilter::T150, fast, false),
+            (SpeedFilter::T150, Some(151.0), true),
+        ] {
+            assert_eq!(filter.allows(value), expected, "{filter:?}({value:?})");
+        }
+    }
+
+    #[test]
+    fn performance_snapshot_lookup_matches_catalog_spelling() {
+        let mut snapshot = PerformanceSnapshot::default();
+        snapshot.rows.insert(
+            normalize("gpt-5.4"),
+            ModelPerformance {
+                model: "gpt-5.4".into(),
+                fetched_at: Utc::now(),
+                providers: vec![ProviderPerformance {
+                    provider: "openai".into(),
+                    requests: Some(2757),
+                    failures: Some(23),
+                    sellers: Some(5),
+                    uptime_pct: Some(99.2),
+                    avg_latency_ms: Some(4666.0),
+                    p50_latency_ms: Some(1670.0),
+                    p95_latency_ms: Some(24_867.0),
+                    ttft_p50_ms: Some(916.0),
+                    ttft_p90_ms: Some(1670.0),
+                    ttft_samples: Some(1570),
+                    tps_p50: Some(73.3),
+                    tps_samples: Some(1497),
+                }],
+            },
+        );
+        // Exact API id, and a punctuation/case variant of it, both hit;
+        // a different model id (creator prefix included) does not — same
+        // equality the market overlay join uses.
+        let direct = snapshot.get("gpt 5.4").expect("direct key");
+        assert_eq!(direct.provider("openai").unwrap().tps_p50, Some(73.3));
+        assert!(snapshot.get("GPT-5.4").is_some());
+        assert!(snapshot.get("openai/gpt-5.4").is_none());
+        assert!(snapshot.get("gpt-5.4-x").is_none());
+    }
+
+    #[test]
+    fn providers_by_traffic_orders_requests_then_throughput() {
+        let perf = ModelPerformance {
+            model: "m".into(),
+            fetched_at: Utc::now(),
+            providers: vec![
+                ProviderPerformance {
+                    provider: "fast-but-idle".into(),
+                    requests: Some(2),
+                    tps_p50: Some(900.0),
+                    ..test_provider_performance()
+                },
+                ProviderPerformance {
+                    provider: "busy".into(),
+                    requests: Some(846_962),
+                    tps_p50: Some(98.9),
+                    ..test_provider_performance()
+                },
+                ProviderPerformance {
+                    provider: "same-traffic-faster".into(),
+                    requests: Some(500),
+                    tps_p50: Some(150.0),
+                    ..test_provider_performance()
+                },
+                ProviderPerformance {
+                    provider: "same-traffic-slower".into(),
+                    requests: Some(500),
+                    tps_p50: Some(50.0),
+                    ..test_provider_performance()
+                },
+            ],
+        };
+        let order: Vec<&str> = perf
+            .providers_by_traffic()
+            .iter()
+            .map(|p| p.provider.as_str())
+            .collect();
+        assert_eq!(
+            order,
+            [
+                "busy",
+                "same-traffic-faster",
+                "same-traffic-slower",
+                "fast-but-idle"
+            ]
+        );
     }
 
     #[test]

@@ -10,7 +10,11 @@ use egui_plot::{HoverPosition, Line, Plot, PlotPoint, PlotPoints, Points, Text};
 
 use crate::artificial_analysis_snapshot::ARTIFICIAL_ANALYSIS_SNAPSHOT_DATE;
 use crate::bench::{format_percentile, normalize};
-use crate::format::{format_compact_number, format_compact_usd, format_price_tick};
+use crate::fetch::ON_DEMAND_REFRESH_SECS;
+use crate::format::{
+    format_compact_number, format_compact_usd, format_latency_ms, format_price_tick,
+    format_throughput,
+};
 use crate::history::track::{ModelSeries, historical_low};
 use crate::pareto::{JoinedPoint, pareto_search_matches, price_from_plot_x, price_to_plot_x};
 use crate::theme::{
@@ -1176,6 +1180,30 @@ impl ParetoWatchApp {
             });
 
             if let Some(quote) = &selected_quote {
+                // Market-wide speed summary; the per-provider split joins in
+                // the market-quality grid below.
+                ui.horizontal_wrapped(|ui| {
+                    ui.label("Speed:");
+                    match (quote.throughput_p50, quote.ttft_p50_ms) {
+                        (Some(tps), Some(ttft)) => ui.label(format!(
+                            "{} \u{00b7} TTFT {}",
+                            format_throughput(tps),
+                            format_latency_ms(ttft)
+                        )),
+                        (Some(tps), None) => ui.label(format_throughput(tps)),
+                        (None, Some(ttft)) => ui.label(format!("TTFT {}", format_latency_ms(ttft))),
+                        (None, None) => ui.label(egui::RichText::new("no 24h telemetry").weak()),
+                    };
+                    if let Some(pct) = quote.uptime_pct {
+                        ui.separator();
+                        ui.label(format!("{pct:.1}% uptime"));
+                    }
+                    ui.separator();
+                    ui.small("market-wide medians \u{00b7} 24h");
+                });
+                // Selecting the card is the on-demand trigger for this
+                // model's per-provider breakdown.
+                self.ensure_performance(&quote.model, ON_DEMAND_REFRESH_SECS);
                 self.market_quality_section(ui, quote);
             }
 
@@ -1272,7 +1300,15 @@ impl ParetoWatchApp {
             }
             if !quote.market_options.is_empty() {
                 ui.add_space(3.0);
-                ui.small("All providers in this market (workload $/1M at current weights, \u{25cf} = plotted):");
+                // Per-provider speed joins in only when this model's route
+                // breakdown has been fetched (on demand at selection).
+                let perf = self.performance.get(&quote.model);
+                ui.small(if perf.is_some() {
+                    "All providers in this market (workload $/1M at current weights, \u{25cf} = plotted, \
+                     tok/s \u{00b7} TTFT \u{00b7} uptime = 24h route telemetry):"
+                } else {
+                    "All providers in this market (workload $/1M at current weights, \u{25cf} = plotted):"
+                });
                 egui::Grid::new("market_quality_providers").striped(true).show(ui, |ui| {
                     ui.strong("");
                     ui.strong("Provider");
@@ -1282,6 +1318,11 @@ impl ParetoWatchApp {
                     ui.strong("Workload");
                     ui.strong("Trust");
                     ui.strong("Healthy");
+                    if perf.is_some() {
+                        ui.strong("tok/s");
+                        ui.strong("TTFT p50");
+                        ui.strong("Uptime");
+                    }
                     ui.end_row();
                     for option in &quote.market_options {
                         ui.label(if option.provider == quote.provider { "\u{25cf}" } else { "" });
@@ -1310,6 +1351,21 @@ impl ParetoWatchApp {
                             Some(count) => format!("{count}"),
                             None => "\u{2014}".to_owned(),
                         });
+                        if perf.is_some() {
+                            let route = perf.and_then(|p| p.provider(&option.provider));
+                            ui.label(match route.and_then(|r| r.tps_p50) {
+                                Some(tps) => format_throughput(tps),
+                                None => "\u{2014}".to_owned(),
+                            });
+                            ui.label(match route.and_then(|r| r.ttft_p50_ms) {
+                                Some(ms) => format_latency_ms(ms),
+                                None => "\u{2014}".to_owned(),
+                            });
+                            ui.label(match route.and_then(|r| r.uptime_pct) {
+                                Some(pct) => format!("{pct:.1}%"),
+                                None => "\u{2014}".to_owned(),
+                            });
+                        }
                         ui.end_row();
                     }
                 });

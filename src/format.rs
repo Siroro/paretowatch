@@ -61,6 +61,34 @@ pub(crate) fn format_usd(value: f64) -> String {
     }
 }
 
+/// Generation speed in tokens/second: whole numbers once double digits,
+/// one decimal below so single-digit medians keep their precision.
+pub(crate) fn format_throughput(tps: f64) -> String {
+    if !tps.is_finite() || tps < 0.0 {
+        return String::new();
+    }
+    if tps < 10.0 {
+        format!("{tps:.1} tok/s")
+    } else {
+        format!("{tps:.0} tok/s")
+    }
+}
+
+/// Latency from milliseconds: milliseconds under one second, then seconds
+/// with one decimal (dropping the decimal once past a minute).
+pub(crate) fn format_latency_ms(ms: f64) -> String {
+    if !ms.is_finite() || ms < 0.0 {
+        return String::new();
+    }
+    if ms < 1000.0 {
+        format!("{ms:.0} ms")
+    } else if ms < 100.0 * 1000.0 {
+        format!("{:.1} s", ms / 1000.0)
+    } else {
+        format!("{:.0} s", ms / 1000.0)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -73,6 +101,25 @@ mod tests {
         assert_eq!(format_usd(0.01234), "$0.012");
         assert_eq!(format_usd(0.0001234), "$0.000123");
         assert_eq!(format_usd(f64::NAN), "");
+    }
+
+    #[test]
+    fn format_throughput_steps_decimals_by_magnitude() {
+        assert_eq!(format_throughput(73.3), "73 tok/s");
+        assert_eq!(format_throughput(133.6), "134 tok/s");
+        assert_eq!(format_throughput(1472.8), "1473 tok/s");
+        assert_eq!(format_throughput(9.4), "9.4 tok/s");
+        assert_eq!(format_throughput(f64::NAN), "");
+    }
+
+    #[test]
+    fn format_latency_ms_switches_units_at_one_second() {
+        assert_eq!(format_latency_ms(679.0), "679 ms");
+        assert_eq!(format_latency_ms(916.4), "916 ms");
+        assert_eq!(format_latency_ms(1670.0), "1.7 s");
+        assert_eq!(format_latency_ms(24_867.0), "24.9 s");
+        assert_eq!(format_latency_ms(111_503.0), "112 s");
+        assert_eq!(format_latency_ms(f64::NAN), "");
     }
 
     #[test]

@@ -1,3 +1,27 @@
+# ParetoWatch v0.27.0
+
+## Features
+
+- **Speed analytics are in.** The market feed turns out to carry route telemetry for every live market (market-wide median tokens/second, median time-to-first-token, uptime, and the streaming sample counts behind them, all over a rolling 24h), so the existing 30-second poll now picks them up for free — no extra requests:
+  - **Models tab**: two new sortable columns — **tok/s** and **TTFT** — beside the request/volume telemetry, with hovers disclosing the sample counts and uptime. tok/s sorts fastest-first by default (higher is better there) and unmeasured rows sink in *both* directions; TTFT sorts snappiest-first like the price columns.
+  - **Filter by speed**: a Speed row joins the Filters popover — Any / Measured / 25+ / 50+ / 100+ / 150+ tok/s, cutting the slow tail or finding exactly the models Surplus has speed data for (~136 of 458 markets currently measure throughput). Persisted with the rest of the session view.
+- **Per-provider breakdowns, fetched on demand.** Surplus's Provider Performance API (`/api/analytics/performance/{model_id}`, no bulk endpoint, no auth) splits that market-wide median by provider route: tok/s, TTFT p50, p95 total latency, uptime, requests, per provider. Rather than sweeping hundreds of per-model URLs, ParetoWatch fetches a model's breakdown when you actually look at it — selecting it on the Pareto chart, loading it in the cost calculator, or expanding its New-listings card — and shows a spinner while the pull lands. Rows carry their own fetch time:
+  - A cached pull older than 15 minutes refetches on selection; everything cached is re-pulled by a background sweep every 6 hours (the benchmark cadence); a failed pull backs off 10 minutes instead of hammering a dead endpoint.
+  - The rows persist in a new disk cache (`performance.json` beside the benchmark cache), so a restart starts from last session's analytics — the startup status line says so alongside the benchmark-cache note, and the footer carries a running "Route analytics: N models · fetched on demand · newest X ago".
+- **Where the per-provider numbers show up:**
+  - **Cost calculator**: a "Route performance · 24h" grid under the provider picker — every observed route, busiest first, with the billed provider's row bolded and dotted, so "cheapest ask" and "fastest route" can be weighed in one place.
+  - **Pareto detail card** (and the shared Market-quality grid, so the New-listings cards get it too): a market-wide "Speed: N tok/s · TTFT Xs · N% uptime" summary line, plus tok/s · TTFT p50 · uptime columns appended to the per-provider ask grid whenever the model's breakdown is cached.
+  - **Models tab provider hover**: each provider in the hover now carries its route's tok/s and TTFT when the breakdown is cached.
+
+## Notes
+
+- The market-wide speed numbers are medians of observed traffic, not advertised limits — a market with no streaming telemetry in 24h (or a catalog-only row) honestly shows "—". Surplus publishes no mean tok/s or mean TTFT; the medians and percentiles here are the same statistics their model pages and API expose.
+- Provider names in the performance payload share the namespace with the market feed's provider rows, so the join is a direct name match; rows join under the same normalization rule as the market overlay.
+
+## Validation
+
+Formatting, locked check, locked Clippy with warnings denied (`--all-targets`), and locked test (185 tests) all pass.
+
 # ParetoWatch v0.26.1
 
 ## Fixes

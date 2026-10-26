@@ -23,7 +23,7 @@ use super::{ActivityTab, NewListingsWindow, ParetoWatchApp, Tab};
 use crate::notifications::NotificationKind;
 use crate::types::{
     BenchmarkMetric, BenchmarkSource, ComparisonMode, CostBasis, LiquidityFilter, ModalityFilter,
-    PriceMetric, UncensoredFilter,
+    PriceMetric, SpeedFilter, UncensoredFilter,
 };
 
 const UI_STATE_VERSION: u32 = 1;
@@ -56,6 +56,7 @@ pub(super) struct UiState {
     models_modality: ModalityFilter,
     models_uncensored: UncensoredFilter,
     models_cache: ModelsCacheFilter,
+    models_speed: SpeedFilter,
     models_sort: ModelsSort,
     models_sort_desc: bool,
     calc_model: Option<String>,
@@ -90,6 +91,7 @@ impl Default for UiState {
             models_modality: ModalityFilter::All,
             models_uncensored: UncensoredFilter::All,
             models_cache: ModelsCacheFilter::Any,
+            models_speed: SpeedFilter::Any,
             models_sort: ModelsSort::Name,
             models_sort_desc: false,
             calc_model: None,
@@ -150,6 +152,7 @@ impl ParetoWatchApp {
             models_modality: self.models_modality,
             models_uncensored: self.models_uncensored,
             models_cache: self.models_cache,
+            models_speed: self.models_speed,
             models_sort: self.models_sort,
             models_sort_desc: self.models_sort_desc,
             calc_model: self.calc_model.clone(),
@@ -186,6 +189,7 @@ impl ParetoWatchApp {
         self.models_modality = state.models_modality;
         self.models_uncensored = state.models_uncensored;
         self.models_cache = state.models_cache;
+        self.models_speed = state.models_speed;
         self.models_sort = state.models_sort;
         self.models_sort_desc = state.models_sort_desc;
         self.calc_model = state.calc_model.clone();

@@ -28,6 +28,7 @@ use crate::bench::{
 };
 use crate::benchmark_cache::{load_benchmark_cache, save_benchmark_cache};
 use crate::fetch::start_worker;
+use crate::fetch::{PERFORMANCE_REFRESH_SECS, PERFORMANCE_RETRY_BACKOFF_SECS, performance_key};
 use crate::history;
 use crate::history::track::blended_series;
 use crate::notifications::{
@@ -37,6 +38,7 @@ use crate::pareto::{
     ParetoCache, ParetoCacheKey, filter_frontier_hidden, filter_hidden_groups, joined_points,
     pareto_frontier, pricing_source_allows,
 };
+use crate::performance_cache::{load_performance_cache, save_performance_cache};
 use crate::settings_store::{load_settings, save_settings};
 #[cfg(not(target_os = "linux"))]
 use crate::tray::create_tray;
@@ -44,8 +46,8 @@ use crate::tray::{UiCommand, install_tray_event_handlers};
 use crate::types::{
     ANY_MODEL, AlertDirection, AlertMode, AlertRearm, AlertRule, AlertSound, Benchmark,
     BenchmarkMetric, BenchmarkSource, ComparisonMode, CostBasis, LiquidityFilter, ModalityFilter,
-    MoveDirection, PriceMetric, PriceSnapshot, Quote, Settings, UncensoredFilter,
-    default_common_scaffold,
+    MoveDirection, PerformanceSnapshot, PriceMetric, PriceSnapshot, Quote, Settings,
+    UncensoredFilter, default_common_scaffold,
 };
 use crate::widgets;
 use crate::worker::{WorkerCommand, WorkerMessage};
@@ -140,6 +142,20 @@ pub(crate) struct ParetoWatchApp {
     price_snapshot: Option<PriceSnapshot>,
     benchmark_sets: HashMap<BenchmarkSource, Vec<Benchmark>>,
     benchmark_errors: HashMap<BenchmarkSource, String>,
+    /// Per-provider route analytics, fetched on demand when a model is
+    /// selected and refreshed on the slow background pass; persisted across
+    /// restarts via the disk cache.
+    performance: PerformanceSnapshot,
+    /// Normalized model ids with a performance fetch in flight (sent, no
+    /// reply yet) — prevents re-requesting the same model every frame.
+    performance_pending: HashSet<String>,
+    /// Normalized model ids whose last fetch failed, and when a retry may
+    /// next be attempted. Keeps a dead endpoint from being hammered by the
+    /// per-frame on-demand check.
+    performance_backoff: HashMap<String, std::time::Instant>,
+    /// Last background staleness sweep of the cached route rows; the sweep
+    /// itself runs at most once a minute.
+    last_performance_sweep: Option<std::time::Instant>,
     history: history::HistoryTracker,
     history_ui: history::HistoryUiState,
     widgets: widgets::PriceWidgetManager,
@@ -190,6 +206,9 @@ pub(crate) struct ParetoWatchApp {
     models_modality: ModalityFilter,
     models_uncensored: UncensoredFilter,
     models_cache: models_tab::ModelsCacheFilter,
+    /// Throughput floor for the Models tab (market-wide median tok/s from
+    /// the live feed's 24h telemetry).
+    models_speed: crate::types::SpeedFilter,
     models_sort: models_tab::ModelsSort,
     models_sort_desc: bool,
     calc_model: Option<String>,
@@ -297,6 +316,19 @@ impl ParetoWatchApp {
 
         let mut status_note: Option<String> = None;
 
+        // Route analytics restore the same way the benchmark boards do:
+        // last session's cached rows are available instantly, and the slow
+        // background sweep replaces them in place.
+        let mut cached_performance = HashMap::new();
+        if let Some((rows, saved_at)) = load_performance_cache() {
+            let note = format!("Loaded cached route analytics (saved {saved_at})");
+            status_note = Some(match status_note.take() {
+                Some(existing) => format!("{existing} · {note}"),
+                None => note,
+            });
+            cached_performance = rows;
+        }
+
         let mut app = Self {
             settings,
             price_snapshot: None,
@@ -310,9 +342,12 @@ impl ParetoWatchApp {
                     artificial_analysis_snapshot(),
                 );
                 if let Some((cached, saved_at)) = load_benchmark_cache() {
-                    status_note = Some(format!(
-                        "Loaded cached benchmark boards (saved {saved_at}) — refreshing…"
-                    ));
+                    let note =
+                        format!("Loaded cached benchmark boards (saved {saved_at}) — refreshing…");
+                    status_note = Some(match status_note.take() {
+                        Some(existing) => format!("{existing} · {note}"),
+                        None => note,
+                    });
                     for (source, rows) in cached {
                         sets.insert(source, rows);
                     }
@@ -320,6 +355,12 @@ impl ParetoWatchApp {
                 sets
             },
             benchmark_errors: HashMap::new(),
+            performance: PerformanceSnapshot {
+                rows: cached_performance,
+            },
+            performance_pending: HashSet::new(),
+            performance_backoff: HashMap::new(),
+            last_performance_sweep: None,
             history: history::HistoryTracker::open(&history::history_log_path()),
             history_ui: history::HistoryUiState::default(),
             widgets: widgets::PriceWidgetManager::default(),
@@ -355,6 +396,7 @@ impl ParetoWatchApp {
             models_modality: ModalityFilter::All,
             models_uncensored: UncensoredFilter::All,
             models_cache: models_tab::ModelsCacheFilter::Any,
+            models_speed: crate::types::SpeedFilter::Any,
             models_sort: models_tab::ModelsSort::Name,
             models_sort_desc: false,
             calc_model: None,
@@ -410,6 +452,77 @@ impl ParetoWatchApp {
         if visible {
             ctx.send_viewport_cmd(egui::ViewportCommand::Focus);
         }
+    }
+
+    /// Request fresh route analytics for a model the user is looking at, when
+    /// the cached row is missing or older than `ttl_secs`. No-op while a
+    /// fetch for the model is in flight or backed off after a failure, which
+    /// is what makes it safe to call every UI frame.
+    pub(super) fn ensure_performance(&mut self, model: &str, ttl_secs: u64) {
+        let key = performance_key(model);
+        let fresh = self.performance.rows.get(&key).is_some_and(|row| {
+            // abs() so a clock jump backwards cannot pin a row "stale" and
+            // spin the on-demand fetch.
+            Utc::now()
+                .signed_duration_since(row.fetched_at)
+                .num_seconds()
+                .unsigned_abs()
+                < ttl_secs
+        });
+        if fresh
+            || self.performance_pending.contains(&key)
+            || self
+                .performance_backoff
+                .get(&key)
+                .is_some_and(|until| *until > std::time::Instant::now())
+        {
+            return;
+        }
+        self.performance_pending.insert(key);
+        let _ = self
+            .worker_tx
+            .send(WorkerCommand::FetchPerformance(vec![model.to_owned()]));
+    }
+
+    /// Slow background refresh of the cached route analytics: every row older
+    /// than the six-hour TTL is re-pulled in one worker command. The check
+    /// runs at most once a minute so the per-frame cost is a timestamp
+    /// compare against the last sweep.
+    fn refresh_stale_performance(&mut self) {
+        if self
+            .last_performance_sweep
+            .is_some_and(|t| t.elapsed() < std::time::Duration::from_secs(60))
+        {
+            return;
+        }
+        self.last_performance_sweep = Some(std::time::Instant::now());
+        let now = Utc::now();
+        let stale: Vec<String> = self
+            .performance
+            .rows
+            .iter()
+            .filter(|(_, row)| {
+                now.signed_duration_since(row.fetched_at)
+                    .num_seconds()
+                    .unsigned_abs()
+                    >= PERFORMANCE_REFRESH_SECS
+            })
+            .filter(|(key, _)| {
+                !self.performance_pending.contains(*key)
+                    && self
+                        .performance_backoff
+                        .get(*key)
+                        .is_none_or(|until| *until <= std::time::Instant::now())
+            })
+            .map(|(_, row)| row.model.clone())
+            .collect();
+        if stale.is_empty() {
+            return;
+        }
+        for model in &stale {
+            self.performance_pending.insert(performance_key(model));
+        }
+        let _ = self.worker_tx.send(WorkerCommand::FetchPerformance(stale));
     }
 
     fn handle_ui_commands(&mut self, ctx: &egui::Context) {
@@ -499,6 +612,34 @@ impl ParetoWatchApp {
                 }
                 Ok(WorkerMessage::Benchmarks(source, Err(err))) => {
                     self.benchmark_errors.insert(source, err);
+                }
+                Ok(WorkerMessage::Performance(rows, attempted)) => {
+                    let arrived: HashSet<String> =
+                        rows.iter().map(|row| performance_key(&row.model)).collect();
+                    for row in rows {
+                        self.performance
+                            .rows
+                            .insert(performance_key(&row.model), row);
+                    }
+                    // Resolve this pull's requests: arrived models are done;
+                    // attempted-but-missing ones failed, so their previous
+                    // row survives and a retry backs off briefly.
+                    let now = std::time::Instant::now();
+                    for model in attempted {
+                        let key = performance_key(&model);
+                        if arrived.contains(&key) {
+                            self.performance_pending.remove(&key);
+                            self.performance_backoff.remove(&key);
+                        } else if self.performance_pending.remove(&key) {
+                            self.performance_backoff.insert(
+                                key,
+                                now + std::time::Duration::from_secs(
+                                    PERFORMANCE_RETRY_BACKOFF_SECS,
+                                ),
+                            );
+                        }
+                    }
+                    save_performance_cache(&self.performance.rows);
                 }
                 Err(TryRecvError::Empty) | Err(TryRecvError::Disconnected) => break,
             }
@@ -1538,6 +1679,10 @@ impl eframe::App for ParetoWatchApp {
     fn logic(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         self.handle_ui_commands(ctx);
         self.handle_worker_messages();
+        // Route analytics: fetch on demand for whatever the user is looking
+        // at, and keep the cached rows from going stale. Runs here (not in
+        // ui) so the refresh continues while the window is hidden in tray.
+        self.refresh_stale_performance();
         // Runs here (not in ui) so floating price widgets keep updating while
         // the main window is hidden in the tray.
         if self.widgets.refresh(
@@ -1586,6 +1731,36 @@ impl eframe::App for ParetoWatchApp {
                     {
                         ui.separator();
                         ui.small(format!("Market data updated {updated}"));
+                    }
+                    if !self.performance.rows.is_empty() {
+                        ui.separator();
+                        let age = self
+                            .performance
+                            .rows
+                            .values()
+                            .map(|row| row.fetched_at)
+                            .max()
+                            .map(|at| {
+                                let minutes = Utc::now()
+                                    .signed_duration_since(at)
+                                    .num_minutes()
+                                    .unsigned_abs();
+                                if minutes < 60 {
+                                    format!("{minutes} min ago")
+                                } else {
+                                    format!("{} h ago", minutes / 60)
+                                }
+                            })
+                            .unwrap_or_default();
+                        ui.small(format!(
+                            "Route analytics: {} models · fetched on demand · newest {age}",
+                            self.performance.rows.len()
+                        ))
+                        .on_hover_text(
+                            "Per-provider speed/TTFT/uptime from the Surplus Provider \
+                             Performance API (24h rolling), fetched when a model is selected \
+                             and refreshed every 6 hours; cached across restarts",
+                        );
                     }
                 });
                 if let Some(err) = &self.last_price_error {

@@ -33,6 +33,11 @@ pub(crate) fn test_quote(model: &str, input: f64, live_market: bool) -> Quote {
         live_market,
         vision: false,
         uncensored: false,
+        throughput_p50: None,
+        tps_samples: None,
+        ttft_p50_ms: None,
+        ttft_samples: None,
+        uptime_pct: None,
     }
 }
 
