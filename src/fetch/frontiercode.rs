@@ -1,9 +1,14 @@
-//! FrontierCode — Cognition's mergeability benchmark. Maintainer-built tasks
+//! FrontierCode — Cognition's mergeability benchmarks. Maintainer-built tasks
 //! graded on whether the pull request would actually merge (correctness, test
 //! quality, scope discipline, style), so the score describes a model inside
 //! its vendor harness (claude-code, codex, chisel, grok-build, ...). The
-//! leaderboard page loads from a static JSON export; the headline number is
+//! leaderboard page loads from static JSON exports; the headline number is
 //! the best `new_score` across reasoning efforts on the `main` subset.
+//!
+//! Two boards live alongside each other: 1.1 (and the original 1.0) under the
+//! versioned `frontiercode-leaderboard` export, and the current 132-task 2.0
+//! suite under its own flat `frontier-code-2.0` export — same schema, no
+//! version wrapper.
 
 use anyhow::{Result, anyhow};
 use reqwest::blocking::Client;
@@ -14,6 +19,7 @@ use crate::theme::{canonical_group, infer_creator};
 use crate::types::{Benchmark, BenchmarkKind};
 
 const FRONTIERCODE_DATA_URL: &str = "https://cognition.com/data/frontiercode-leaderboard/data.json";
+const FRONTIERCODE2_DATA_URL: &str = "https://cognition.com/data/frontier-code-2.0/data.json";
 
 /// Reasoning efforts the source names as tiers. Anything else (`none`, or a
 /// raw parameter like `0.99`) is a run configuration, not an effort label.
@@ -30,12 +36,35 @@ pub(crate) fn fetch_frontiercode(client: &Client) -> Result<Vec<Benchmark>> {
     Ok(rows)
 }
 
+pub(crate) fn fetch_frontiercode2(client: &Client) -> Result<Vec<Benchmark>> {
+    let root = fetch_json(
+        client,
+        FRONTIERCODE2_DATA_URL,
+        "FrontierCode 2.0 leaderboard",
+    )?;
+    let rows = parse_frontiercode2(&root);
+    if rows.is_empty() {
+        return Err(anyhow!(
+            "FrontierCode 2.0 leaderboard export had no scored models"
+        ));
+    }
+    Ok(rows)
+}
+
 pub(crate) fn parse_frontiercode(root: &Value) -> Vec<Benchmark> {
-    // `v1_1` is FrontierCode 1.1 (current); `v1` keeps the original 1.0
-    // results. Both carry the same schema.
-    let Some(board) = root.get("v1_1").or_else(|| root.get("v1")) else {
-        return Vec::new();
-    };
+    // `v1_1` is FrontierCode 1.1; `v1` keeps the original 1.0 results. Both
+    // carry the same schema.
+    match root.get("v1_1").or_else(|| root.get("v1")) {
+        Some(board) => parse_frontiercode_board(board),
+        None => Vec::new(),
+    }
+}
+
+pub(crate) fn parse_frontiercode2(root: &Value) -> Vec<Benchmark> {
+    parse_frontiercode_board(root)
+}
+
+fn parse_frontiercode_board(board: &Value) -> Vec<Benchmark> {
     let Some(data) = board.get("data").and_then(Value::as_object) else {
         return Vec::new();
     };
@@ -211,6 +240,18 @@ mod tests {
         let rows = parse_frontiercode(&root);
         assert_eq!(rows.len(), 1);
         assert!((rows[0].agentic_coding.unwrap() - 43.3).abs() < 1e-9);
+    }
+
+    #[test]
+    fn parses_flat_2_0_export() {
+        // The 2.0 suite ships its own export without a version wrapper.
+        let rows = parse_frontiercode2(&board_json()["v1_1"]);
+        assert_eq!(rows.len(), 3);
+        let fable = rows.iter().find(|r| r.name == "Claude Fable 5").unwrap();
+        assert!((fable.agentic_coding.unwrap() - 52.73).abs() < 1e-9);
+        assert_eq!(fable.agent.as_deref(), Some("claude-code"));
+        // The versioned 1.1 reader never touches the flat shape.
+        assert!(parse_frontiercode(&board_json()["v1_1"]).is_empty());
     }
 
     #[test]

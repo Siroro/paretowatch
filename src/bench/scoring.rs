@@ -407,23 +407,32 @@ pub(crate) fn build_agentic_composite(
     // - Two Huber passes downweight sources that sit far from the consensus,
     //   symmetrically (high or low), replacing the old always-drop-the-lowest
     //   trim that biased 4+-source models upward.
+    // Base weights tuned for a code-heavy workflow (0.30.0 rebalance): the
+    // boards that directly measure agentic coding — SWE-rebench, the
+    // Terminal-Bench pair, DeepSWE, both FrontierCode suites, SWE-Bench Pro —
+    // carry 82% of the board evidence, while the general-intelligence and
+    // adjacent-construct boards (LiveBench, AA-Briefcase, Vals SRE) anchor the
+    // edges at the 0.05 tier.
     let weights = [
         (BenchmarkSource::ArtificialAnalysisSnapshot, 0.25_f64),
-        (BenchmarkSource::SWERebench, 0.20_f64),
+        (BenchmarkSource::SWERebench, 0.25_f64),
         (BenchmarkSource::TerminalBench3, 0.15_f64),
-        (BenchmarkSource::TerminalBench4, 0.15_f64),
+        (BenchmarkSource::TerminalBench4, 0.20_f64),
         (BenchmarkSource::DeepSWE11, 0.15_f64),
-        (BenchmarkSource::LiveBench, 0.10_f64),
+        (BenchmarkSource::LiveBench, 0.05_f64),
         (BenchmarkSource::ReveloCodeIndex, 0.05_f64),
         // FrontierCode's maintainer-built mergeability tasks are directly the
         // agentic construct, but each model runs in its vendor harness, so it
         // joins the harness-specific family (capability flavor demotes it).
-        (BenchmarkSource::FrontierCode, 0.15_f64),
+        // 2.0 is the current 132-task suite and carries the family's top
+        // weight; 1.1 stays as corroborating history at the 0.05 tier.
+        (BenchmarkSource::FrontierCode, 0.10_f64),
+        (BenchmarkSource::FrontierCode2, 0.15_f64),
         // AA's own agentic boards (added 0.20.0). Briefcase is the flagship
         // knowledge-work construct with a private task set, but it shares a
-        // publisher with the AA prior the composite already trusts, so it
-        // carries LiveBench-tier weight instead of a top-tier one.
-        (BenchmarkSource::AABriefcase, 0.10_f64),
+        // publisher with the AA prior the composite already trusts and is
+        // knowledge-work rather than code, so it anchors at the 0.05 tier.
+        (BenchmarkSource::AABriefcase, 0.05_f64),
         // AutomationBench-AA overlaps the same publisher correlation and the
         // same frontier cohort, so it anchors like the Code Index.
         (BenchmarkSource::AutomationBenchAA, 0.05_f64),
@@ -436,8 +445,9 @@ pub(crate) fn build_agentic_composite(
         // standardized protocol on a private binary-RE task set — a uniform
         // harness like SWE-rebench, so it stays fully weighted in both
         // flavors — but reverse engineering is adjacent to, not the same
-        // construct as, agentic coding, so it carries a mid-tier weight.
-        (BenchmarkSource::ValsSREBench, 0.10_f64),
+        // construct as, agentic coding, so the code-heavy rebalance moved it
+        // to the 0.05 anchor tier.
+        (BenchmarkSource::ValsSREBench, 0.05_f64),
     ];
     let aliases = same_weights_sku_aliases();
 
@@ -1308,6 +1318,14 @@ mod tests {
         sets.insert(
             BenchmarkSource::DeepSWE11,
             vec![mk("Alpha", 10.0), mk("Beta", 78.0), mk("f1", 60.0)],
+        );
+        // A second model-level board keeps the capability flavor's model-level
+        // evidence mass level with the demoted harness drag under the 0.30.0
+        // code-heavy weights (LiveBench + AutomationBench at 0.05 each vs
+        // TB3+DeepSWE demoted to 0.05 each), so the prior still decides.
+        sets.insert(
+            BenchmarkSource::AutomationBenchAA,
+            vec![mk("Alpha", 91.0), mk("Beta", 41.0), mk("f1", 25.0)],
         );
         let cap = build_agentic_composite(
             &sets,
@@ -2433,10 +2451,11 @@ mod tests {
             glm.name,
         );
         // The two-board model must disclose its evidence tier and the boards
-        // it is still waiting on. Two populated boards now cover ~36% of the
-        // smaller post-SWE-bench evidence universe, landing in the moderate
-        // tier (sparse stays for one-board models — see the tests above).
-        assert!(glm.name.contains("moderate evidence"), "{}", glm.name);
+        // it is still waiting on. Under the 0.30.0 code-heavy weights two
+        // populated boards (DeepSWE 0.15 + LiveBench 0.05) cover ~31% of the
+        // 0.65 evidence universe, back in the sparse tier — the demotion of
+        // the general boards is exactly what thinned it.
+        assert!(glm.name.contains("sparse evidence"), "{}", glm.name);
         assert!(glm.name.contains("boards pending"), "{}", glm.name);
         assert!(
             sol.name.contains("strong evidence") || sol.name.contains("moderate evidence"),

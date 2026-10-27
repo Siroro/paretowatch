@@ -710,6 +710,7 @@ impl ParetoWatchApp {
             BenchmarkSource::ReveloCodeIndex => "Revelo Code Index".to_owned(),
             BenchmarkSource::DesignArena => "Design Arena Elo".to_owned(),
             BenchmarkSource::FrontierCode => "FrontierCode 1.1 mergeability score".to_owned(),
+            BenchmarkSource::FrontierCode2 => "FrontierCode 2.0 mergeability score".to_owned(),
             BenchmarkSource::AABriefcase => "AA-Briefcase Elo (blind pairwise)".to_owned(),
             BenchmarkSource::AutomationBenchAA => {
                 "AutomationBench-AA partial score".to_owned()
@@ -1601,6 +1602,7 @@ fn benchmark_metric_note(source: BenchmarkSource) -> Option<&'static str> {
         BenchmarkSource::ReveloCodeIndex => Some("Metric: Code Index"),
         BenchmarkSource::DesignArena => Some("Metric: Design Elo (blinded votes)"),
         BenchmarkSource::FrontierCode => Some("Metric: mergeability score"),
+        BenchmarkSource::FrontierCode2 => Some("Metric: mergeability score"),
         BenchmarkSource::AABriefcase => Some("Metric: Elo (blind pairwise, private tasks)"),
         BenchmarkSource::AutomationBenchAA => Some("Metric: partial score (no violations)"),
         BenchmarkSource::SWEBenchPro => Some("Metric: resolve rate (HARD set)"),

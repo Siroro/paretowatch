@@ -1,3 +1,22 @@
+# ParetoWatch v0.30.0
+
+## Features
+
+- **FrontierCode 2.0 joins the board list.** Cognition shipped a new 132-task FrontierCode suite (their mergeability benchmark — maintainer-built PR tasks graded on correctness, test quality, scope discipline, and style, with every model running inside its vendor harness), and the leaderboard page now headlines it. ParetoWatch reads the suite's own data export (`/data/frontier-code-2.0/data.json`) as a new **FrontierCode 2.0** board beside the existing 1.1 one — the same Terminal-Bench 3/4 pattern, so both versions stay plottable while 2.0 is the current standard. Same parser rules as before: best `new_score` across reasoning efforts on the `main` subset, harness naming the agent row, lab colors naming harness-native creators (SWE-1.7 → Cognition). Both boards are consensus-grid members, Pareto sources, alert targets, and composite inputs.
+- **The capability composite rebalanced toward code.** The weighted "average" that fuses the boards now puts ~82% of its board evidence on the agentic-coding boards, up from ~78%:
+  - **Up:** SWE-rebench 0.20→0.25 (the elite uniform-harness agentic standard), Terminal-Bench 4.0 0.15→0.20 (the current Terminal-Bench), FrontierCode 2.0 enters at 0.15 (the current mergeability standard).
+  - **Down:** LiveBench 0.10→0.05, AA-Briefcase 0.10→0.05, SRE Bench 0.10→0.05 (general-intelligence, knowledge-work, and reverse-engineering constructs now anchor the edges), and FrontierCode 1.1 0.15→0.10 (superseded by 2.0, kept as corroborating history).
+  - Unchanged: Terminal-Bench 3.0, DeepSWE, SWE-Bench Pro at 0.15; Revelo Code Index and AutomationBench-AA at 0.05; the AA prior stays small at 0.10. The flavor machinery is untouched — harness-specific boards still demote to a third for capability questions, model-level boards for deployment questions.
+
+## Notes
+
+- FrontierCode 2.0's export publishes no per-task token volumes (every run's `tokens` is null), so its rows carry no cost-per-task estimate — the $/task basis simply has no FrontierCode-2.0 leg, like every board without token telemetry.
+- Composite scores shift by construction: models strong on the demoted general boards rank slightly lower, models strong on the coding boards slightly higher, and a model's per-source evidence tier can thin (two-board models in the DeepSWE+LiveBench shape now disclose "sparse evidence" instead of "moderate").
+
+## Validation
+
+Formatting, locked check, locked Clippy with warnings denied (`--all-targets`), and locked test (194 tests) all pass. The 2.0 parser was additionally smoke-checked against the live export (26 models, one `main` subset of 132 tasks, per-effort `new_score` rows).
+
 # ParetoWatch v0.29.0
 
 ## Features

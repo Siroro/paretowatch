@@ -206,6 +206,7 @@ pub(crate) fn fetch_benchmark_source(
         BenchmarkSource::ReveloCodeIndex => fetch_revelo_code_index(client),
         BenchmarkSource::DesignArena => fetch_design_arena(client),
         BenchmarkSource::FrontierCode => fetch_frontiercode(client),
+        BenchmarkSource::FrontierCode2 => fetch_frontiercode2(client),
         BenchmarkSource::AABriefcase => fetch_aa_briefcase(client),
         BenchmarkSource::AutomationBenchAA => fetch_automationbench_aa(client),
         BenchmarkSource::SWEBenchPro => fetch_swebench_pro(client),

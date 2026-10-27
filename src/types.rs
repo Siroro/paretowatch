@@ -209,6 +209,7 @@ pub(crate) enum BenchmarkSource {
     ReveloCodeIndex,
     DesignArena,
     FrontierCode,
+    FrontierCode2,
     AABriefcase,
     AutomationBenchAA,
     SWEBenchPro,
@@ -244,7 +245,8 @@ impl BenchmarkSource {
             Self::LiveBench => "LiveBench",
             Self::ReveloCodeIndex => "Revelo Code Index",
             Self::DesignArena => "Frontend Design Elo (Design Arena)",
-            Self::FrontierCode => "FrontierCode (Cognition)",
+            Self::FrontierCode => "FrontierCode 1.1 (Cognition)",
+            Self::FrontierCode2 => "FrontierCode 2.0 (Cognition)",
             Self::AABriefcase => "AA-Briefcase (Elo)",
             Self::AutomationBenchAA => "AutomationBench-AA",
             Self::SWEBenchPro => "SWE-Bench Pro V2 HARD (Scale)",
@@ -264,7 +266,8 @@ impl BenchmarkSource {
             Self::LiveBench => "LiveBench",
             Self::ReveloCodeIndex => "Code Index",
             Self::DesignArena => "Design Elo",
-            Self::FrontierCode => "FrontierCode",
+            Self::FrontierCode => "FrontierCode 1.1",
+            Self::FrontierCode2 => "FrontierCode 2.0",
             Self::AABriefcase => "AA-Briefcase",
             Self::AutomationBenchAA => "AutomationBench",
             Self::SWEBenchPro => "SWE-Bench Pro",
@@ -308,11 +311,12 @@ impl BenchmarkSource {
                 | Self::DeepSWE11
                 | Self::ReveloCodeIndex
                 | Self::FrontierCode
+                | Self::FrontierCode2
                 | Self::SWEBenchPro
         )
     }
 
-    pub(crate) fn remote_sources() -> [Self; 13] {
+    pub(crate) fn remote_sources() -> [Self; 14] {
         [
             // The AA Intelligence Index fetch overlays live leaderboard values
             // onto the bundled snapshot (it never fails — the bundle is the
@@ -326,6 +330,7 @@ impl BenchmarkSource {
             Self::ReveloCodeIndex,
             Self::DesignArena,
             Self::FrontierCode,
+            Self::FrontierCode2,
             Self::AABriefcase,
             Self::AutomationBenchAA,
             Self::SWEBenchPro,
@@ -333,7 +338,7 @@ impl BenchmarkSource {
         ]
     }
 
-    pub(crate) fn consensus_sources() -> [Self; 13] {
+    pub(crate) fn consensus_sources() -> [Self; 14] {
         [
             Self::ArtificialAnalysisSnapshot,
             Self::SWERebench,
@@ -344,6 +349,7 @@ impl BenchmarkSource {
             Self::ReveloCodeIndex,
             Self::DesignArena,
             Self::FrontierCode,
+            Self::FrontierCode2,
             Self::AABriefcase,
             Self::AutomationBenchAA,
             Self::SWEBenchPro,
@@ -351,7 +357,7 @@ impl BenchmarkSource {
         ]
     }
 
-    pub(crate) fn display_sources() -> [Self; 13] {
+    pub(crate) fn display_sources() -> [Self; 14] {
         Self::consensus_sources()
     }
 
@@ -370,7 +376,7 @@ impl BenchmarkSource {
             Self::LiveBench => "https://livebench.ai/",
             Self::ReveloCodeIndex => REVELO_CODE_INDEX_URL,
             Self::DesignArena => "https://designarena.ai/leaderboard",
-            Self::FrontierCode => FRONTIERCODE_URL,
+            Self::FrontierCode | Self::FrontierCode2 => FRONTIERCODE_URL,
             Self::AABriefcase => "https://artificialanalysis.ai/evaluations/aa-briefcase",
             Self::AutomationBenchAA => {
                 "https://artificialanalysis.ai/evaluations/automationbench-aa"
