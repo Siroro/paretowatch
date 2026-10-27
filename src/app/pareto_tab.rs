@@ -23,7 +23,8 @@ use crate::theme::{
 };
 use crate::types::{
     ANY_MODEL, AlertMode, BenchmarkMetric, BenchmarkSource, ComparisonMode, CostBasis,
-    LiquidityFilter, ModalityFilter, PriceMetric, Quote, UncensoredFilter, blended_price,
+    LiquidityFilter, ModalityFilter, PriceMetric, PricingSource, Quote, UncensoredFilter,
+    blended_price,
 };
 use crate::worker::WorkerCommand;
 
@@ -137,7 +138,7 @@ impl ParetoWatchApp {
                     + usize::from(self.liquidity_filter != LiquidityFilter::Any)
                     + usize::from(self.modality_filter != ModalityFilter::All)
                     + usize::from(self.uncensored_filter != UncensoredFilter::All)
-                    + usize::from(self.hide_catalog_prices);
+                    + usize::from(self.pricing_source != PricingSource::All);
             let filters_label = if active_filters > 0 {
                 format!("Filters · {active_filters} ▾")
             } else {
@@ -147,7 +148,7 @@ impl ParetoWatchApp {
                 ui,
                 "pareto_filters",
                 egui::RichText::new(filters_label),
-                Some("Comparison basis, market quality, modality, safety, and price-axis options"),
+                Some("Pricing source, comparison basis, market quality, modality, safety, and price-axis options"),
                 |ui| {
                     ui.set_min_width(400.0);
                     egui::Grid::new("pareto_filter_grid")
@@ -188,6 +189,27 @@ impl ParetoWatchApp {
                                 ],
                             ) {
                                 chart_axes_changed = true;
+                                self.selected_pareto_model = None;
+                            }
+                            ui.end_row();
+
+                            ui.label("Pricing").on_hover_text(
+                                "Which prices the chart bills: live-market asks with catalogue \
+                                 list prices filling in for models that have no live ask, \
+                                 live-market asks only, or every model at its published list \
+                                 rates — official prices, ignoring marketplace discounts.",
+                            );
+                            if option_row(
+                                ui,
+                                &mut self.pricing_source,
+                                &[
+                                    (PricingSource::All, "All sources"),
+                                    (PricingSource::LiveMarket, "Live market"),
+                                    (PricingSource::Catalog, "Catalog list"),
+                                ],
+                            ) {
+                                chart_axes_changed = true;
+                                reset_zoom = true;
                                 self.selected_pareto_model = None;
                             }
                             ui.end_row();
@@ -246,18 +268,6 @@ impl ParetoWatchApp {
                         .changed()
                     {
                         reset_zoom = true;
-                    }
-                    if ui
-                        .checkbox(&mut self.hide_catalog_prices, "Hide catalog-only prices")
-                        .on_hover_text(
-                            "Remove models with no live-market ask — their price is only the \
-                             Surplus catalog/comparison list price",
-                        )
-                        .changed()
-                    {
-                        chart_axes_changed = true;
-                        reset_zoom = true;
-                        self.selected_pareto_model = None;
                     }
                 },
             );
@@ -614,8 +624,8 @@ impl ParetoWatchApp {
                         },
                     ));
                 }
-                if self.hide_catalog_prices {
-                    ui.small("'Hide catalog-only prices' is active — models with no live-market ask are hidden.");
+                if self.pricing_source == PricingSource::LiveMarket {
+                    ui.small("'Live market' pricing is active — models with no live-market ask are hidden.");
                 }
             }
             return;
@@ -647,6 +657,7 @@ impl ParetoWatchApp {
 
         let log_price_axis = self.log_price_axis;
         let cost_basis = self.cost_basis;
+        let pricing_source = self.pricing_source;
         let weights = (
             self.settings.input_weight,
             self.settings.cache_read_weight,
@@ -759,6 +770,7 @@ impl ParetoWatchApp {
                         cost_basis,
                         weights,
                         score_source: score_source.clone(),
+                        pricing_source,
                     };
                     Some(pareto_hover_label(p, &ctx, position.y))
                 }
@@ -957,8 +969,10 @@ impl ParetoWatchApp {
             if self.uncensored_filter != UncensoredFilter::All {
                 active_filters.push(self.uncensored_filter.label().to_owned());
             }
-            if self.hide_catalog_prices {
-                active_filters.push("catalog-only hidden".to_owned());
+            match self.pricing_source {
+                PricingSource::All => {}
+                PricingSource::LiveMarket => active_filters.push("live market only".to_owned()),
+                PricingSource::Catalog => active_filters.push("catalog list pricing".to_owned()),
             }
             if !active_filters.is_empty() {
                 ui.separator();
@@ -1103,7 +1117,12 @@ impl ParetoWatchApp {
                              (abliterated/uncensored finetune)",
                         );
                 }
-                if p.live_market {
+                if self.pricing_source == PricingSource::Catalog {
+                    ui.strong("catalog list price").on_hover_text(
+                        "Catalog pricing is active — every model is billed at its published \
+                         list rates, not the live-market asks",
+                    );
+                } else if p.live_market {
                     ui.strong("live market");
                     if p.free_offer_listed {
                         free_offer_badge(ui);
@@ -1533,10 +1552,10 @@ impl ParetoWatchApp {
                         ui.label(format!("${:.4}", p.cost));
                     });
                     ui.label(format!("{:.1}", p.score));
-                    ui.label(if p.live_market {
-                        "Surplus market"
-                    } else {
-                        "Surplus comparison/catalog"
+                    ui.label(match self.pricing_source {
+                        PricingSource::Catalog => "Catalog list".to_owned(),
+                        _ if p.live_market => "Surplus market".to_owned(),
+                        _ => "Surplus comparison/catalog".to_owned(),
                     });
                     ui.end_row();
                 }
@@ -1599,6 +1618,7 @@ struct HoverContext<'a> {
     cost_basis: CostBasis,
     weights: (f64, f64, f64, f64),
     score_source: String,
+    pricing_source: PricingSource,
 }
 
 /// Multi-line hover tooltip for a chart orb. The label formatter only gets a
@@ -1645,7 +1665,10 @@ fn pareto_hover_label(p: &JoinedPoint, ctx: &HoverContext<'_>, score: f64) -> St
     // All-time low from the persistent history log, on the metric that keeps
     // it comparable with the plotted price (blended when the chart shows
     // est. $/task, since that price is the blended rate scaled by token volume).
-    if let Some(series) = ctx.history
+    // Catalog pricing skips it: the log records observed market legs, and
+    // comparing them against a list price would overstate "% above low".
+    if ctx.pricing_source != PricingSource::Catalog
+        && let Some(series) = ctx.history
         && let Some((low, low_ts)) = historical_low(
             series,
             ctx.low_metric,
@@ -1699,6 +1722,9 @@ fn pareto_hover_label(p: &JoinedPoint, ctx: &HoverContext<'_>, score: f64) -> St
     }
 
     let mut badges: Vec<String> = Vec::new();
+    if ctx.pricing_source == PricingSource::Catalog {
+        badges.push("catalog list".into());
+    }
     if !p.creator.is_empty() {
         badges.push(p.creator.clone());
     }

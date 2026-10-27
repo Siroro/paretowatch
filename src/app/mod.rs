@@ -50,7 +50,7 @@ use crate::types::{
     ANY_MODEL, AaSpeedEntry, AaSpeedSnapshot, AlertDirection, AlertMode, AlertRearm, AlertRule,
     AlertSound, Benchmark, BenchmarkMetric, BenchmarkSource, ComparisonMode, CostBasis,
     LiquidityFilter, ModalityFilter, MoveDirection, PerformanceSnapshot, PriceMetric,
-    PriceSnapshot, Quote, Settings, UncensoredFilter, default_common_scaffold,
+    PriceSnapshot, PricingSource, Quote, Settings, UncensoredFilter, default_common_scaffold,
 };
 use crate::widgets;
 use crate::worker::{WorkerCommand, WorkerMessage};
@@ -207,9 +207,9 @@ pub(crate) struct ParetoWatchApp {
     /// Pareto chart safety-tuning filter (e.g. uncensored-only), applied at
     /// the quote level like the modality filter.
     uncensored_filter: UncensoredFilter,
-    /// Pareto chart toggle: drop models whose prices are only Surplus
-    /// catalog/comparison list prices (no live-market ask).
-    hide_catalog_prices: bool,
+    /// Pareto chart pricing source: live-market asks only, all sources, or
+    /// every model billed at its published list rates.
+    pricing_source: PricingSource,
     pareto_search: String,
     selected_pareto_model: Option<String>,
     log_price_axis: bool,
@@ -407,7 +407,7 @@ impl ParetoWatchApp {
             liquidity_filter: LiquidityFilter::Any,
             modality_filter: ModalityFilter::All,
             uncensored_filter: UncensoredFilter::All,
-            hide_catalog_prices: false,
+            pricing_source: PricingSource::All,
             pareto_search: String::new(),
             selected_pareto_model: None,
             log_price_axis: true,
@@ -993,7 +993,7 @@ impl ParetoWatchApp {
             liquidity_filter: self.liquidity_filter,
             modality_filter: self.modality_filter,
             uncensored_filter: self.uncensored_filter,
-            hide_catalog_prices: self.hide_catalog_prices,
+            pricing_source: self.pricing_source,
             hidden_groups,
             hidden_models: {
                 let mut models = self.settings.hidden_frontier_models.clone();
@@ -1029,7 +1029,7 @@ impl ParetoWatchApp {
             .iter()
             .filter(|quote| self.modality_filter.allows(quote.vision))
             .filter(|quote| self.uncensored_filter.allows(quote.uncensored))
-            .filter(|quote| pricing_source_allows(self.hide_catalog_prices, quote))
+            .filter(|quote| pricing_source_allows(self.pricing_source, quote))
             .filter_map(|quote| {
                 self.liquidity_filter
                     .apply(quote, weights.0, weights.1, weights.2, weights.3)
@@ -1048,8 +1048,8 @@ impl ParetoWatchApp {
             key.price_metric,
             key.cost_basis,
             key.benchmark_metric,
-            (weights.0, weights.1, weights.2),
-            weights.3,
+            weights,
+            self.pricing_source,
         );
         // Hidden groups stay in `joined` so the legend can offer them back;
         // the chart and the frontier only see the enabled subset.
@@ -1307,8 +1307,11 @@ impl ParetoWatchApp {
                     self.settings.input_weight,
                     self.settings.cache_read_weight,
                     self.settings.output_weight,
+                    self.settings.cache_read_fallback_pct,
                 ),
-                self.settings.cache_read_fallback_pct,
+                // Alert evaluation bills live asks with the published
+                // fallbacks regardless of the chart's pricing-source dial.
+                PricingSource::All,
             );
 
             if wildcard {

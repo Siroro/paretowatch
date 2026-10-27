@@ -1225,8 +1225,8 @@ mod tests {
             crate::types::PriceMetric::Blended,
             crate::types::CostBasis::PerMillion,
             crate::types::BenchmarkMetric::AgenticCoding,
-            (1.0, 1.0, 1.0),
-            10.0,
+            (1.0, 1.0, 1.0, 10.0),
+            crate::types::PricingSource::All,
         );
         assert_eq!(points.len(), 2, "both SKUs must join the composite");
         assert!(

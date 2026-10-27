@@ -23,7 +23,7 @@ use super::{ActivityTab, NewListingsWindow, ParetoWatchApp, Tab};
 use crate::notifications::NotificationKind;
 use crate::types::{
     BenchmarkMetric, BenchmarkSource, ComparisonMode, CostBasis, LiquidityFilter, ModalityFilter,
-    PriceMetric, SpeedFilter, UncensoredFilter,
+    PriceMetric, PricingSource, SpeedFilter, UncensoredFilter,
 };
 
 const UI_STATE_VERSION: u32 = 1;
@@ -46,7 +46,11 @@ pub(super) struct UiState {
     liquidity_filter: LiquidityFilter,
     modality_filter: ModalityFilter,
     uncensored_filter: UncensoredFilter,
+    /// Pre-three-way field: the old "Hide catalog-only prices" toggle. Read
+    /// from existing files to seed `pricing_source`, never written back.
+    #[serde(default, skip_serializing)]
     hide_catalog_prices: bool,
+    pricing_source: PricingSource,
     log_price_axis: bool,
     hidden_groups: Vec<String>,
     selected_pareto_model: Option<String>,
@@ -83,6 +87,7 @@ impl Default for UiState {
             modality_filter: ModalityFilter::All,
             uncensored_filter: UncensoredFilter::All,
             hide_catalog_prices: false,
+            pricing_source: PricingSource::All,
             log_price_axis: true,
             hidden_groups: vec![],
             selected_pareto_model: None,
@@ -111,7 +116,14 @@ pub(super) fn ui_state_path() -> PathBuf {
 
 pub(super) fn load_ui_state() -> Option<UiState> {
     let bytes = fs::read(ui_state_path()).ok()?;
-    let state: UiState = serde_json::from_slice(&bytes).ok()?;
+    let mut state: UiState = serde_json::from_slice(&bytes).ok()?;
+    // Files written before the pricing-source choice carried only the hide
+    // toggle; fold it in before the default can mask it, and clear it so a
+    // re-save compares equal against freshly snapshotted state.
+    if state.pricing_source == PricingSource::All && state.hide_catalog_prices {
+        state.pricing_source = PricingSource::LiveMarket;
+    }
+    state.hide_catalog_prices = false;
     (state.version == UI_STATE_VERSION).then_some(state)
 }
 
@@ -143,7 +155,8 @@ impl ParetoWatchApp {
             liquidity_filter: self.liquidity_filter,
             modality_filter: self.modality_filter,
             uncensored_filter: self.uncensored_filter,
-            hide_catalog_prices: self.hide_catalog_prices,
+            hide_catalog_prices: false,
+            pricing_source: self.pricing_source,
             log_price_axis: self.log_price_axis,
             hidden_groups: self.hidden_groups.iter().cloned().collect(),
             selected_pareto_model: self.selected_pareto_model.clone(),
@@ -180,7 +193,7 @@ impl ParetoWatchApp {
         self.liquidity_filter = state.liquidity_filter;
         self.modality_filter = state.modality_filter;
         self.uncensored_filter = state.uncensored_filter;
-        self.hide_catalog_prices = state.hide_catalog_prices;
+        self.pricing_source = state.pricing_source;
         self.log_price_axis = state.log_price_axis;
         self.hidden_groups = state.hidden_groups.iter().cloned().collect();
         self.selected_pareto_model = state.selected_pareto_model.clone();
@@ -244,5 +257,21 @@ mod tests {
         // And a missing file.
         let _ = fs::remove_file(&path);
         assert!(load_ui_state().is_none());
+
+        // A pre-three-way file's hide toggle seeds the pricing source, and
+        // the legacy key never comes back on the next save.
+        let legacy = serde_json::json!({
+            "version": UI_STATE_VERSION,
+            "tab": "Pareto",
+            "hide_catalog_prices": true,
+        });
+        fs::write(ui_state_path(), serde_json::to_vec(&legacy).unwrap()).unwrap();
+        let migrated = load_ui_state().expect("legacy state loads");
+        assert_eq!(migrated.pricing_source, PricingSource::LiveMarket);
+        assert!(!migrated.hide_catalog_prices);
+        let resaved = serde_json::to_value(&migrated).unwrap();
+        assert!(resaved.get("hide_catalog_prices").is_none());
+        assert_eq!(resaved["pricing_source"], "LiveMarket");
+        let _ = fs::remove_file(&path);
     }
 }

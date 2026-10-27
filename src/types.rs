@@ -441,6 +441,21 @@ pub(crate) enum LiquidityFilter {
     Healthy10,
 }
 
+/// Which prices the Pareto chart bills. `All` (the default) plots live-market
+/// asks and keeps models without one at their published list price;
+/// `LiveMarket` drops those list-price-only models so market asks alone hold
+/// the frontier; `Catalog` bills every model at its published list rates —
+/// the market feed's direct list prices when it carries them, else the text
+/// catalogue's — for a stable official-price comparison that ignores
+/// marketplace discounts.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
+pub(crate) enum PricingSource {
+    #[default]
+    All,
+    LiveMarket,
+    Catalog,
+}
+
 /// Chart modality filter. Vision detection comes from `/v1/models`
 /// architecture metadata; models without modality data count as text-only.
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
@@ -825,6 +840,13 @@ pub(crate) struct Quote {
     /// market provider publishes a cache ask. Observed direct-cost billing
     /// tracks these published rates closely.
     pub(crate) catalog_cache_read: Option<f64>,
+    /// Published list input/output prices for this model, preserved when the
+    /// live-market overlay replaces the headline legs: the market feed's own
+    /// direct list prices when it publishes them, else the text catalogue's
+    /// rates. Catalog-only quotes just mirror `input`/`output`; `None` only
+    /// when neither feed published a price at all.
+    pub(crate) list_input: Option<f64>,
+    pub(crate) list_output: Option<f64>,
     pub(crate) seller_count: Option<u64>,
     pub(crate) healthy_seller_count: Option<u64>,
     pub(crate) provider_trusted: Option<bool>,
@@ -893,6 +915,77 @@ impl Quote {
                 .or(self.catalog_cache_read)
                 .unwrap_or_else(|| assumed_cache_price(self.input, cache_fallback_pct)),
         )
+    }
+
+    /// The legs billed under a pricing-source choice, with the cache leg
+    /// fully resolved the way [`blended_price`] bills it (published rate,
+    /// else the assumed share of the billed input leg) so tooltips and the
+    /// detail card can show exactly what the blended rate charges. Catalog
+    /// mode bills the preserved list legs and prefers the catalogue's list
+    /// cache price over the market's published cache ask.
+    pub(crate) fn price_legs(
+        &self,
+        source: PricingSource,
+        cache_fallback_pct: f64,
+    ) -> (f64, Option<f64>, f64) {
+        match source {
+            PricingSource::All | PricingSource::LiveMarket => (
+                self.input,
+                self.effective_cache_read(cache_fallback_pct),
+                self.output,
+            ),
+            PricingSource::Catalog => {
+                let input = self.list_input.unwrap_or(self.input);
+                (
+                    input,
+                    Some(
+                        self.catalog_cache_read
+                            .or(self.cache_read)
+                            .unwrap_or_else(|| assumed_cache_price(input, cache_fallback_pct)),
+                    ),
+                    self.list_output.unwrap_or(self.output),
+                )
+            }
+        }
+    }
+
+    /// Per-leg or blended price under a pricing-source choice. Market modes
+    /// bill the quote's headline legs exactly like [`Quote::price`]; catalog
+    /// mode bills the preserved list legs.
+    pub(crate) fn price_for(
+        &self,
+        source: PricingSource,
+        metric: PriceMetric,
+        input_weight: f64,
+        cache_read_weight: f64,
+        output_weight: f64,
+        cache_fallback_pct: f64,
+    ) -> f64 {
+        match source {
+            PricingSource::All | PricingSource::LiveMarket => self.price(
+                metric,
+                input_weight,
+                cache_read_weight,
+                output_weight,
+                cache_fallback_pct,
+            ),
+            PricingSource::Catalog => {
+                let (input, cache_read, output) = self.price_legs(source, cache_fallback_pct);
+                match metric {
+                    PriceMetric::Input => input,
+                    PriceMetric::Output => output,
+                    PriceMetric::Blended => blended_price(
+                        input,
+                        cache_read,
+                        output,
+                        input_weight,
+                        cache_read_weight,
+                        output_weight,
+                        cache_fallback_pct,
+                    ),
+                }
+            }
+        }
     }
 
     pub(crate) fn price(

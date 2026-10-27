@@ -75,8 +75,15 @@ pub(crate) fn semantic_alert_status(
         alert.metric,
         alert.cost_basis,
         benchmark_metric,
-        (input_weight, cache_read_weight, output_weight),
-        cache_fallback_pct,
+        (
+            input_weight,
+            cache_read_weight,
+            output_weight,
+            cache_fallback_pct,
+        ),
+        // Alerts bill live asks with the published fallbacks regardless of
+        // how the chart's pricing-source dial is set.
+        crate::types::PricingSource::All,
     );
     if alert.model == ANY_MODEL {
         // Wildcard rules watch the whole population, not one target.

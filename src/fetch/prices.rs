@@ -166,11 +166,16 @@ fn apply_market_overlay(
         };
         let q = &mut quotes[index];
         // Catalogue list prices for the cache-inclusive discount; the overlay
-        // below replaces them with live market asks. `catalog_cache_read`
-        // survives the overlay as the published fallback.
+        // below replaces them with live market asks. `catalog_cache_read` and
+        // the list token legs survive the overlay as the published fallback
+        // the catalog pricing mode bills. The market feed's own direct list
+        // prices are fresher than the catalogue, so they win when present —
+        // the same list side the cache-inclusive discount measures against.
         let catalog_input = q.input;
         let catalog_output = q.output;
         let catalog_cache_read = q.catalog_cache_read;
+        q.list_input = Some(market.direct_input.unwrap_or(catalog_input));
+        q.list_output = Some(market.direct_output.unwrap_or(catalog_output));
         q.input = market.input;
         q.output = market.output;
         // The feed's provider rows never publish a per-provider cache ask
@@ -336,6 +341,8 @@ pub(crate) fn parse_price_matrix(value: &Value, settings: &Settings) -> Result<V
                 output,
                 cache_read,
                 catalog_cache_read: cache_read,
+                list_input: Some(input),
+                list_output: Some(output),
                 seller_count: None,
                 healthy_seller_count: None,
                 provider_trusted: None,
@@ -404,6 +411,8 @@ pub(crate) fn parse_model_catalog(value: &Value) -> Result<Vec<Quote>> {
             output: completion * 1_000_000.0,
             cache_read,
             catalog_cache_read: cache_read,
+            list_input: Some(prompt * 1_000_000.0),
+            list_output: Some(completion * 1_000_000.0),
             seller_count: None,
             healthy_seller_count: None,
             provider_trusted: None,
@@ -893,6 +902,7 @@ pub(crate) fn find_market_entries(root: &Value) -> Vec<&Value> {
 mod tests {
     use super::*;
     use crate::testfix::test_quote;
+    use crate::types::PricingSource;
 
     #[test]
     fn parses_current_surplus_live_market_shape_and_metadata() {
@@ -1005,6 +1015,72 @@ mod tests {
             (q.effective_cache_read(10.0).unwrap() - 0.013).abs() < 1e-12,
             "blended pricing bills the aggregate"
         );
+    }
+
+    #[test]
+    fn overlay_preserves_published_list_legs_for_catalog_pricing() {
+        // The market feed's direct list pair is fresher than the catalogue's,
+        // so it wins as the preserved list price; the catalogue covers legs
+        // the feed publishes no direct price for (cache).
+        let mut quotes = vec![test_quote("claude-opus-4-8", 15.0, false)];
+        quotes[0].catalog_cache_read = Some(1.2);
+        let rows = parse_market_overlay(
+            &serde_json::json!({
+                "markets": [{
+                    "model": "claude-opus-4-8",
+                    "best_input_per_1m": 1200000,
+                    "best_output_per_1m": 6000000,
+                    "best_cache_read_per_1m": 120000,
+                    "direct_input_per_1m": 12000000,
+                    "direct_output_per_1m": 60000000
+                }]
+            }),
+            &Settings::default(),
+        );
+        apply_market_overlay(&mut quotes, rows, &Settings::default());
+        let q = &quotes[0];
+        // Market asks $1.20/$6.00; list $12/$60 from the feed, cache $1.20
+        // from the catalogue.
+        assert!((q.list_input.unwrap() - 12.0).abs() < 1e-12);
+        assert!((q.list_output.unwrap() - 60.0).abs() < 1e-12);
+        assert!((q.catalog_cache_read.unwrap() - 1.2).abs() < 1e-12);
+        // Catalog pricing bills the list legs with the catalogue cache rate;
+        // All sources keep billing the live asks.
+        let list_price = q.price_for(
+            PricingSource::Catalog,
+            PriceMetric::Blended,
+            15.0,
+            80.0,
+            5.0,
+            10.0,
+        );
+        assert!((list_price - (12.0 * 15.0 + 1.2 * 80.0 + 60.0 * 5.0) / 100.0).abs() < 1e-12);
+        let market_price = q.price_for(
+            PricingSource::All,
+            PriceMetric::Blended,
+            15.0,
+            80.0,
+            5.0,
+            10.0,
+        );
+        assert!((market_price - (1.2 * 15.0 + 0.12 * 80.0 + 6.0 * 5.0) / 100.0).abs() < 1e-12);
+
+        // Without direct prices the catalogue's own rates are the list legs.
+        let rows = parse_market_overlay(
+            &serde_json::json!({
+                "markets": [{
+                    "model": "claude-opus-4-8",
+                    "best_input_per_1m": 1200000,
+                    "best_output_per_1m": 6000000
+                }]
+            }),
+            &Settings::default(),
+        );
+        let mut quotes = vec![test_quote("claude-opus-4-8", 15.0, false)];
+        apply_market_overlay(&mut quotes, rows, &Settings::default());
+        let q = &quotes[0];
+        assert_eq!(q.list_input, Some(15.0));
+        assert_eq!(q.list_output, Some(30.0));
     }
 
     #[test]

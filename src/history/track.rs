@@ -430,6 +430,8 @@ mod tests {
             output,
             cache_read: None,
             catalog_cache_read: None,
+            list_input: Some(input),
+            list_output: Some(output),
             seller_count: None,
             healthy_seller_count: None,
             provider_trusted: None,

@@ -1,3 +1,23 @@
+# ParetoWatch v0.29.0
+
+## Features
+
+- **A "Catalog list" pricing mode joins the chart — every model billed at its published list rates.** The Filters popover's pricing row is now a three-way choice, with the old "Hide catalog-only prices" checkbox folded in as its "Live market" option:
+  - **All sources** (default) — unchanged: live-market asks, with catalogue list prices filling in for models that have no live ask.
+  - **Live market** — the old toggle: models without a live-market ask leave the chart so list-price orbs cannot hold a frontier spot against live asks.
+  - **Catalog list** (new) — every model on the chart is priced at its published list rates, the official prices a provider or the catalogue publishes, ignoring marketplace discounts entirely. The list legs are preserved through the live-market overlay (the feed's own direct list prices when it carries them — fresher than the catalogue — else the catalogue's rates), and the cache leg prefers the catalogue's list cache price. The result is a stable apples-to-apples frontier: models whose market asks fluctuate seller-to-seller are compared at the prices they officially cost, and catalog-only models compete on equal footing with live ones.
+  - Every view discloses the mode: the status line gains a "catalog list pricing" filter entry, the detail card and frontier table switch their source label to "catalog list price"/"Catalog list", chart tooltips badge the basis, and the displayed per-leg prices are always exactly what the plotted cost bills. The historical "lowest price" line is suppressed in this mode — the history log records observed market prices, which would read as inflated "% above low" against a list price.
+- **The choice persists.** `ui_state.json` carries the pricing source across restarts; files written by older versions migrate their hide toggle into the equivalent "Live market" setting.
+
+## Notes
+
+- Alert evaluation is untouched: rules keep billing live asks with the published fallbacks regardless of the chart's pricing source, so switching the chart's view can never re-arm or re-float an alert.
+- The workload-mix cache-read fallback (10% of the input price by default) also applies in catalog mode when neither the catalogue nor the market publishes a cache rate — the same published-first rule as everywhere else.
+
+## Validation
+
+Formatting, locked check, locked Clippy with warnings denied (`--all-targets`), and locked test (193 tests) all pass.
+
 # ParetoWatch v0.28.0
 
 ## Features

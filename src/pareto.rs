@@ -5,7 +5,7 @@
 use crate::bench::{best_benchmark_match, normalize};
 use crate::types::{
     Benchmark, BenchmarkMetric, BenchmarkSource, ComparisonMode, CostBasis, LiquidityFilter,
-    ModalityFilter, PriceMetric, Quote, UncensoredFilter,
+    ModalityFilter, PriceMetric, PricingSource, Quote, UncensoredFilter,
 };
 
 #[derive(Debug, Clone)]
@@ -45,9 +45,10 @@ pub(crate) struct ParetoCacheKey {
     /// Safety-tuning filter (e.g. uncensored-only), applied at the quote
     /// level like the modality filter.
     pub(crate) uncensored_filter: UncensoredFilter,
-    /// Hide toggle for catalog/comparison-only prices: with it on, models
-    /// without any live-market ask drop off the chart.
-    pub(crate) hide_catalog_prices: bool,
+    /// Pricing-source choice: live-market asks only, all sources, or every
+    /// model priced at its published list rates. Changing it refilters and
+    /// reprices the chart.
+    pub(crate) pricing_source: PricingSource,
     /// Canonical group labels currently toggled off in the legend, sorted.
     pub(crate) hidden_groups: Vec<String>,
     /// Model ids deliberately hidden from the frontier (faded orbs), sorted.
@@ -106,11 +107,15 @@ pub(crate) fn filter_frontier_hidden<'a>(
 }
 
 /// The chart's pricing-source gate. A quote without a live-market ask is
-/// priced straight from the Surplus catalog/comparison list; with the hide
-/// toggle on those models leave the chart (and the frontier) so list-price
-/// orbs cannot hold a frontier spot against live asks.
-pub(crate) fn pricing_source_allows(hide_catalog_prices: bool, quote: &Quote) -> bool {
-    !hide_catalog_prices || quote.live_market
+/// priced straight from the Surplus catalog/comparison list; live-market-only
+/// mode drops those models (and the frontier) so list-price orbs cannot hold
+/// a frontier spot against live asks, while catalog mode keeps everything and
+/// reprices every model at its list rates.
+pub(crate) fn pricing_source_allows(source: PricingSource, quote: &Quote) -> bool {
+    match source {
+        PricingSource::All | PricingSource::Catalog => true,
+        PricingSource::LiveMarket => quote.live_market,
+    }
 }
 
 pub(crate) fn price_to_plot_x(price: f64, log_scale: bool) -> f64 {
@@ -132,16 +137,19 @@ pub(crate) fn joined_points(
     price_metric: PriceMetric,
     cost_basis: CostBasis,
     benchmark_metric: BenchmarkMetric,
-    weights: (f64, f64, f64),
-    cache_fallback_pct: f64,
+    // (input, cache-read, output) workload weights, then the assumed
+    // cache-read share of the input price for models with no published ask.
+    weights: (f64, f64, f64, f64),
+    pricing_source: PricingSource,
 ) -> Vec<JoinedPoint> {
-    let (input_weight, cache_read_weight, output_weight) = weights;
+    let (input_weight, cache_read_weight, output_weight, cache_fallback_pct) = weights;
     let mut out = vec![];
     for q in quotes {
         if let Some(b) = best_benchmark_match(q, benchmarks)
             && let Some(score) = benchmark_metric.value(b)
         {
-            let per_million = q.price(
+            let per_million = q.price_for(
+                pricing_source,
                 price_metric,
                 input_weight,
                 cache_read_weight,
@@ -167,18 +175,22 @@ pub(crate) fn joined_points(
                 }
             };
             if cost.is_finite() && score.is_finite() {
+                // The displayed legs are exactly what the blended rate bills
+                // under the chosen pricing source, so the chart tooltips stay
+                // auditable in every mode.
+                let (input, cache_read, output) = q.price_legs(pricing_source, cache_fallback_pct);
                 out.push(JoinedPoint {
                     model_id: q.model.clone(),
                     model: q.display_name.clone(),
                     creator: q.creator.clone(),
                     provider: q.provider.clone(),
                     benchmark_name: b.name.clone(),
-                    input: q.input,
-                    output: q.output,
+                    input,
+                    output,
                     // Resolved cache rate (provider ask, market best,
                     // catalogue list, else assumed share): what `cost` and
                     // the chart tooltips actually bill.
-                    cache_read: q.effective_cache_read(cache_fallback_pct),
+                    cache_read,
                     cost,
                     tokens_per_task: b.tokens_per_task,
                     token_profile: b.token_profile.clone(),
@@ -258,8 +270,8 @@ mod tests {
             PriceMetric::Blended,
             CostBasis::EstimatedPerTask,
             BenchmarkMetric::AgenticCoding,
-            (15.0, 80.0, 5.0),
-            10.0,
+            (15.0, 80.0, 5.0, 10.0),
+            PricingSource::All,
         );
         assert_eq!(points.len(), 1);
         // test_quote => input $2, cache $0.2, output $4 => blend $0.66/M.
@@ -311,15 +323,101 @@ mod tests {
     }
 
     #[test]
-    fn catalog_only_quotes_leave_the_chart_when_hidden() {
+    fn pricing_source_gates_who_is_on_the_chart() {
         let live = test_quote("live-model", 1.0, true);
         let catalog = test_quote("catalog-model", 1.0, false);
-        // Off: everything stays, matching the pre-toggle behavior.
-        assert!(pricing_source_allows(false, &live));
-        assert!(pricing_source_allows(false, &catalog));
-        // On: only live-market asks remain.
-        assert!(pricing_source_allows(true, &live));
-        assert!(!pricing_source_allows(true, &catalog));
+        // All sources: everything stays, matching the pre-toggle behavior.
+        assert!(pricing_source_allows(PricingSource::All, &live));
+        assert!(pricing_source_allows(PricingSource::All, &catalog));
+        // Live market: only live-market asks remain.
+        assert!(pricing_source_allows(PricingSource::LiveMarket, &live));
+        assert!(!pricing_source_allows(PricingSource::LiveMarket, &catalog));
+        // Catalog list: everything stays and is repriced at list rates.
+        assert!(pricing_source_allows(PricingSource::Catalog, &live));
+        assert!(pricing_source_allows(PricingSource::Catalog, &catalog));
+    }
+
+    #[test]
+    fn catalog_pricing_bills_preserved_list_legs() {
+        let mut live = test_quote("gpt-5.6-sol", 2.0, true);
+        // Market asks sit under the published list, with a dearer list cache.
+        live.list_input = Some(3.0);
+        live.list_output = Some(9.0);
+        live.catalog_cache_read = Some(0.5);
+        // Catalog mode bills the list legs with the catalogue cache rate.
+        let (input, cache_read, output) = live.price_legs(PricingSource::Catalog, 10.0);
+        assert_eq!(input, 3.0);
+        assert_eq!(cache_read, Some(0.5));
+        assert_eq!(output, 9.0);
+        let blended = live.price_for(
+            PricingSource::Catalog,
+            PriceMetric::Blended,
+            15.0,
+            80.0,
+            5.0,
+            10.0,
+        );
+        assert_eq!(blended, (3.0 * 15.0 + 0.5 * 80.0 + 9.0 * 5.0) / 100.0);
+        // Market modes keep billing the live asks.
+        assert_eq!(
+            live.price_for(
+                PricingSource::All,
+                PriceMetric::Input,
+                15.0,
+                80.0,
+                5.0,
+                10.0
+            ),
+            2.0
+        );
+        // An assumed list cache share grounds the cache leg when nothing
+        // published one: 10% of the billed list input.
+        live.catalog_cache_read = None;
+        live.cache_read = None;
+        let (_, cache_read, _) = live.price_legs(PricingSource::Catalog, 10.0);
+        assert_eq!(cache_read, Some(0.3));
+    }
+
+    #[test]
+    fn joined_points_use_catalog_legs_in_catalog_mode() {
+        let mut q = test_quote("gpt-5.6-sol", 2.0, true);
+        q.list_input = Some(4.0);
+        q.list_output = Some(8.0);
+        let mut b = score_benchmark(
+            "gpt-5.6-sol",
+            72.7,
+            Some("mini-SWE-agent".into()),
+            Some("max".into()),
+            BenchmarkKind::Model,
+        );
+        b.tokens_per_task = Some(1_000_000.0);
+        let mut points = joined_points(
+            &[q.clone()],
+            &[b.clone()],
+            PriceMetric::Blended,
+            CostBasis::EstimatedPerTask,
+            BenchmarkMetric::AgenticCoding,
+            (15.0, 80.0, 5.0, 10.0),
+            PricingSource::Catalog,
+        );
+        assert_eq!(points.len(), 1);
+        // test_quote list legs: input $4, cache $0.2 (the published rate),
+        // output $8 => blend $1.16/M, one million observed tokens => $1.16
+        // estimated per task.
+        assert!((points[0].cost - 1.16).abs() < 1e-12);
+        assert_eq!(points[0].input, 4.0);
+        // The same quote under All sources bills the market asks instead.
+        points = joined_points(
+            &[q],
+            &[b],
+            PriceMetric::Blended,
+            CostBasis::EstimatedPerTask,
+            BenchmarkMetric::AgenticCoding,
+            (15.0, 80.0, 5.0, 10.0),
+            PricingSource::All,
+        );
+        assert!((points[0].cost - 0.66).abs() < 1e-12);
+        assert_eq!(points[0].input, 2.0);
     }
 
     #[test]
