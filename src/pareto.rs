@@ -5,7 +5,7 @@
 use crate::bench::{best_benchmark_match, normalize};
 use crate::types::{
     Benchmark, BenchmarkMetric, BenchmarkSource, ComparisonMode, CostBasis, LiquidityFilter,
-    ModalityFilter, PriceMetric, PricingSource, Quote, UncensoredFilter,
+    ModalityFilter, PriceMetric, PricingSource, Quote, UncensoredFilter, is_free_pair,
 };
 
 #[derive(Debug, Clone)]
@@ -109,12 +109,18 @@ pub(crate) fn filter_frontier_hidden<'a>(
 /// The chart's pricing-source gate. A quote without a live-market ask is
 /// priced straight from the Surplus catalog/comparison list; live-market-only
 /// mode drops those models (and the frontier) so list-price orbs cannot hold
-/// a frontier spot against live asks, while catalog mode keeps everything and
-/// reprices every model at its list rates.
+/// a frontier spot against live asks. Catalog mode reprices every model at
+/// its list rates, except free catalogue listings: a 0.00 token pair has no
+/// cost to place on a price axis and would own the cheapest frontier spot
+/// for free.
 pub(crate) fn pricing_source_allows(source: PricingSource, quote: &Quote) -> bool {
     match source {
-        PricingSource::All | PricingSource::Catalog => true,
+        PricingSource::All => true,
         PricingSource::LiveMarket => quote.live_market,
+        PricingSource::Catalog => {
+            let (input, output) = quote.catalog_legs();
+            !is_free_pair(input, output)
+        }
     }
 }
 
@@ -335,6 +341,23 @@ mod tests {
         // Catalog list: everything stays and is repriced at list rates.
         assert!(pricing_source_allows(PricingSource::Catalog, &live));
         assert!(pricing_source_allows(PricingSource::Catalog, &catalog));
+        // Free catalogue listings cost 0.00 under catalog pricing and leave
+        // the chart there, while market modes keep billing whatever the
+        // market actually shows for the same rows.
+        let free_listing = test_quote("free-model", 0.0, false);
+        assert!(pricing_source_allows(PricingSource::All, &free_listing));
+        assert!(!pricing_source_allows(
+            PricingSource::Catalog,
+            &free_listing
+        ));
+        let mut free_list_live = test_quote("free-list-live", 1.0, true);
+        free_list_live.list_input = Some(0.0);
+        free_list_live.list_output = Some(0.0);
+        assert!(pricing_source_allows(PricingSource::All, &free_list_live));
+        assert!(!pricing_source_allows(
+            PricingSource::Catalog,
+            &free_list_live
+        ));
     }
 
     #[test]

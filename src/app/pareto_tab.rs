@@ -197,7 +197,9 @@ impl ParetoWatchApp {
                                 "Which prices the chart bills: live-market asks with catalogue \
                                  list prices filling in for models that have no live ask, \
                                  live-market asks only, or every model at its published list \
-                                 rates — official prices, ignoring marketplace discounts.",
+                                 rates — official prices, ignoring marketplace discounts. \
+                                 Free (0.00) catalogue listings are excluded from catalog \
+                                 list mode.",
                             );
                             if option_row(
                                 ui,

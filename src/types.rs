@@ -917,6 +917,18 @@ impl Quote {
         )
     }
 
+    /// The published list token pair catalog pricing bills: the preserved
+    /// list input/output, falling back to the quote's own legs when no list
+    /// price is known. The cache leg resolves separately in
+    /// [`Quote::price_legs`]; the pricing-source gate tests this pair to
+    /// spot free catalogue listings.
+    pub(crate) fn catalog_legs(&self) -> (f64, f64) {
+        (
+            self.list_input.unwrap_or(self.input),
+            self.list_output.unwrap_or(self.output),
+        )
+    }
+
     /// The legs billed under a pricing-source choice, with the cache leg
     /// fully resolved the way [`blended_price`] bills it (published rate,
     /// else the assumed share of the billed input leg) so tooltips and the
@@ -935,7 +947,7 @@ impl Quote {
                 self.output,
             ),
             PricingSource::Catalog => {
-                let input = self.list_input.unwrap_or(self.input);
+                let (input, output) = self.catalog_legs();
                 (
                     input,
                     Some(
@@ -943,7 +955,7 @@ impl Quote {
                             .or(self.cache_read)
                             .unwrap_or_else(|| assumed_cache_price(input, cache_fallback_pct)),
                     ),
-                    self.list_output.unwrap_or(self.output),
+                    output,
                 )
             }
         }
