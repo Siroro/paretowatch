@@ -9,9 +9,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::bench::matching::normalize;
 
-pub(crate) const SWE_REBENCH_URL: &str = "https://swe-rebench.com/";
 pub(crate) const VALS_SRE_BENCH_URL: &str = "https://www.vals.ai/benchmarks/srebench";
-pub(crate) const REVELO_CODE_INDEX_URL: &str = "https://research.revelo.com/code-index/";
 pub(crate) const FRONTIERCODE_URL: &str = "https://cognition.com/frontiercode";
 pub(crate) const ARTIFICIAL_ANALYSIS_URL: &str =
     "https://artificialanalysis.ai/leaderboards/models";
@@ -202,12 +200,9 @@ pub(crate) enum BenchmarkSource {
     CompositeAgentic,
     CompositeDeployment,
     ArtificialAnalysisSnapshot,
-    SWERebench,
-    TerminalBench3,
     TerminalBench4,
     DeepSWE11,
     LiveBench,
-    ReveloCodeIndex,
     DesignArena,
     FrontierCode,
     FrontierCode2,
@@ -240,12 +235,9 @@ impl BenchmarkSource {
             Self::CompositeAgentic => "Composite (capability)",
             Self::CompositeDeployment => "Composite (deployment)",
             Self::ArtificialAnalysisSnapshot => "Artificial Analysis (live + snapshot)",
-            Self::SWERebench => "SWE-rebench",
-            Self::TerminalBench3 => "Terminal-Bench 3.0",
             Self::TerminalBench4 => "Terminal-Bench 4.0",
             Self::DeepSWE11 => "DeepSWE v1.1",
             Self::LiveBench => "LiveBench",
-            Self::ReveloCodeIndex => "Revelo Code Index",
             Self::DesignArena => "Frontend Design Elo (Design Arena)",
             Self::FrontierCode => "FrontierCode 1.1 (Cognition)",
             Self::FrontierCode2 => "FrontierCode 2.0 (Cognition)",
@@ -262,12 +254,9 @@ impl BenchmarkSource {
             Self::CompositeAgentic => "Composite",
             Self::CompositeDeployment => "Deploy comp",
             Self::ArtificialAnalysisSnapshot => "AA Intelligence",
-            Self::SWERebench => "SWE-rebench",
-            Self::TerminalBench3 => "Terminal-Bench 3",
             Self::TerminalBench4 => "Terminal-Bench 4",
             Self::DeepSWE11 => "DeepSWE",
             Self::LiveBench => "LiveBench",
-            Self::ReveloCodeIndex => "Code Index",
             Self::DesignArena => "Design Elo",
             Self::FrontierCode => "FrontierCode 1.1",
             Self::FrontierCode2 => "FrontierCode 2.0",
@@ -292,10 +281,11 @@ impl BenchmarkSource {
     }
 
     /// Model-level boards: the published number describes the model itself.
-    /// SWE-rebench is deliberately excluded — its uniform harness makes it an
-    /// agentic-capability standard that stays fully weighted in both flavors.
-    /// The AA evaluation boards run every model under AA's own standardized
-    /// protocol, so they measure the model rather than a vendor scaffold.
+    /// Uniform-harness boards (DeepSWE's mini-SWE-agent, Vals' SRE protocol)
+    /// are deliberately excluded — a standardized scaffold measures the model,
+    /// so they stay fully weighted in both flavors. The AA evaluation boards
+    /// run every model under AA's own standardized protocol, so they measure
+    /// the model rather than a vendor scaffold.
     pub(crate) fn is_model_level(self) -> bool {
         matches!(
             self,
@@ -311,28 +301,23 @@ impl BenchmarkSource {
     pub(crate) fn is_harness_specific(self) -> bool {
         matches!(
             self,
-            Self::TerminalBench3
-                | Self::TerminalBench4
+            Self::TerminalBench4
                 | Self::DeepSWE11
-                | Self::ReveloCodeIndex
                 | Self::FrontierCode
                 | Self::FrontierCode2
                 | Self::SWEBenchPro
         )
     }
 
-    pub(crate) fn remote_sources() -> [Self; 15] {
+    pub(crate) fn remote_sources() -> [Self; 12] {
         [
             // The AA Intelligence Index fetch overlays live leaderboard values
             // onto the bundled snapshot (it never fails — the bundle is the
             // offline fallback), so it joins the periodic refresh.
             Self::ArtificialAnalysisSnapshot,
-            Self::SWERebench,
-            Self::TerminalBench3,
             Self::TerminalBench4,
             Self::DeepSWE11,
             Self::LiveBench,
-            Self::ReveloCodeIndex,
             Self::DesignArena,
             Self::FrontierCode,
             Self::FrontierCode2,
@@ -344,15 +329,12 @@ impl BenchmarkSource {
         ]
     }
 
-    pub(crate) fn consensus_sources() -> [Self; 15] {
+    pub(crate) fn consensus_sources() -> [Self; 12] {
         [
             Self::ArtificialAnalysisSnapshot,
-            Self::SWERebench,
-            Self::TerminalBench3,
             Self::TerminalBench4,
             Self::DeepSWE11,
             Self::LiveBench,
-            Self::ReveloCodeIndex,
             Self::DesignArena,
             Self::FrontierCode,
             Self::FrontierCode2,
@@ -364,7 +346,7 @@ impl BenchmarkSource {
         ]
     }
 
-    pub(crate) fn display_sources() -> [Self; 15] {
+    pub(crate) fn display_sources() -> [Self; 12] {
         Self::consensus_sources()
     }
 
@@ -372,16 +354,11 @@ impl BenchmarkSource {
         match self {
             Self::CompositeAgentic | Self::CompositeDeployment => "",
             Self::ArtificialAnalysisSnapshot => ARTIFICIAL_ANALYSIS_URL,
-            Self::SWERebench => SWE_REBENCH_URL,
-            Self::TerminalBench3 => {
-                "https://hub.harborframework.com/datasets/terminal-bench/terminal-bench/latest?tab=leaderboard&leaderboard=3-0-0"
-            }
             Self::TerminalBench4 => {
                 "https://hub.harborframework.com/datasets/terminal-bench/terminal-bench/latest?tab=leaderboard&leaderboard=4-0-0"
             }
             Self::DeepSWE11 => "https://deepswe.datacurve.ai/",
             Self::LiveBench => "https://livebench.ai/",
-            Self::ReveloCodeIndex => REVELO_CODE_INDEX_URL,
             Self::DesignArena => "https://designarena.ai/leaderboard",
             Self::FrontierCode | Self::FrontierCode2 => FRONTIERCODE_URL,
             Self::AABriefcase => "https://artificialanalysis.ai/evaluations/aa-briefcase",

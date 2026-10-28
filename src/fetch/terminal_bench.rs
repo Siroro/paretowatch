@@ -1,48 +1,22 @@
-//! Terminal-Bench leaderboards (3.0 and 4.0) via the Harbor API. 3.0 keeps a
-//! GitHub snapshot fallback; 4.0 has no published snapshot yet and is
-//! live-only.
+//! Terminal-Bench 4.0 leaderboard via the Harbor API. 4.0 is live-only: it
+//! has no published snapshot to fall back to, so failures surface as errors
+//! rather than stale-gen data. (Terminal-Bench 3.0 was retired in 0.32.0 —
+//! superseded by 4.0, which AA's own v5 index switched to — and its
+//! GitHub-snapshot fallback went with it.)
 
 use anyhow::{Context, Result, anyhow};
 use reqwest::blocking::Client;
 use serde_json::Value;
 
 use super::json_shape;
-use super::{fetch_text, number_value, score_benchmark};
+use super::{number_value, score_benchmark};
 use crate::bench::matching::normalize;
 use crate::types::{Benchmark, BenchmarkKind};
 
 pub(crate) const TERMINAL_BENCH_HARBOR_URL: &str =
     "https://ofhuhcpkvzjlejydnvyd.supabase.co/functions/v1/leaderboard-read";
 pub(crate) const TERMINAL_BENCH_PACKAGE: &str = "terminal-bench/terminal-bench";
-pub(crate) const TERMINAL_BENCH_3_LEADERBOARD: &str = "3-0-0";
 pub(crate) const TERMINAL_BENCH_4_LEADERBOARD: &str = "4-0-0";
-pub(crate) const TERMINAL_BENCH_SNAPSHOT_URL: &str = "https://raw.githubusercontent.com/harbor-framework/frontier-bench-docs/main/lib/announcement-leaderboard-snapshot.ts";
-
-pub(crate) fn fetch_terminal_bench_3(client: &Client) -> Result<Vec<Benchmark>> {
-    match fetch_terminal_bench_version(client, TERMINAL_BENCH_3_LEADERBOARD, "3.0")
-        .and_then(|value| parse_terminal_bench_harbor(&value))
-    {
-        Ok(rows) if !rows.is_empty() => Ok(rows),
-        live_result => {
-            let live_error = match live_result {
-                Ok(_) => "live Harbor leaderboard contained no usable rows".to_owned(),
-                Err(err) => format!("{err:#}"),
-            };
-            let text = fetch_text(
-                client,
-                TERMINAL_BENCH_SNAPSHOT_URL,
-                "Terminal-Bench 3.0 fallback snapshot",
-            )?;
-            let rows = parse_terminal_bench_snapshot(&text)?;
-            if rows.is_empty() {
-                return Err(anyhow!(
-                    "Terminal-Bench live read failed ({live_error}); fallback snapshot also contained no usable rows"
-                ));
-            }
-            Ok(rows)
-        }
-    }
-}
 
 /// Terminal-Bench 4.0: live Harbor leaderboard only. Unlike 3.0 there is no
 /// published GitHub snapshot to fall back to, so failures surface as errors
@@ -213,98 +187,6 @@ pub(crate) fn leaderboard_display_label(value: &Value) -> Option<String> {
         .map(str::to_owned)
 }
 
-pub(crate) fn parse_terminal_bench_snapshot(text: &str) -> Result<Vec<Benchmark>> {
-    let mut out = Vec::new();
-    for block in text.split('{').skip(1) {
-        let Some(block) = block.split('}').next() else {
-            continue;
-        };
-        if !block.contains("accuracy:") || !block.contains("model:") {
-            continue;
-        }
-        let status = ts_string_field(block, "status").unwrap_or_else(|| "display".into());
-        if !status.eq_ignore_ascii_case("display") && !status.eq_ignore_ascii_case("hide") {
-            continue;
-        }
-        let Some(model_raw) = ts_string_field(block, "model") else {
-            continue;
-        };
-        if model_raw.eq_ignore_ascii_case("multiple") {
-            continue;
-        }
-        let Some(score) = ts_number_field(block, "accuracy") else {
-            continue;
-        };
-        if !score.is_finite() {
-            continue;
-        }
-        let model = strip_provider_prefix(&model_raw);
-        let agent = ts_string_field(block, "agent").unwrap_or_default();
-        let effort = ts_string_field(block, "reasoningEffort").unwrap_or_default();
-        let kind = if normalize(&agent).contains("mini swe agent") {
-            BenchmarkKind::Model
-        } else {
-            BenchmarkKind::ModelAgent
-        };
-        let detail = if !agent.is_empty() && !effort.is_empty() {
-            format!("{model} [{agent} · {effort}]")
-        } else if !agent.is_empty() {
-            format!("{model} [{agent}]")
-        } else {
-            model.clone()
-        };
-        let mut b = score_benchmark(
-            model.clone(),
-            score,
-            (!agent.is_empty()).then_some(agent),
-            (!effort.is_empty()).then_some(effort),
-            kind,
-        );
-        b.slug = model;
-        b.name = detail;
-        out.push(b);
-    }
-    out.sort_by(|a, b| {
-        b.agentic_coding
-            .unwrap_or_default()
-            .total_cmp(&a.agentic_coding.unwrap_or_default())
-    });
-    Ok(out)
-}
-
-pub(crate) fn ts_string_field(block: &str, key: &str) -> Option<String> {
-    for line in block.lines() {
-        let line = line.trim();
-        let prefix = format!("{key}:");
-        if !line.starts_with(&prefix) {
-            continue;
-        }
-        let value = line[prefix.len()..].trim().trim_end_matches(',').trim();
-        if value == "null" {
-            return None;
-        }
-        return Some(value.trim_matches(|c| c == '\'' || c == '"').to_owned());
-    }
-    None
-}
-
-pub(crate) fn ts_number_field(block: &str, key: &str) -> Option<f64> {
-    for line in block.lines() {
-        let line = line.trim();
-        let prefix = format!("{key}:");
-        if !line.starts_with(&prefix) {
-            continue;
-        }
-        return line[prefix.len()..]
-            .trim()
-            .trim_end_matches(',')
-            .trim()
-            .parse::<f64>()
-            .ok();
-    }
-    None
-}
-
 pub(crate) fn strip_provider_prefix(model: &str) -> String {
     model
         .rsplit_once('/')
@@ -316,7 +198,6 @@ pub(crate) fn strip_provider_prefix(model: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::types::*;
 
     #[test]
     fn terminal_bench_preserves_agent_rows_and_hidden_valid_runs() {

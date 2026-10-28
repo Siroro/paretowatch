@@ -8,11 +8,11 @@ pub(crate) mod aa_speed;
 pub(crate) mod deepswe;
 pub(crate) mod design_arena;
 pub(crate) mod frontiercode;
+#[cfg(test)]
+mod live_validation;
 pub(crate) mod livebench;
 pub(crate) mod performance;
 pub(crate) mod prices;
-pub(crate) mod revelo;
-pub(crate) mod swe_rebench;
 pub(crate) mod swebench_pro;
 pub(crate) mod terminal_bench;
 pub(crate) mod vals_sre;
@@ -26,8 +26,6 @@ pub(crate) use frontiercode::*;
 pub(crate) use livebench::*;
 pub(crate) use performance::*;
 pub(crate) use prices::*;
-pub(crate) use revelo::*;
-pub(crate) use swe_rebench::*;
 pub(crate) use swebench_pro::*;
 pub(crate) use terminal_bench::*;
 pub(crate) use vals_sre::*;
@@ -198,12 +196,9 @@ pub(crate) fn fetch_benchmark_source(
 ) -> Result<Vec<Benchmark>> {
     match source {
         BenchmarkSource::ArtificialAnalysisSnapshot => fetch_artificial_analysis_index(client),
-        BenchmarkSource::SWERebench => fetch_swe_rebench(client),
-        BenchmarkSource::TerminalBench3 => fetch_terminal_bench_3(client),
         BenchmarkSource::TerminalBench4 => fetch_terminal_bench_4(client),
         BenchmarkSource::DeepSWE11 => fetch_deepswe(client),
         BenchmarkSource::LiveBench => fetch_livebench(client),
-        BenchmarkSource::ReveloCodeIndex => fetch_revelo_code_index(client),
         BenchmarkSource::DesignArena => fetch_design_arena(client),
         BenchmarkSource::FrontierCode => fetch_frontiercode(client),
         BenchmarkSource::FrontierCode2 => fetch_frontiercode2(client),

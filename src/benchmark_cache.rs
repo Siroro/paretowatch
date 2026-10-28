@@ -16,7 +16,11 @@ use serde::{Deserialize, Serialize};
 
 use crate::types::{Benchmark, BenchmarkSource};
 
-const CACHE_VERSION: u32 = 1;
+// Bumped to 2 in 0.32.0 when Terminal-Bench 3.0, SWE-rebench, and Revelo
+// Code Index left BenchmarkSource: a cached file that still names them would
+// fail to deserialize (the whole cache is then ignored, by design), and an
+// explicit bump keeps that cold refresh deliberate rather than incidental.
+const CACHE_VERSION: u32 = 2;
 
 #[derive(Serialize, Deserialize)]
 struct CacheFile {

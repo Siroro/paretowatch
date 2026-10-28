@@ -57,17 +57,35 @@ pub(crate) fn best_benchmark_match<'a>(
 
 /// True when one canonical key equals the other plus only MMDD-style release
 /// tags (`0731`, `2507`, ...). Bare version digits are deliberately excluded so
-/// `GPT-5` never fuzzy-joins `GPT-5.2`.
+/// `GPT-5` never fuzzy-joins `GPT-5.2` — and the comparison is COUNT-aware:
+/// set semantics collapse `Sonnet 5.5` (`sonnet 5 5`) onto `Sonnet 5`
+/// because the doubled `5` vanishes, which made two different models score
+/// a perfect match against each other.
 pub(crate) fn keys_differ_only_by_release_tag(a: &str, b: &str) -> bool {
-    use std::collections::HashSet;
-    let (short, long) = if a.len() <= b.len() { (a, b) } else { (b, a) };
-    let short_tokens: HashSet<&str> = short.split_whitespace().collect();
-    let long_tokens: HashSet<&str> = long.split_whitespace().collect();
-    !short_tokens.is_empty()
-        && short_tokens.is_subset(&long_tokens)
-        && long_tokens
-            .difference(&short_tokens)
-            .all(|token| token.len() >= 3 && token.chars().all(|c| c.is_ascii_digit()))
+    use std::collections::HashMap;
+    fn counts(s: &str) -> HashMap<&str, usize> {
+        let mut map = HashMap::new();
+        for token in s.split_whitespace() {
+            *map.entry(token).or_insert(0) += 1;
+        }
+        map
+    }
+    let a_counts = counts(a);
+    let b_counts = counts(b);
+    let (short, long) = if a_counts.len() <= b_counts.len() {
+        (&a_counts, &b_counts)
+    } else {
+        (&b_counts, &a_counts)
+    };
+    // Every token the short side names must appear at least as often on the
+    // long side, and every surplus occurrence must be a release tag.
+    short
+        .iter()
+        .all(|(token, n)| long.get(token).is_some_and(|m| *m >= *n))
+        && long.iter().all(|(token, n)| {
+            short.get(token).copied().unwrap_or(0) >= *n
+                || (token.len() >= 3 && token.chars().all(|c| c.is_ascii_digit()))
+        })
 }
 
 pub(crate) fn creators_compatible(a: &str, b: &str) -> bool {
@@ -79,15 +97,36 @@ pub(crate) fn canonical_creator(s: &str) -> String {
 }
 
 pub(crate) fn token_jaccard(a: &str, b: &str) -> f64 {
-    use std::collections::HashSet;
-    let at: HashSet<&str> = a.split_whitespace().collect();
-    let bt: HashSet<&str> = b.split_whitespace().collect();
+    use std::collections::HashMap;
+    // COUNT-aware (multiset) Jaccard: `sonnet 5` and `sonnet 5 5` (Sonnet 5
+    // vs Sonnet 5.5) must score 2/3, not 1/0 — set-deduped tokens made the
+    // doubled version number invisible and joined two different models.
+    fn counts(s: &str) -> HashMap<&str, usize> {
+        let mut map = HashMap::new();
+        for token in s.split_whitespace() {
+            *map.entry(token).or_insert(0) += 1;
+        }
+        map
+    }
+    let at = counts(a);
+    let bt = counts(b);
     if at.is_empty() || bt.is_empty() {
         return 0.0;
     }
-    let inter = at.intersection(&bt).count() as f64;
-    let union = at.union(&bt).count() as f64;
-    inter / union
+    let mut inter = 0usize;
+    let mut union = 0usize;
+    for (token, n) in &at {
+        union += n;
+        if let Some(m) = bt.get(token) {
+            inter += (*n).min(*m);
+        }
+    }
+    for (token, m) in &bt {
+        if at.get(token).is_none_or(|n| *n < *m) {
+            union += m - at.get(token).copied().unwrap_or(0);
+        }
+    }
+    inter as f64 / union as f64
 }
 
 pub(crate) fn model_core(s: &str) -> String {
@@ -268,6 +307,37 @@ mod tests {
         assert_eq!(benchmark_model_key("Claude Opus 4.6"), "opus 4 6");
         assert_eq!(benchmark_model_key("Claude-4.6-Opus"), "opus 4 6");
         assert_eq!(benchmark_model_key("Opus 4.6"), "opus 4 6");
+    }
+
+    #[test]
+    fn version_doubled_names_never_join_their_base_version() {
+        // `Sonnet 5.5` keys to `sonnet 5 5`; set-deduped token maths collapsed
+        // the doubled `5` and scored the two different models a perfect 1.0
+        // against each other — so the Sonnet 5 listing displayed Sonnet 5.5's
+        // benchmark scores on every board.
+        let q = test_quote("claude-sonnet-5", 1.0, true);
+        let row = score_benchmark(
+            "Claude Sonnet 5.5",
+            1199.0,
+            None,
+            None,
+            BenchmarkKind::Model,
+        );
+        assert!(best_benchmark_match(&q, &[row]).is_none());
+
+        let q = test_quote("claude-opus-5", 1.0, true);
+        let row = score_benchmark("Claude Opus 5.5", 58.0, None, None, BenchmarkKind::Model);
+        assert!(best_benchmark_match(&q, &[row]).is_none());
+
+        assert!(token_jaccard("sonnet 5", "sonnet 5 5") < 0.80);
+        assert!(!keys_differ_only_by_release_tag("sonnet 5", "sonnet 5 5"));
+        assert!(!keys_differ_only_by_release_tag("gpt 5", "gpt 5 2"));
+        // Dated-release fallbacks must keep joining.
+        assert!(keys_differ_only_by_release_tag(
+            "deepseek v4 flash",
+            "deepseek v4 flash 0731"
+        ));
+        assert_eq!(token_jaccard("sonnet 5 5", "sonnet 5 5"), 1.0);
     }
 
     #[test]

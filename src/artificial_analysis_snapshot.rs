@@ -308,6 +308,35 @@
 //! Wonder Full (50), Step 5 Preview (29), and K2 Horizon (18) joined the
 //! rated set with no Surplus listing, so they still get no rows.
 //!
+//! A same-day second 2026-10-28 bump added Gemini 4 Carbon: launched hours
+//! after the morning rebaseline, it took the index lead at 59 (high — the
+//! only effort it exposes; payload 59.43, page display 59), one point over
+//! Claude Opus 5.5's 58, the first leader change since Opus 5.5 entered on
+//! 2026-09-22. The scale is unchanged, so `AA_CALIBRATION_POINTS` keeps its
+//! anchors: the top-segment slope reads 59.4 at ~99.5th percentile. It has
+//! no Surplus listing yet ($4.00/1M input per AA's FAQ), so the row lands
+//! ahead of it — the Gemini 4 Argon pattern.
+//!
+//! A third same-day 2026-10-28 change closed the loop the unrating opened.
+//! Dropping pre-v5 scores to `None` also dropped each unmeasured family's
+//! COMPOSITE prior to the neutral 50th percentile, and the reshuffle ended
+//! half-done: AA's re-measured families fell 9-14 points while the
+//! unmeasured half kept its stale board rows AND gained a cohort-median
+//! prior, so the composite overranked them — Grok 4.5 rode frozen board
+//! rows to #20 (above Haiku 5.5 and the DeepSeek 1017 refresh the same
+//! rebaseline had just re-measured downward), and Gemma 4 31B's one
+//! LiveBench row at the 26th percentile was pulled up to the 45th by
+//! pending-board pseudo-evidence toward a 50th that was never its standing.
+//! `None` rows therefore keep their identity, their dash, and their
+//! aliases, but their last pre-v5 read now lives in [`PRE_V5_READS`] and
+//! feeds the composite as a re-anchored `~est` PRIOR
+//! ([`reanchor_pre_v5_score`]) — never as a plotted score. The split is
+//! the point: an old-scale number must not be displayed as a current
+//! measurement (the board keeps the dash), but "not re-measured yet" is
+//! also not "measured at the cohort median" (the prior carries the
+//! re-anchored estimate, and the live overlay replaces it the moment AA
+//! publishes a v5 value).
+//!
 //! Deliberately unrated (no AA presence as of 2026-10-23): Aion 2.0/3.0/3.0
 //! Mini, Hermes 3 405B (AA rates only the Hermes 4 generation), Palmyra
 //! Vision 7B, Qwen 2.5 7B, GPT-OSS Safeguard
@@ -348,6 +377,20 @@ pub(crate) const ARTIFICIAL_ANALYSIS_SNAPSHOT_VERSION: &str = "v5.0";
 /// family. Names should mirror Surplus display names so exact-key joins hit
 /// before fuzzy matching has to.
 pub(crate) const SNAPSHOT_ROWS: &[(&str, Option<f64>)] = &[
+    // Added 2026-10-28 (same-day second bump, hours after the v5.0
+    // rebaseline): Google's Gemini 4 Carbon launched and took the index lead
+    // at 59, read at high reasoning — the only effort it exposes (the Argon
+    // situation; payload 59.43, page display 59) — one point over Claude
+    // Opus 5.5's 58 and the first leader change since 2026-09-22. `carbon`
+    // is a codename, not a deployment token, so the key joins nothing else.
+    // No Surplus listing yet, so the row lands ahead of it (the Gemini 4
+    // Argon pattern). Its agentic results live mostly on AA's own boards —
+    // AA-Briefcase 1,609 Elo (#1) and AutomationBench-AA 77.8% (#1), which
+    // the app fetches live; AA's payload also carries Terminal-Bench 4.0 at
+    // 65.2% and FrontierCode 2.0 at 40.6%, but the Harbor and Cognition
+    // leaderboards the app reads have not measured it yet, so the composite
+    // carries it on sparse evidence until they do.
+    ("Gemini 4 Carbon", Some(59.0)),
     // Added 2026-10-28 for the v5.0 rebaseline (see the header notes).
     // GPT-6.1 Terra is OpenAI's new cost-efficient tier under GPT-6.1 Sol —
     // the cheapest top-10 model on the index at $0.96 per task — read at the
@@ -740,6 +783,204 @@ pub(crate) const SAME_WEIGHTS_SKU_ALIASES: &[(&str, &str, &str)] = &[
     ),
 ];
 
+/// Old-index (v4.3.2) → v5.0 score re-anchoring, fitted on the 39 families
+/// AA measured on both indices. v5's harder, more private task sets cut the
+/// sub-frontier hardest — small models fell to ~0.5x their old score, the
+/// open-weights mid frontier to ~0.65–0.75x — while the current proprietary
+/// flagships held (0.84–1.0x). These piecewise-linear hinges trace that
+/// shape; on the dual-measured cohort the fit's residuals have a ~1.5-point
+/// median, which is plenty for a prior carrying ~0.07–0.18 of posterior
+/// weight. Estimates only ever feed the composite prior (see
+/// [`PRE_V5_READS`]); they never plot on the board.
+pub(crate) const PRE_V5_SCALE_HINGES: &[(f64, f64)] = &[
+    (0.0, 0.0),
+    (13.0, 6.0),  // Command A+ 13→6: the small-model floor
+    (25.0, 12.0), // Inkling 25→12, Nemotron 3 Ultra 23.4→12
+    (36.0, 22.0), // DeepSeek V4 Pro 0813 36→23
+    (46.0, 32.0), // GLM-5.3 / DeepSeek 1017 / Grok 4.7-class 45-46→32-34
+    (52.0, 41.0), // Muse Wonder 52→43 (the current flagships that held sit
+    // above every family this estimates)
+    (58.0, 58.0), // the leader held: Opus 5.5 58→58
+];
+
+/// Re-anchor one pre-v5 (v4.3.2) Intelligence read onto the v5.0 scale by
+/// linear interpolation through [`PRE_V5_SCALE_HINGES`]. Monotone by
+/// construction, clamped to the 0–58 anchor span.
+pub(crate) fn reanchor_pre_v5_score(score: f64) -> f64 {
+    let hinges = PRE_V5_SCALE_HINGES;
+    if score <= hinges[0].0 {
+        return hinges[0].1;
+    }
+    for window in hinges.windows(2) {
+        let (lo_score, lo_est) = window[0];
+        let (hi_score, hi_est) = window[1];
+        if score <= hi_score {
+            let t = (score - lo_score) / (hi_score - lo_score);
+            return lo_est + t * (hi_est - lo_est);
+        }
+    }
+    hinges[hinges.len() - 1].1
+}
+
+/// Last pre-v5 (v4.3.2) Intelligence read for every family the v5 index has
+/// not re-measured — the reads the 2026-10-23 full-table re-read left behind
+/// when the v5.0 rebaseline swept them to `None`. Each becomes a disclosed
+/// `~est` composite prior via [`reanchor_pre_v5_score`]; the row itself
+/// stays unrated (dash) until AA publishes a v5 value, at which point the
+/// live overlay replaces both the dash and the estimate. Entries must name
+/// `None` rows of [`SNAPSHOT_ROWS`] (a family re-rated on v5 drops its
+/// entry here); the reads include the `~proxy`/`~est` values of the old
+/// index, which is fine — an estimate of an estimate still beats inventing
+/// a cohort-median standing.
+pub(crate) const PRE_V5_READS: &[(&str, f64)] = &[
+    ("Meta: Muse Spark 1.2 Contributor", 39.8),
+    ("inclusionAI: Ling 3.1 Flash", 41.0),
+    ("GLM-5.3-FlashX", 41.9),
+    ("Inception: Mercury 2.5", 12.0),
+    ("GPT-6 Sol", 48.0),
+    ("GPT-6 Sol Pro", 48.0),
+    ("Claude Opus 5", 50.7),
+    ("Claude Fable 5", 49.7),
+    ("GPT-5.6 Sol", 47.1),
+    ("Grok 4.6", 44.4),
+    ("Kimi K3", 43.8),
+    ("GLM-5.3-Flash", 41.9),
+    ("Qwen3.8 2.4T A95B", 40.0),
+    ("GPT-5.6 Terra", 42.3),
+    ("Muse Spark 1.2", 39.8),
+    ("DeepSeek V4.1 Flash", 39.0),
+    ("Gemini 3.7 Flash", 39.4),
+    ("Gemini 3.6 Flash", 34.3),
+    ("Grok 4.5", 39.1),
+    ("Claude Sonnet 5", 38.4),
+    ("GPT-5.5", 38.0),
+    ("Claude Opus 4.8", 42.0),
+    ("Claude Opus 4.7", 40.7),
+    ("Muse Spark 1.1", 34.3),
+    ("GLM-5.2", 34.0),
+    ("GPT-5.4", 39.0),
+    ("GPT-5.4 Mini", 24.0),
+    ("GPT-5.4 Nano", 21.2),
+    ("GPT-5.2", 30.4),
+    ("GPT-5 Mini", 17.4),
+    ("DeepSeek V4 Flash 0731", 34.0),
+    ("GPT-5.6 Luna", 37.5),
+    ("Gemini 3.5 Flash", 33.0),
+    ("Gemini 3.1 Pro Preview", 30.4),
+    ("Gemini 3.1 Flash-Lite", 16.0),
+    ("Gemini 3 Flash Preview", 26.3),
+    ("Claude Sonnet 4.6", 24.7),
+    ("MiniMax-M2.7", 23.2),
+    ("MiniMax-M2.5", 22.8),
+    ("MiniMax-M2.1", 20.9),
+    ("MiniMax-M2", 18.6),
+    ("Kimi K2.6", 27.5),
+    ("Claude Opus 4.6", 26.4),
+    ("Kimi K2.7 Code", 26.3),
+    ("Kimi K2 Thinking", 22.0),
+    ("Kimi K2", 12.7),
+    ("MiMo-V2.5-Pro", 26.4),
+    ("MiMo-V2.5", 22.3),
+    ("Hy3", 25.0),
+    ("DeepSeek V4 Flash", 34.0),
+    ("GLM-5.1", 26.4),
+    ("GLM-5", 27.9),
+    ("GLM-4.7", 22.2),
+    ("GLM-4.7-Flash", 14.9),
+    ("GLM-4.6", 14.9),
+    ("GLM-4.5-Air", 11.1),
+    ("Grok 4.3", 25.4),
+    ("Grok 4.1 Fast", 11.0),
+    ("Grok 4", 22.0),
+    ("NVIDIA Nemotron 3.5 Lightning 30B", 13.0),
+    ("Claude 4.5 Sonnet", 19.3),
+    ("Claude Opus 4.5", 23.7),
+    ("Kimi K2.5", 23.0),
+    ("Qwen3.5 397B A17B", 18.0),
+    ("Qwen3.5 122B A10B", 16.2),
+    ("DeepSeek V3.2", 16.0),
+    ("DeepSeek V3.1", 13.7),
+    ("DeepSeek V3.1 Terminus", 13.9),
+    ("DeepSeek R1 0528", 13.1),
+    ("DeepSeek R1", 13.1),
+    ("Qwen3.6 27B", 21.0),
+    ("Qwen3.6 35B A3B", 18.0),
+    ("Qwen3.5 35B A3B", 19.3),
+    ("Qwen3 Next 80B A3B Instruct", 9.6),
+    ("Qwen3 Coder Next", 9.0),
+    ("Qwen3 Coder 480B", 11.9),
+    ("Qwen3 Coder 480B Turbo", 11.9),
+    ("Gemma 4 31B", 15.4),
+    ("Gemma 4 26B A4B", 16.7),
+    ("Claude 4.5 Haiku", 15.4),
+    ("GPT-5.5 Instant", 26.0),
+    ("gpt-oss-120b", 12.3),
+    ("gpt-oss-20b", 9.0),
+    ("Qwen3 235B A22B 2507", 12.0),
+    ("Mistral Small 3.2", 7.0),
+    ("Mistral Small 3.2 24B Instruct", 7.0),
+    ("Mistral Small 4", 11.0),
+    ("Mistral Large 3", 9.7),
+    ("Llama 4 Scout", 6.0),
+    ("Llama 3.3 70B", 7.7),
+    ("GPT-4o", 8.4),
+    ("GPT-4o Mini", 6.7),
+    ("GPT-5 Nano", 13.0),
+    ("GPT-5.2 Codex", 28.5),
+    ("GPT-5.3 Codex", 32.5),
+    ("GPT-5.6 Sol Pro", 47.1),
+    ("GPT-5.6 Terra Pro", 42.3),
+    ("GPT-5.6 Luna Pro", 37.5),
+    ("Gemini 2.5 Pro", 16.0),
+    ("Gemini 2.5 Flash", 9.9),
+    ("Grok 4.20 Beta", 25.7),
+    ("Grok Build 0.1", 27.2),
+    ("Grok Code Fast 1", 14.1),
+    ("GLM-4.7-Thinking", 22.2),
+    ("GLM-5 Turbo", 26.6),
+    ("GLM 5V Turbo", 23.0),
+    ("Gemma 3 27B", 4.9),
+    ("Gemma 3 12B", 3.8),
+    ("Gemma 3 4B", 4.8),
+    ("Gemma 4 E2B", 7.8),
+    ("Magistral Small 2509", 8.6),
+    ("Ministral 14B 3.0", 6.0),
+    ("Ministral 3 8B", 5.0),
+    ("Ministral 3B", 4.8),
+    ("Devstral 2 123B", 9.4),
+    ("NVIDIA Nemotron 3 Super 120B", 13.0),
+    ("NVIDIA Nemotron Cascade 2 30B", 11.7),
+    ("NVIDIA Nemotron 3 Nano 30B A3B", 8.9),
+    ("NVIDIA Nemotron Nano 12B v2", 6.0),
+    ("NVIDIA Nemotron Nano 9B v2", 6.8),
+    ("Qwen 3.7 Max", 29.0),
+    ("Qwen 3.7 Plus", 25.0),
+    ("Qwen3.5 Plus", 20.4),
+    ("Qwen3.5 Flash", 12.0),
+    ("Qwen 3.5 9B", 11.0),
+    ("Qwen3 VL 235B A22B", 10.0),
+    ("Qwen3 235B A22B Thinking 2507", 12.7),
+    ("Qwen3 32B", 7.2),
+    ("Qwen3 30B A3B", 7.6),
+    ("Qwen3 Coder 30B A3B Instruct", 9.6),
+    ("Mercury 2", 11.0),
+    ("Trinity Large Thinking", 10.9),
+];
+
+/// Exact-name lookup of a family's pre-v5 read.
+pub(crate) fn pre_v5_read(model: &str) -> Option<f64> {
+    PRE_V5_READS
+        .iter()
+        .find(|(name, _)| *name == model)
+        .map(|(_, score)| *score)
+}
+
+/// `39.0` renders "39", `44.9` stays "44.9" — for the row-name disclosure.
+fn trim_trailing_zero(value: f64) -> String {
+    let rendered = format!("{value:.1}");
+    rendered.strip_suffix(".0").unwrap_or(&rendered).to_owned()
+}
+
 pub(crate) fn artificial_analysis_snapshot() -> Vec<Benchmark> {
     SNAPSHOT_ROWS.iter()
         .map(|(model, score)| {
@@ -748,9 +989,10 @@ pub(crate) fn artificial_analysis_snapshot() -> Vec<Benchmark> {
             // provenance, but it carries NO score: a v4.3.2 number left on a
             // v5.0 scale would outrank genuinely measured models (the undated
             // DeepSeek V4.1 Flash, 39.0 on the old scale, outranked its own
-            // 1017 refresh at v5's 32.0). Unrated rows fall back to the
-            // composite's neutral prior, exactly like families AA never
-            // covered.
+            // 1017 refresh at v5's 32.0). Families the previous index DID
+            // measure keep that read as a re-anchored `~est` COMPOSITE prior
+            // (see PRE_V5_READS) — never a plotted score; the rest fall back
+            // to the composite's neutral prior like families AA never covered.
             let mut row = match score {
                 Some(score) => score_benchmark(
                     *model,
@@ -776,10 +1018,16 @@ pub(crate) fn artificial_analysis_snapshot() -> Vec<Benchmark> {
             let inherited = SAME_WEIGHTS_SKU_ALIASES.iter()
                 .find(|(sku, _, _)| *sku == *model)
                 .map(|(_, base, what)| (*base, *what));
-            let unrated = if score.is_none() {
-                " · unrated: no score published on this index"
+            let unrated = if score.is_some() {
+                String::new()
+            } else if let Some(old) = pre_v5_read(model) {
+                format!(
+                    " · unrated on this index; pre-v5 {} re-anchored ~{} as the composite prior",
+                    trim_trailing_zero(old),
+                    trim_trailing_zero(reanchor_pre_v5_score(old)),
+                )
             } else {
-                ""
+                " · unrated: no score published on this index".to_owned()
             };
             row.name = match inherited {
                 Some((base, what)) => format!(
@@ -850,7 +1098,10 @@ mod tests {
         // The reported regression: `deepseek-v4.1-flash` (no v5 measurement)
         // plotted above `DeepSeek V4.1 Flash 1017` (the better, measured
         // build). With the stale read gone, the unrated SKU has no score and
-        // the measured refresh is the only one on the board.
+        // the measured refresh is the only one on the board — and the
+        // re-anchored prior keeps the ordering honest too: the undated
+        // family's ~est (39.0 -> 25) sits below the 1017 refresh's measured
+        // 32 instead of above it.
         let rows = artificial_analysis_snapshot();
         let score_of = |name: &str| {
             rows.iter()
@@ -859,6 +1110,101 @@ mod tests {
         };
         assert_eq!(score_of("DeepSeek V4.1 Flash"), None);
         assert!(score_of("DeepSeek V4.1 Flash 1017").is_some());
+        let undated_est = reanchor_pre_v5_score(pre_v5_read("DeepSeek V4.1 Flash").unwrap());
+        assert!(
+            undated_est < score_of("DeepSeek V4.1 Flash 1017").unwrap(),
+            "the undated family's ~est prior ({undated_est}) must sit below its measured 1017 refresh"
+        );
+    }
+
+    #[test]
+    fn pre_v5_reads_name_unrated_rows_and_stay_unique() {
+        // The side table must only name `None` rows: a family re-rated on v5
+        // carries a real score, and a live estimate alongside it would be a
+        // second opinion the board never published.
+        let none_rows: std::collections::HashSet<&str> = SNAPSHOT_ROWS
+            .iter()
+            .filter(|(_, score)| score.is_none())
+            .map(|(model, _)| *model)
+            .collect();
+        let mut seen = std::collections::HashSet::new();
+        assert!(!PRE_V5_READS.is_empty());
+        for (model, old) in PRE_V5_READS {
+            assert!(
+                none_rows.contains(model),
+                "{model} carries a v5 score; its pre-v5 read must be dropped"
+            );
+            assert!(seen.insert(*model), "duplicate pre-v5 read for {model}");
+            assert!(
+                old.is_finite() && *old > 0.0 && *old < 58.0,
+                "{model}: implausible pre-v5 read {old}"
+            );
+        }
+    }
+
+    #[test]
+    fn pre_v5_reanchor_never_inflates_a_read() {
+        // The whole point of the transform: v5 compressed the scale below the
+        // leader, so every re-anchored estimate must land strictly below its
+        // pre-v5 read (and inside the v5 span), with the flagship-hold
+        // segment the only place the curve flattens.
+        for step in 1..57 {
+            let old = f64::from(step);
+            let est = reanchor_pre_v5_score(old);
+            assert!(
+                est < old,
+                "reanchor({old}) = {est} must fall below the read"
+            );
+            assert!((0.0..=58.0).contains(&est));
+        }
+        // Spot-check the families that drove the reported overranking.
+        let cases = [
+            ("Grok 4.5", 39.1, 26.0),
+            ("GLM-5.2", 34.0, 21.0),
+            ("Gemma 4 31B", 15.4, 8.0),
+            ("Kimi K2.6", 27.5, 15.0),
+        ];
+        for (model, old, ceiling) in cases {
+            let est = reanchor_pre_v5_score(pre_v5_read(model).unwrap());
+            assert_eq!(pre_v5_read(model), Some(old), "{model}: read drifted");
+            assert!(
+                est <= ceiling,
+                "{model}: ~est {est} exceeds the {ceiling} ceiling (its measured successor class)"
+            );
+        }
+        // And the estimate must stay below each family's measured successor
+        // where v5 did re-measure the line.
+        assert!(reanchor_pre_v5_score(39.1) < 34.0); // Grok 4.5 below Grok 4.7's 34
+        assert!(reanchor_pre_v5_score(34.0) < 32.0); // GLM-5.2 below GLM-5.3's 32
+    }
+
+    #[test]
+    fn pre_v5_reads_disclose_in_the_row_name() {
+        // Every carried read must surface in the rendered row name so the
+        // dash-plus-prior split is visible wherever the row is shown.
+        let rows = artificial_analysis_snapshot();
+        for (model, _) in PRE_V5_READS {
+            let row = rows
+                .iter()
+                .find(|r| r.slug == *model)
+                .unwrap_or_else(|| panic!("{model} row missing"));
+            assert!(
+                row.name.contains("pre-v5") && row.name.contains("composite prior"),
+                "{} must disclose its carried read: {}",
+                model,
+                row.name
+            );
+            assert!(row.name.contains("unrated"), "{}", row.name);
+        }
+        let grok = rows
+            .iter()
+            .find(|r| r.slug == "Grok 4.5")
+            .expect("Grok 4.5 row");
+        assert!(
+            grok.name.contains("pre-v5 39.1 re-anchored ~25.1"),
+            "{}",
+            grok.name
+        );
     }
 
     #[test]

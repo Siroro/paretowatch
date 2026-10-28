@@ -145,7 +145,7 @@ pub(crate) fn benchmarks_for_source(
         mode
     };
     let collapsed = collapse_benchmark_rows(rows, effective_mode, common_scaffold);
-    // Some useful leaderboards (notably Revelo Code Index) only publish
+    // Some useful leaderboards (notably SWE-Bench Pro) publish only
     // model+agent rows. In "Model capability" mode, do not make
     // those sources appear completely unmapped: fall back to the best observed
     // harness row per canonical model and keep the upstream agent in metadata.
@@ -192,7 +192,7 @@ mod tests {
     fn agent_only_benchmarks_still_map_in_model_capability_mode() {
         let mut sets = HashMap::new();
         sets.insert(
-            BenchmarkSource::ReveloCodeIndex,
+            BenchmarkSource::SWEBenchPro,
             vec![score_benchmark(
                 "gpt-5.6-sol",
                 51.2,
@@ -202,7 +202,7 @@ mod tests {
             )],
         );
         let rows = benchmarks_for_source(
-            BenchmarkSource::ReveloCodeIndex,
+            BenchmarkSource::SWEBenchPro,
             &sets,
             ComparisonMode::ModelCapability,
             "mini-SWE-agent",

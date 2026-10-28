@@ -343,11 +343,19 @@ mod tests {
         let hit = aa_speed_for_quote(&snapshot.entries, &quote).unwrap();
         assert!((hit.median_tps.unwrap() - 72.5).abs() < 1e-9);
 
-        // Fuzzy: same creator, one token short of the key.
+        // Fuzzy: a dated listing of the SAME family still joins through the
+        // release-tag fallback.
+        let mut dated = test_quote("anthropic/claude-opus-5-5-0528", 1.0, true);
+        dated.display_name = "Claude Opus 5.5 0528".into();
+        dated.creator = "Anthropic".into();
+        assert!(aa_speed_for_quote(&snapshot.entries, &dated).is_some());
+
+        // A DIFFERENT model never joins just because set-deduped tokens
+        // collapse `opus 5` onto `opus 5 5` (Opus 5 vs Opus 5.5).
         let mut near = test_quote("anthropic/claude-opus-5", 1.0, true);
         near.display_name = "Claude Opus 5".into();
         near.creator = "Anthropic".into();
-        assert!(aa_speed_for_quote(&snapshot.entries, &near).is_some());
+        assert!(aa_speed_for_quote(&snapshot.entries, &near).is_none());
 
         // Different creator never fuzzy-joins.
         let mut stranger = test_quote("acme-opus-5-5-turbo", 1.0, true);

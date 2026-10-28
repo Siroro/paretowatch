@@ -576,7 +576,7 @@ impl ParetoWatchApp {
         if joined.is_empty() {
             if self.cost_basis == CostBasis::EstimatedPerTask && benchmarks_present {
                 ui.label(format!(
-                    "{} has no matched rows with usable tokens-per-task telemetry for this comparison mode. Switch to $/1M or choose SWE-rebench, DeepSWE, Terminal-Bench, or a composite model with one of those profiles.",
+                    "{} has no matched rows with usable tokens-per-task telemetry for this comparison mode. Switch to $/1M or choose DeepSWE, Terminal-Bench, or a composite model with one of those profiles.",
                     self.benchmark_source.label()
                 ));
                 return;
@@ -702,12 +702,9 @@ impl ParetoWatchApp {
             BenchmarkSource::ArtificialAnalysisSnapshot => format!(
                 "AA Intelligence Index (live over {ARTIFICIAL_ANALYSIS_SNAPSHOT_DATE} snapshot)"
             ),
-            BenchmarkSource::SWERebench => "SWE-rebench Result@1".to_owned(),
-            BenchmarkSource::TerminalBench3 => "Terminal-Bench 3.0 accuracy".to_owned(),
             BenchmarkSource::TerminalBench4 => "Terminal-Bench 4.0 accuracy".to_owned(),
             BenchmarkSource::DeepSWE11 => "DeepSWE v1.1 pass@1".to_owned(),
             BenchmarkSource::LiveBench => format!("LiveBench {} score", self.benchmark_metric.label()),
-            BenchmarkSource::ReveloCodeIndex => "Revelo Code Index".to_owned(),
             BenchmarkSource::DesignArena => "Design Arena Elo".to_owned(),
             BenchmarkSource::FrontierCode => "FrontierCode 1.1 mergeability score".to_owned(),
             BenchmarkSource::FrontierCode2 => "FrontierCode 2.0 mergeability score".to_owned(),
@@ -1596,11 +1593,8 @@ fn benchmark_metric_note(source: BenchmarkSource) -> Option<&'static str> {
         BenchmarkSource::ArtificialAnalysisSnapshot => {
             Some("Metric: Intelligence Index (live + snapshot fallback)")
         }
-        BenchmarkSource::SWERebench => Some("Metric: Result@1"),
-        BenchmarkSource::TerminalBench3 => Some("Metric: accuracy"),
         BenchmarkSource::TerminalBench4 => Some("Metric: accuracy"),
         BenchmarkSource::DeepSWE11 => Some("Metric: pass@1"),
-        BenchmarkSource::ReveloCodeIndex => Some("Metric: Code Index"),
         BenchmarkSource::DesignArena => Some("Metric: Design Elo (blinded votes)"),
         BenchmarkSource::FrontierCode => Some("Metric: mergeability score"),
         BenchmarkSource::FrontierCode2 => Some("Metric: mergeability score"),

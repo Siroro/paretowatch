@@ -1,7 +1,7 @@
 //! SRE Bench (vals.ai) — agentic software reverse engineering: models must
 //! figure out what a real-world, contamination-free binary does without its
 //! source code. Vals runs every model under its own standardized protocol,
-//! so like SWE-rebench the board is fully weighted in both composite
+//! so like DeepSWE the board is fully weighted in both composite
 //! flavors rather than demoted as harness-specific.
 //!
 //! The benchmark page server-renders an accessibility table but the real
