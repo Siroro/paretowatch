@@ -344,10 +344,13 @@ mod tests {
         assert!((sol_pro.agentic_coding.unwrap() - 53.9).abs() < 1e-9);
         assert!(sol_pro.name.contains("inherited from GPT-6.1 Sol"));
         assert!(sol_pro.name.contains("live 2026-10-23"));
-        // A family with no live row keeps its bundled snapshot read.
+        // A family with no live row keeps its bundled snapshot read — and a
+        // family the current index has not re-measured stays unrated rather
+        // than exposing a previous index's scale (GPT-5.2 is one of the
+        // snapshot's `None` rows since v5.0).
         let legacy = by_slug("GPT-5.2");
         assert!(legacy.name.contains("snapshot"));
-        assert!((legacy.agentic_coding.unwrap() - 30.4).abs() < 1e-9);
+        assert_eq!(legacy.agentic_coding, None);
         // New current models join with a live tag.
         let step = rows
             .iter()

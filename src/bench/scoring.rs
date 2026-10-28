@@ -4,7 +4,7 @@
 
 use std::collections::HashMap;
 
-use super::{benchmarks_for_source, collapse_benchmark_rows};
+use super::benchmarks_for_source;
 use crate::artificial_analysis_snapshot::SAME_WEIGHTS_SKU_ALIASES;
 use crate::bench::matching::{benchmark_model_key, best_benchmark_match};
 use crate::types::{
@@ -288,14 +288,16 @@ pub(crate) fn anchored_aa_percentiles(
 pub(crate) fn aa_anchor_keys(
     sets: &HashMap<BenchmarkSource, Vec<Benchmark>>,
 ) -> Option<std::collections::HashSet<String>> {
-    let rows = collapse_benchmark_rows(
-        sets.get(&BenchmarkSource::ArtificialAnalysisSnapshot)?,
-        ComparisonMode::ModelCapability,
-        "",
-    );
+    // Membership is "AA covers this family", not "AA has a CURRENT-scale
+    // score for it". Unrated rows (families AA has not re-measured under the
+    // current index, see the snapshot's `None` rows) still anchor: dropping
+    // them would shrink the cohort every board ranks within, and models that
+    // are not in the cohort get NO board percentile at all — unrating a stale
+    // AA number must not delete a model's harness evidence. Their own prior
+    // still stays neutral, because the AA score set is what feeds the prior.
+    let rows = sets.get(&BenchmarkSource::ArtificialAnalysisSnapshot)?;
     let keys: std::collections::HashSet<String> = rows
         .iter()
-        .filter(|row| row.agentic_coding.is_some_and(|s| s.is_finite()))
         .map(|row| benchmark_model_key(&row.slug))
         .filter(|key| !key.is_empty())
         .collect();

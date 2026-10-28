@@ -284,13 +284,22 @@
 //! 44.9 → 32, DeepSeek V4.1 Flash 1017 45 → 32, Qwen3.8 Max 0902 45.4 → 34),
 //! widening AA's open-vs-proprietary gap from 3 to 12 points.
 //! `AA_CALIBRATION_POINTS` was recalibrated in the same change. v5 publishes
-//! scores for only ~75 models so far: every family with a v5 measurement was
-//! re-read from the full leaderboard (integer displays; the live payload
-//! keeps one-decimal precision underneath), while families the v5 board
-//! shows as dashes — or hides entirely behind null model pages, spot-checked
-//! on Kimi K3 and GPT-6 Sol — keep their last v4.3.2-scale read until AA
-//! publishes (the live overlay replaces them automatically as it does), so
-//! the snapshot is deliberately mixed-scale below the v5-rated frontier.
+//! scores for only ~75 models so far, so every row was swept against its own
+//! AA model page: 40 families carry a real v5 read (including two the
+//! leaderboard hides but whose pages publish a value — Muse Spark 1.3 at 36
+//! and the 0902 canonical Qwen3.8 Max page at 34) and every other row is
+//! now `None`. **Unrated rows carry no score**, because leaving the previous
+//! index's number in place is not a neutral omission — it is a different
+//! measurement scale presented as the current one, and it distorts exactly
+//! the comparisons the chart exists for: the undated DeepSeek V4.1 Flash
+//! (39.0 on the v4.3.2 scale) outranked its own better 1017 refresh (32.0 on
+//! v5.0) purely because one had been re-measured and the other had not.
+//! `None` rows keep their identity, aliases and provenance but emit no
+//! score: they fall back to the composite's neutral prior and, if another
+//! board evaluates them, keep that evidence (the anchor cohort is membership
+//! by family, not by current-scale score). AA's own leaderboard does the
+//! same — unmeasured models show a dash, never an old number — and the live
+//! overlay fills a row back in the moment AA publishes a v5 value.
 //! GPT-6.1 Terra — OpenAI's new cost-efficient tier, the cheapest top-10
 //! model at $0.96 per index task — entered at 51 (max), between GPT-6.1 Sol
 //! (55) and Gemini 4 Argon (50), ahead of its Surplus listing (the Gemini 4
@@ -338,7 +347,7 @@ pub(crate) const ARTIFICIAL_ANALYSIS_SNAPSHOT_VERSION: &str = "v5.0";
 /// `(model name, AA Intelligence score)` pairs, one representative row per
 /// family. Names should mirror Surplus display names so exact-key joins hit
 /// before fuzzy matching has to.
-pub(crate) const SNAPSHOT_ROWS: &[(&str, f64)] = &[
+pub(crate) const SNAPSHOT_ROWS: &[(&str, Option<f64>)] = &[
     // Added 2026-10-28 for the v5.0 rebaseline (see the header notes).
     // GPT-6.1 Terra is OpenAI's new cost-efficient tier under GPT-6.1 Sol —
     // the cheapest top-10 model on the index at $0.96 per task — read at the
@@ -349,8 +358,8 @@ pub(crate) const SNAPSHOT_ROWS: &[(&str, f64)] = &[
     // re-read 55 → 46: the v5 scale pushed the open-weights frontier down
     // (now 12 points under the leader, up from 3), and its agentic gains
     // (Terminal-Bench 4.0 67%, AA-Briefcase 1,846 Elo) live on live boards.
-    ("GPT-6.1 Terra", 51.0),
-    ("Kimi K3.1 Pro", 46.0), // re-read 2026-10-28 (v5.0): was 55.0 at the 2026-10-24 entry
+    ("GPT-6.1 Terra", Some(51.0)),
+    ("Kimi K3.1 Pro", Some(46.0)), // re-read 2026-10-28 (v5.0): was 55.0 at the 2026-10-24 entry
     // Added in the second 2026-10-23 bump (the full-table re-read; see the
     // header notes). DeepSeek V4.1 Flash Uncensored is dealignai's uncensored
     // finetune of the 1017 build (Surplus listed it 2026-10-21; "origin
@@ -366,9 +375,9 @@ pub(crate) const SNAPSHOT_ROWS: &[(&str, f64)] = &[
     // the only effort measured, so the row reads that. Inkling Small (26 →
     // 13 under v5.0) is a separate SKU with no Surplus listing and gets no
     // row.
-    ("DeepSeek V4.1 Flash Uncensored", 32.0), // ~proxy: the 1017 build with refusals removed; AA rates no page
-    ("MiMo-V2.6-Flash", 27.0),
-    ("Thinking Machines: Inkling", 12.0), // xhigh, the only effort AA measured; `thinking machines` is not a stripped creator prefix
+    ("DeepSeek V4.1 Flash Uncensored", Some(32.0)), // ~proxy: the 1017 build with refusals removed; AA rates no page
+    ("MiMo-V2.6-Flash", Some(27.0)),
+    ("Thinking Machines: Inkling", Some(12.0)), // xhigh, the only effort AA measured; `thinking machines` is not a stripped creator prefix
     // Added 2026-10-23 for AA's 2026-10-22 release; re-read under v5.0
     // (2026-10-28). Ling 3.1 Flash 1019 is the 1019 dated refresh of
     // inclusionAI's Flash family; like the other dated refreshes the release
@@ -381,8 +390,8 @@ pub(crate) const SNAPSHOT_ROWS: &[(&str, f64)] = &[
     // evidence through — until now the SKU joined the 1.2 rows only through
     // the 0.80 fuzzy bar, one rename away from the 1.3 Contributor split.
     // Both rows keep their v4.3.2 reads: v5.0 has no Muse Spark measurement.
-    ("inclusionAI: Ling 3.1 Flash 1019", 29.0),
-    ("Meta: Muse Spark 1.2 Contributor", 39.8), // same weights; see SAME_WEIGHTS_SKU_ALIASES
+    ("inclusionAI: Ling 3.1 Flash 1019", Some(29.0)),
+    ("Meta: Muse Spark 1.2 Contributor", None), // same weights; see SAME_WEIGHTS_SKU_ALIASES
     // Added 2026-10-20 for the Surplus listings of 2026-10-18..10-20;
     // re-read 2026-10-28 under v5.0 except where noted. MiniMax M3.1 Flash
     // re-read 43 → 29 (single measurement). Qwen3.8 Max (0902) reads the
@@ -401,12 +410,12 @@ pub(crate) const SNAPSHOT_ROWS: &[(&str, f64)] = &[
     // but `flashx` cannot be a stripped deployment token because that would
     // collapse the key onto GLM-5.3, the wrong base — and GLM-5.3-Flash has
     // no v5 measurement, so both rows keep their v4.3.2 reads.
-    ("MiniMax M3.1 Flash", 29.0),
-    ("Qwen3.8 Max (0902)", 34.0),
-    ("inclusionAI: Ling 3.1 Flash", 41.0), // v5.0 shows the undated build as a dash; read retained
-    ("Reflection: Beam 1.0 501B A23B", 18.0),
-    ("Muse Spark Open", 25.0),
-    ("GLM-5.3-FlashX", 41.9), // same checkpoint; see SAME_WEIGHTS_SKU_ALIASES (AA rates no FlashX page; v5.0 dash on Flash)
+    ("MiniMax M3.1 Flash", Some(29.0)),
+    ("Qwen3.8 Max (0902)", Some(34.0)),
+    ("inclusionAI: Ling 3.1 Flash", None), // not re-measured on v5.0 (dash); unrated (was 41.0 on v4.3.2)
+    ("Reflection: Beam 1.0 501B A23B", Some(18.0)), // re-read 2026-10-28 (v5.0): Beam 1.0 page 17.73
+    ("Muse Spark Open", Some(25.0)),
+    ("GLM-5.3-FlashX", None), // same checkpoint; see SAME_WEIGHTS_SKU_ALIASES (AA rates no FlashX page; v5.0 dash on Flash)
     // Added 2026-10-17 for the Surplus listings of 2026-10-15..10-17;
     // re-read 2026-10-28 under v5.0. DeepSeek V4.1 Flash 1017 is the 1017
     // dated refresh of the V4.1 Flash family; like the 0731 build of V4
@@ -416,8 +425,8 @@ pub(crate) const SNAPSHOT_ROWS: &[(&str, f64)] = &[
     // generation's Super tier with native vision input; re-read 26 → 14.
     // Mistral Large 4's listing priced its matrix at $0.0000 (100%-off
     // launch window) and joins its Preview-read row below.
-    ("DeepSeek V4.1 Flash 1017", 32.0),
-    ("NVIDIA Nemotron 3.5 Super VL", 14.0),
+    ("DeepSeek V4.1 Flash 1017", Some(32.0)),
+    ("NVIDIA Nemotron 3.5 Super VL", Some(14.0)),
     // Added 2026-10-15 for the Surplus listings of 2026-10-07..10-15;
     // re-read 2026-10-28 under v5.0. Claude Haiku 5.5 re-read 43 → 36 (max —
     // the same page configuration its Sonnet/Opus 5.5 siblings use); its
@@ -435,15 +444,15 @@ pub(crate) const SNAPSHOT_ROWS: &[(&str, f64)] = &[
     // Argon's general listing (2026-10-14) and the "Meta: Muse Spark 1.3"
     // SKU join existing rows via creator-prefix stripping; Muse Spark 1.3
     // keeps its v4.3.2 read (no v5 measurement yet).
-    ("Claude Haiku 5.5", 36.0),
-    ("Abliterated Large V2", 32.0), // ~proxy: GLM-5.3 with refusal directions removed; AA rates no page
-    ("Muse Wonder", 43.0),
-    ("Mistral Large 4", 25.0), // Preview read: the only version AA rates
+    ("Claude Haiku 5.5", Some(36.0)),
+    ("Abliterated Large V2", Some(32.0)), // ~proxy: GLM-5.3 with refusal directions removed; AA rates no page
+    ("Muse Wonder", Some(43.0)),
+    ("Mistral Large 4", Some(25.0)), // Preview read: the only version AA rates
     // Added 2026-09-30 (second same-day bump), re-read 2026-10-28 under
     // v5.0. Gemini 4 Argon re-read 53 → 50 at high reasoning — still the
     // highest effort Argon exposes. `argon` is a codename, not a stripped
     // deployment token, so the key joins nothing else.
-    ("Gemini 4 Argon", 50.0),
+    ("Gemini 4 Argon", Some(50.0)),
     // Added 2026-09-30 for the Surplus listings of 2026-09-29..09-30;
     // re-read 2026-10-28 under v5.0. GPT-6.1 Sol re-read 52 → 55 (max
     // effort) — the v5 scale now places it alongside GPT-6 Astra's 57, well
@@ -455,17 +464,17 @@ pub(crate) const SNAPSHOT_ROWS: &[(&str, f64)] = &[
     // creator prefix, same as Cohere); its v5 read is a dash, so the
     // v4.3.2 read is retained. Seed-2.0-Code has no AA page and is unrated —
     // see the header notes.
-    ("GPT-6.1 Sol", 55.0),
-    ("GPT-6.1 Sol Pro", 55.0), // same weights as GPT-6.1 Sol; see SAME_WEIGHTS_SKU_ALIASES
-    ("Inception: Mercury 2.5", 12.0),
+    ("GPT-6.1 Sol", Some(55.0)),
+    ("GPT-6.1 Sol Pro", Some(55.0)), // same weights as GPT-6.1 Sol; see SAME_WEIGHTS_SKU_ALIASES
+    ("Inception: Mercury 2.5", None),
     // Added 2026-09-29 for the Surplus listings of 2026-09-23..09-29;
     // re-read 2026-10-28 under v5.0. Claude Sonnet 5.5 re-read 56 → 54
     // (adaptive reasoning at max effort with default fallback — the same
     // page configuration Opus 5.5 was read at). Command A+ re-read 13 → 6.
     // The Qwen3.8 Omni Flash row that ~proxied its text sibling was removed
     // on 2026-10-23 when AA deleted the sibling's page.
-    ("Claude Sonnet 5.5", 54.0),
-    ("Cohere: Command A+", 6.0),
+    ("Claude Sonnet 5.5", Some(54.0)),
+    ("Cohere: Command A+", Some(6.0)),
     // Added 2026-09-22 for the Surplus listings of 2026-09-20..09-22; the
     // v5.0 rebaseline re-read these rows where AA measures them. Claude Opus
     // 5.5 stayed the AA leader at 58 through the v5.0 rebaseline. GPT-6 Sol
@@ -475,184 +484,184 @@ pub(crate) const SNAPSHOT_ROWS: &[(&str, f64)] = &[
     // run at 35; the row stays xhigh per the no-max policy). MiMo-V2.6-Pro
     // re-read 46 → 30; the UltraSpeed SKU and the V2.6-Flash row are covered
     // by the header notes. GPT-6 Luna re-read 38 → 28.
-    ("Claude Opus 5.5", 58.0),
-    ("GPT-6 Sol", 48.0),     // v5.0 dash (page reads null); v4.3.2 read retained
-    ("GPT-6 Sol Pro", 48.0), // same weights as GPT-6 Sol; see SAME_WEIGHTS_SKU_ALIASES
-    ("Grok 4.7", 34.0),      // xhigh; re-read 2026-10-28 (v5.0): was 46.0
-    ("MiMo-V2.6-Pro", 30.0),
-    ("GPT-6 Luna", 28.0),     // re-read 2026-10-28 (v5.0): was 38.0
-    ("GPT-6 Luna Pro", 28.0), // same weights as GPT-6 Luna; see SAME_WEIGHTS_SKU_ALIASES
+    ("Claude Opus 5.5", Some(58.0)),
+    ("GPT-6 Sol", None), // not re-measured on v5.0 (page reads null); unrated (was 48.0 on v4.3.2)
+    ("GPT-6 Sol Pro", None), // same weights as GPT-6 Sol; see SAME_WEIGHTS_SKU_ALIASES
+    ("Grok 4.7", Some(34.0)), // xhigh; re-read 2026-10-28 (v5.0): was 46.0
+    ("MiMo-V2.6-Pro", Some(30.0)),
+    ("GPT-6 Luna", Some(28.0)),     // re-read 2026-10-28 (v5.0): was 38.0
+    ("GPT-6 Luna Pro", Some(28.0)), // same weights as GPT-6 Luna; see SAME_WEIGHTS_SKU_ALIASES
     // Added 2026-09-19 for the Surplus listings of 2026-09-03..09-11;
     // re-read 2026-10-28 under v5.0 where AA measures the family. GPT-6
     // Astra re-read 52.8 → 57 (max), closing to one point under the leader.
     // Claude Fable 5.1 re-read 53.4 → 49 (max with fallback). DeepSeek V4.1
-    // Flash is the 09-10 refresh (no v5 measurement; read retained). Muse
-    // Spark 1.3 Contributor is Meta's contributor-licensed SKU of the 1.3
-    // weights, which AA does not rate separately, so it ~proxies the base
-    // row's retained read like its base.
-    ("Claude Fable 5.1", 49.0),
-    ("GPT-6 Astra", 57.0),
-    ("Claude Opus 5", 50.7),
-    ("Claude Fable 5", 49.7),
-    ("GPT-5.6 Sol", 47.1),
-    ("Grok 4.6", 44.4),
-    ("Kimi K3", 43.8),
-    ("GLM-5.3", 32.0),
-    ("GLM-5.3-Flash", 41.9), // v5.0 dash; v4.3.2 read retained (the FlashX proxy above follows it)
-    ("Qwen3.8 Max", 45.4),
-    ("Qwen3.8 2.4T A95B", 40.0),
-    ("GPT-5.6 Terra", 42.3),
-    ("Muse Spark 1.3", 48.0), // re-read 2026-10-15: the Wonder launch re-measured max at 48 (was 45.2 v4.3)
-    ("Meta: Muse Spark 1.3 Contributor", 48.0), // same weights; see SAME_WEIGHTS_SKU_ALIASES (AA rates no Contributor page)
-    ("Muse Spark 1.2", 39.8),
-    ("DeepSeek V4.1 Flash", 39.0), // re-read 2026-10-23: page drifted a point under the 0910 build's 39.5 v4.3 read
-    ("Gemini 3.8 Flash", 31.0),    // re-read 2026-10-28 (v5.0): was 41.2
-    ("Gemini 3.7 Flash", 39.4),
-    ("Gemini 3.6 Flash", 34.3),
-    ("Grok 4.5", 39.1),
-    ("Claude Sonnet 5", 38.4),
-    ("GPT-5.5", 38.0),
-    ("Claude Opus 4.8", 42.0),
-    ("Claude Opus 4.7", 40.7),
-    ("Muse Spark 1.1", 34.3),
-    ("Muse Glimmer 30B", 6.0),      // re-read 2026-10-28 (v5.0): was 17.0
-    ("DeepSeek V4 Pro 0813", 23.0), // re-read 2026-10-28 (v5.0): was 36.0
-    ("GLM-5.2", 34.0),
-    ("GPT-5.4", 39.0),
-    ("GPT-5.4 Mini", 24.0),
-    ("GPT-5.4 Nano", 21.2),
-    ("GPT-5.2", 30.4),
-    ("GPT-5 Mini", 17.4),
-    ("DeepSeek V4 Flash 0731", 34.0), // re-read 2026-10-23: the canonical page's 0731 measurement firmed at 34 (was 34.5 v4.3)
-    ("GPT-5.6 Luna", 37.5),
-    ("Gemini 3.5 Flash", 33.0),
-    ("Gemini 3.5 Flash Lite", 12.0), // re-read 2026-10-28 (v5.0): was 22.0
-    ("Gemini 3.1 Pro Preview", 30.4),
-    ("Gemini 3.1 Flash-Lite", 16.0),
-    ("Gemini 3 Flash Preview", 26.3),
-    ("Claude Sonnet 4.6", 24.7),
-    ("MiniMax-M3", 19.0), // re-read 2026-10-28 (v5.0): was 29.0
-    ("MiniMax-M2.7", 23.2),
-    ("MiniMax-M2.5", 22.8),
-    ("MiniMax-M2.1", 20.9),
-    ("MiniMax-M2", 18.6),
-    ("DeepSeek V4 Pro", 23.0), // re-read 2026-10-28 (v5.0): the canonical page measures the 0813 build, now at 23
-    ("Kimi K2.6", 27.5),
-    ("Claude Opus 4.6", 26.4),
-    ("Qwen3.8 27B", 20.0), // re-read 2026-10-28 (v5.0, xhigh): was 33.9
-    ("Kimi K2.7 Code", 26.3),
-    ("Kimi K2 Thinking", 22.0),
-    ("Kimi K2", 12.7),
-    ("MiMo-V2.5-Pro", 26.4),
-    ("MiMo-V2.5", 22.3),
-    ("Hy3", 25.0),
-    ("DeepSeek V4 Flash", 34.0), // re-read 2026-10-23: the canonical page now measures the 0731 build (was the undated read 24.6)
-    ("GLM-5.1", 26.4),
-    ("GLM-5", 27.9),
-    ("GLM-4.7", 22.2),
-    ("GLM-4.7-Flash", 14.9),
-    ("GLM-4.6", 14.9),
+    // Flash is the 09-10 refresh and has no v5 measurement, so it is unrated
+    // rather than carrying its old-scale read. Muse Spark 1.3 Contributor is
+    // Meta's contributor-licensed SKU of the 1.3 weights, which AA does not
+    // rate separately, so it ~proxies the base row's v5 read.
+    ("Claude Fable 5.1", Some(49.0)),
+    ("GPT-6 Astra", Some(57.0)),
+    ("Claude Opus 5", None),
+    ("Claude Fable 5", None),
+    ("GPT-5.6 Sol", None),
+    ("Grok 4.6", None),
+    ("Kimi K3", None),
+    ("GLM-5.3", Some(32.0)),
+    ("GLM-5.3-Flash", None), // not re-measured on v5.0 (dash); unrated (was 41.9 on v4.3.2), so the FlashX proxy above is unrated too
+    ("Qwen3.8 Max", Some(34.0)),
+    ("Qwen3.8 2.4T A95B", None),
+    ("GPT-5.6 Terra", None),
+    ("Muse Spark 1.3", Some(36.0)), // re-read 2026-10-28: the hidden page publishes v5 36.4 (was 48 on v4.3.2)
+    ("Meta: Muse Spark 1.3 Contributor", Some(36.0)), // same weights; see SAME_WEIGHTS_SKU_ALIASES (AA rates no Contributor page)
+    ("Muse Spark 1.2", None),
+    ("DeepSeek V4.1 Flash", None), // not re-measured on v5.0: the undated 0910 build has no current-scale score, so its v4.3.2 39.0 is NOT retained — it outranked the better 1017 refresh (32.0) purely on scale
+    ("Gemini 3.8 Flash", Some(31.0)), // re-read 2026-10-28 (v5.0): was 41.2
+    ("Gemini 3.7 Flash", None),
+    ("Gemini 3.6 Flash", None),
+    ("Grok 4.5", None),
+    ("Claude Sonnet 5", None),
+    ("GPT-5.5", None),
+    ("Claude Opus 4.8", None),
+    ("Claude Opus 4.7", None),
+    ("Muse Spark 1.1", None),
+    ("Muse Glimmer 30B", Some(6.0)), // re-read 2026-10-28 (v5.0): was 17.0
+    ("DeepSeek V4 Pro 0813", Some(23.0)), // re-read 2026-10-28 (v5.0): was 36.0
+    ("GLM-5.2", None),
+    ("GPT-5.4", None),
+    ("GPT-5.4 Mini", None),
+    ("GPT-5.4 Nano", None),
+    ("GPT-5.2", None),
+    ("GPT-5 Mini", None),
+    ("DeepSeek V4 Flash 0731", None), // not re-measured on v5.0; unrated (was 34.0 on v4.3.2)
+    ("GPT-5.6 Luna", None),
+    ("Gemini 3.5 Flash", None),
+    ("Gemini 3.5 Flash Lite", Some(12.0)), // re-read 2026-10-28 (v5.0): was 22.0
+    ("Gemini 3.1 Pro Preview", None),
+    ("Gemini 3.1 Flash-Lite", None),
+    ("Gemini 3 Flash Preview", None),
+    ("Claude Sonnet 4.6", None),
+    ("MiniMax-M3", Some(19.0)), // re-read 2026-10-28 (v5.0): was 29.0
+    ("MiniMax-M2.7", None),
+    ("MiniMax-M2.5", None),
+    ("MiniMax-M2.1", None),
+    ("MiniMax-M2", None),
+    ("DeepSeek V4 Pro", Some(23.0)), // re-read 2026-10-28 (v5.0): the canonical page measures the 0813 build, now at 23
+    ("Kimi K2.6", None),
+    ("Claude Opus 4.6", None),
+    ("Qwen3.8 27B", Some(20.0)), // re-read 2026-10-28 (v5.0, xhigh): was 33.9
+    ("Kimi K2.7 Code", None),
+    ("Kimi K2 Thinking", None),
+    ("Kimi K2", None),
+    ("MiMo-V2.5-Pro", None),
+    ("MiMo-V2.5", None),
+    ("Hy3", None),
+    ("DeepSeek V4 Flash", None), // not re-measured on v5.0; unrated (was 34.0 on v4.3.2)
+    ("GLM-5.1", None),
+    ("GLM-5", None),
+    ("GLM-4.7", None),
+    ("GLM-4.7-Flash", None),
+    ("GLM-4.6", None),
     // GLM-4.5 had a v4.1.1-era row (20.0); AA removed its model page before
     // v4.3, so the family is unrated now and falls back to the neutral prior.
-    ("GLM-4.5-Air", 11.1),
-    ("Grok 4.3", 25.4),
-    ("Grok 4.1 Fast", 11.0), // re-read 2026-10-23: AA retired the reasoning evaluation; only the non-reasoning run (11) remains, so the row falls back per the no-reasoning-run policy (was 17.9)
-    ("Grok 4", 22.0),
-    ("NVIDIA Nemotron 3 Ultra 550B A55B", 12.0), // re-read 2026-10-28 (v5.0): was 23.4; the board's short name aliases onto this row
-    ("NVIDIA Nemotron 3.5 Lightning 30B", 13.0),
-    ("Claude 4.5 Sonnet", 19.3),
-    ("Claude Opus 4.5", 23.7),
-    ("Kimi K2.5", 23.0),
-    ("Qwen3.5 397B A17B", 18.0),
-    ("Qwen3.5 122B A10B", 16.2),
-    ("DeepSeek V3.2", 16.0),
-    ("DeepSeek V3.1", 13.7),
-    ("DeepSeek V3.1 Terminus", 13.9),
+    ("GLM-4.5-Air", None),
+    ("Grok 4.3", None),
+    ("Grok 4.1 Fast", None), // not re-measured on v5.0; unrated (was 11.0 on v4.3.2)
+    ("Grok 4", None),
+    ("NVIDIA Nemotron 3 Ultra 550B A55B", Some(12.0)), // re-read 2026-10-28 (v5.0): was 23.4; the board's short name aliases onto this row
+    ("NVIDIA Nemotron 3.5 Lightning 30B", None),
+    ("Claude 4.5 Sonnet", None),
+    ("Claude Opus 4.5", None),
+    ("Kimi K2.5", None),
+    ("Qwen3.5 397B A17B", None),
+    ("Qwen3.5 122B A10B", None),
+    ("DeepSeek V3.2", None),
+    ("DeepSeek V3.1", None),
+    ("DeepSeek V3.1 Terminus", None),
     // AA folded the R1 0528 refresh into the base DeepSeek R1 page, so both
     // Surplus SKUs read the same v4.3 measurement (see
     // SAME_WEIGHTS_SKU_ALIASES).
-    ("DeepSeek R1 0528", 13.1),
-    ("DeepSeek R1", 13.1),
-    ("Qwen3.6 27B", 21.0),
-    ("Qwen3.6 35B A3B", 18.0),
-    ("Qwen3.5 35B A3B", 19.3),
-    ("Qwen3 Next 80B A3B Instruct", 9.6),
-    ("Qwen3 Coder Next", 9.0),
-    ("Qwen3 Coder 480B", 11.9),
-    ("Qwen3 Coder 480B Turbo", 11.9), // same weights served faster; see SAME_WEIGHTS_SKU_ALIASES
-    ("Gemma 4 31B", 15.4),
-    ("Gemma 4 26B A4B", 16.7),
-    ("Claude 4.5 Haiku", 15.4),
-    ("GPT-5.5 Instant", 26.0),
-    ("gpt-oss-120b", 12.3),
-    ("gpt-oss-20b", 9.0),
-    ("Qwen3 235B A22B 2507", 12.0),
-    ("Mistral Small 3.2", 7.0),
-    ("Mistral Small 3.2 24B Instruct", 7.0), // same model, open-weights listing name; see SAME_WEIGHTS_SKU_ALIASES
-    ("Mistral Small 4", 11.0),
-    ("Mistral Large 3", 9.7),
-    ("Llama 4 Scout", 6.0),
-    ("Llama 3.3 70B", 7.7),
+    ("DeepSeek R1 0528", None),
+    ("DeepSeek R1", None),
+    ("Qwen3.6 27B", None),
+    ("Qwen3.6 35B A3B", None),
+    ("Qwen3.5 35B A3B", None),
+    ("Qwen3 Next 80B A3B Instruct", None),
+    ("Qwen3 Coder Next", None),
+    ("Qwen3 Coder 480B", None),
+    ("Qwen3 Coder 480B Turbo", None), // same weights served faster; see SAME_WEIGHTS_SKU_ALIASES
+    ("Gemma 4 31B", None),
+    ("Gemma 4 26B A4B", None),
+    ("Claude 4.5 Haiku", None),
+    ("GPT-5.5 Instant", None),
+    ("gpt-oss-120b", None),
+    ("gpt-oss-20b", None),
+    ("Qwen3 235B A22B 2507", None),
+    ("Mistral Small 3.2", None),
+    ("Mistral Small 3.2 24B Instruct", None), // same model, open-weights listing name; see SAME_WEIGHTS_SKU_ALIASES
+    ("Mistral Small 4", None),
+    ("Mistral Large 3", None),
+    ("Llama 4 Scout", None),
+    ("Llama 3.3 70B", None),
     //
     // Backfill (re-read from the v4.3 model pages on 2026-09-19): remaining
     // Surplus catalog text models. `~proxy` rows reuse the closest variant AA
     // does rate.
     //
     // OpenAI
-    ("GPT-4o", 8.4),
-    ("GPT-4o Mini", 6.7),
-    ("GPT-5 Nano", 13.0),
-    ("GPT-5.2 Codex", 28.5),
-    ("GPT-5.3 Codex", 32.5),
-    ("GPT-5.6 Sol Pro", 47.1), // same weights as GPT-5.6 Sol; see SAME_WEIGHTS_SKU_ALIASES
-    ("GPT-5.6 Terra Pro", 42.3), // same weights as GPT-5.6 Terra; see SAME_WEIGHTS_SKU_ALIASES
-    ("GPT-5.6 Luna Pro", 37.5), // same weights as GPT-5.6 Luna; see SAME_WEIGHTS_SKU_ALIASES
+    ("GPT-4o", None),
+    ("GPT-4o Mini", None),
+    ("GPT-5 Nano", None),
+    ("GPT-5.2 Codex", None),
+    ("GPT-5.3 Codex", None),
+    ("GPT-5.6 Sol Pro", None), // same weights as GPT-5.6 Sol; see SAME_WEIGHTS_SKU_ALIASES
+    ("GPT-5.6 Terra Pro", None), // same weights as GPT-5.6 Terra; see SAME_WEIGHTS_SKU_ALIASES
+    ("GPT-5.6 Luna Pro", None), // same weights as GPT-5.6 Luna; see SAME_WEIGHTS_SKU_ALIASES
     // Google
-    ("Gemini 2.5 Pro", 16.0),
-    ("Gemini 2.5 Flash", 9.9),
+    ("Gemini 2.5 Pro", None),
+    ("Gemini 2.5 Flash", None),
     // xAI
-    ("Grok 4.20 Beta", 25.7),
-    ("Grok Build 0.1", 27.2),
-    ("Grok Code Fast 1", 14.1),
+    ("Grok 4.20 Beta", None),
+    ("Grok Build 0.1", None),
+    ("Grok Code Fast 1", None),
     // Z AI
     // GLM-4.7-Thinking's AA page was folded into the base GLM-4.7 page (see
     // SAME_WEIGHTS_SKU_ALIASES), so the SKU reads the base measurement.
-    ("GLM-4.7-Thinking", 22.2),
-    ("GLM-5 Turbo", 26.6),
-    ("GLM 5V Turbo", 23.0),
+    ("GLM-4.7-Thinking", None),
+    ("GLM-5 Turbo", None),
+    ("GLM 5V Turbo", None),
     // Meta — Llama 3.2 3B lost its AA page along with GLM-4.5; it was an
     // ~est row already and stays unrated under v4.3.
     // Gemma open models
-    ("Gemma 3 27B", 4.9),
-    ("Gemma 3 12B", 3.8),
-    ("Gemma 3 4B", 4.8),
-    ("Gemma 4 E2B", 7.8),
+    ("Gemma 3 27B", None),
+    ("Gemma 3 12B", None),
+    ("Gemma 3 4B", None),
+    ("Gemma 4 E2B", None),
     // Mistral family
-    ("Magistral Small 2509", 8.6),
-    ("Ministral 14B 3.0", 6.0),
-    ("Ministral 3 8B", 5.0),
-    ("Ministral 3B", 4.8),
-    ("Devstral 2 123B", 9.4),
+    ("Magistral Small 2509", None),
+    ("Ministral 14B 3.0", None),
+    ("Ministral 3 8B", None),
+    ("Ministral 3B", None),
+    ("Devstral 2 123B", None),
     // NVIDIA
-    ("NVIDIA Nemotron 3 Super 120B", 13.0),
-    ("NVIDIA Nemotron Cascade 2 30B", 11.7),
-    ("NVIDIA Nemotron 3 Nano 30B A3B", 8.9),
-    ("NVIDIA Nemotron Nano 12B v2", 6.0), // ~est: the VL Reasoning page is gone; the row reads the page's non-reasoning 6 (was 7.5)
-    ("NVIDIA Nemotron Nano 9B v2", 6.8),
+    ("NVIDIA Nemotron 3 Super 120B", None),
+    ("NVIDIA Nemotron Cascade 2 30B", None),
+    ("NVIDIA Nemotron 3 Nano 30B A3B", None),
+    ("NVIDIA Nemotron Nano 12B v2", None), // not re-measured on v5.0; unrated (was 6.0 on v4.3.2)
+    ("NVIDIA Nemotron Nano 9B v2", None),
     // Qwen
-    ("Qwen 3.7 Max", 29.0),
-    ("Qwen 3.7 Plus", 25.0),
-    ("Qwen3.5 Plus", 20.4),  // ~proxy: Qwen3.5 Omni Plus
-    ("Qwen3.5 Flash", 12.0), // ~proxy: Qwen3.5 Omni Flash (re-read 2026-10-23: source page 12)
-    ("Qwen 3.5 9B", 11.0),
-    ("Qwen3 VL 235B A22B", 10.0), // re-read 2026-10-23: the reasoning page is gone; only the instruct run (10) remains (was 13.4)
-    ("Qwen3 235B A22B Thinking 2507", 12.7),
-    ("Qwen3 32B", 7.2),
-    ("Qwen3 30B A3B", 7.6), // reasoning variant (instruct is lower)
-    ("Qwen3 Coder 30B A3B Instruct", 9.6),
+    ("Qwen 3.7 Max", None),
+    ("Qwen 3.7 Plus", None),
+    ("Qwen3.5 Plus", None),  // ~proxy: Qwen3.5 Omni Plus
+    ("Qwen3.5 Flash", None), // ~proxy: Qwen3.5 Omni Flash, itself unrated on v5.0 (was 12.0 on v4.3.2)
+    ("Qwen 3.5 9B", None),
+    ("Qwen3 VL 235B A22B", None), // not re-measured on v5.0; unrated (was 10.0 on v4.3.2)
+    ("Qwen3 235B A22B Thinking 2507", None),
+    ("Qwen3 32B", None),
+    ("Qwen3 30B A3B", None), // reasoning variant (instruct is lower)
+    ("Qwen3 Coder 30B A3B Instruct", None),
     // Others
-    ("Mercury 2", 11.0),
-    ("Trinity Large Thinking", 10.9),
+    ("Mercury 2", None),
+    ("Trinity Large Thinking", None),
 ];
 
 /// Same-weights SKU aliases: `(SKU display name, base variant name, what the
@@ -734,30 +743,60 @@ pub(crate) const SAME_WEIGHTS_SKU_ALIASES: &[(&str, &str, &str)] = &[
 pub(crate) fn artificial_analysis_snapshot() -> Vec<Benchmark> {
     SNAPSHOT_ROWS.iter()
         .map(|(model, score)| {
-            let mut row = score_benchmark(
-                *model,
-                *score,
-                None,
-                None,
-                BenchmarkKind::Model,
-            );
+            // `None` is a family AA has not re-measured under the current
+            // index. It stays in the table so the row keeps its identity and
+            // provenance, but it carries NO score: a v4.3.2 number left on a
+            // v5.0 scale would outrank genuinely measured models (the undated
+            // DeepSeek V4.1 Flash, 39.0 on the old scale, outranked its own
+            // 1017 refresh at v5's 32.0). Unrated rows fall back to the
+            // composite's neutral prior, exactly like families AA never
+            // covered.
+            let mut row = match score {
+                Some(score) => score_benchmark(
+                    *model,
+                    *score,
+                    None,
+                    None,
+                    BenchmarkKind::Model,
+                ),
+                None => Benchmark {
+                    slug: (*model).to_owned(),
+                    name: (*model).to_owned(),
+                    creator: crate::theme::infer_creator(model),
+                    overall: None,
+                    coding: None,
+                    agentic_coding: None,
+                    agent: None,
+                    reasoning_effort: None,
+                    kind: BenchmarkKind::Model,
+                    tokens_per_task: None,
+                    token_profile: None,
+                },
+            };
             let inherited = SAME_WEIGHTS_SKU_ALIASES.iter()
                 .find(|(sku, _, _)| *sku == *model)
                 .map(|(_, base, what)| (*base, *what));
+            let unrated = if score.is_none() {
+                " · unrated: no score published on this index"
+            } else {
+                ""
+            };
             row.name = match inherited {
                 Some((base, what)) => format!(
-                    "{} [AA Intelligence {} · snapshot {} · inherited from {} — {}; same weights, not separately benchmarked]",
+                    "{} [AA Intelligence {} · snapshot {}{} · inherited from {} — {}; same weights, not separately benchmarked]",
                     model,
                     ARTIFICIAL_ANALYSIS_SNAPSHOT_VERSION,
                     ARTIFICIAL_ANALYSIS_SNAPSHOT_DATE,
+                    unrated,
                     base,
                     what,
                 ),
                 None => format!(
-                    "{} [AA Intelligence {} · snapshot {}]",
+                    "{} [AA Intelligence {} · snapshot {}{}]",
                     model,
                     ARTIFICIAL_ANALYSIS_SNAPSHOT_VERSION,
                     ARTIFICIAL_ANALYSIS_SNAPSHOT_DATE,
+                    unrated,
                 ),
             };
             row
@@ -774,11 +813,52 @@ mod tests {
     fn rows_are_well_formed() {
         for (model, score) in SNAPSHOT_ROWS {
             assert!(!model.trim().is_empty(), "blank row name");
+            if let Some(score) = score {
+                assert!(
+                    score.is_finite() && *score >= 0.0 && *score <= 100.0,
+                    "{model}: implausible score {score}",
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn unrated_rows_carry_no_score() {
+        // A family AA has not re-measured under the current index must not
+        // plot a stale number: mixing scales is what made the undated DeepSeek
+        // V4.1 Flash (v4.3.2 39.0) outrank its own 1017 refresh (v5.0 32.0).
+        let rows = artificial_analysis_snapshot();
+        for (model, score) in SNAPSHOT_ROWS {
+            if score.is_some() {
+                continue;
+            }
+            let row = rows
+                .iter()
+                .find(|row| benchmark_model_key(&row.slug) == benchmark_model_key(model))
+                .expect("unrated row still exists");
+            assert_eq!(row.agentic_coding, None, "{model} must plot no score");
             assert!(
-                score.is_finite() && *score >= 0.0 && *score <= 100.0,
-                "{model}: implausible score {score}",
+                row.name.contains("unrated"),
+                "{model} must disclose that it is unrated: {}",
+                row.name
             );
         }
+    }
+
+    #[test]
+    fn unrated_families_do_not_outrank_their_measured_refresh() {
+        // The reported regression: `deepseek-v4.1-flash` (no v5 measurement)
+        // plotted above `DeepSeek V4.1 Flash 1017` (the better, measured
+        // build). With the stale read gone, the unrated SKU has no score and
+        // the measured refresh is the only one on the board.
+        let rows = artificial_analysis_snapshot();
+        let score_of = |name: &str| {
+            rows.iter()
+                .find(|b| benchmark_model_key(&b.slug) == benchmark_model_key(name))
+                .and_then(|b| b.agentic_coding)
+        };
+        assert_eq!(score_of("DeepSeek V4.1 Flash"), None);
+        assert!(score_of("DeepSeek V4.1 Flash 1017").is_some());
     }
 
     #[test]
