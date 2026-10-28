@@ -715,6 +715,7 @@ impl ParetoWatchApp {
             BenchmarkSource::AutomationBenchAA => {
                 "AutomationBench-AA partial score".to_owned()
             }
+            BenchmarkSource::AA3D => "AA-3D Elo (three.js scenes, blind votes)".to_owned(),
             BenchmarkSource::SWEBenchPro => "SWE-Bench Pro V2 HARD resolve rate".to_owned(),
             BenchmarkSource::ValsSREBench => "SRE Bench binary RE accuracy".to_owned(),
         };
@@ -1605,6 +1606,7 @@ fn benchmark_metric_note(source: BenchmarkSource) -> Option<&'static str> {
         BenchmarkSource::FrontierCode2 => Some("Metric: mergeability score"),
         BenchmarkSource::AABriefcase => Some("Metric: Elo (blind pairwise, private tasks)"),
         BenchmarkSource::AutomationBenchAA => Some("Metric: partial score (no violations)"),
+        BenchmarkSource::AA3D => Some("Metric: Elo (blind votes, 3D scene building)"),
         BenchmarkSource::SWEBenchPro => Some("Metric: resolve rate (HARD set)"),
         BenchmarkSource::ValsSREBench => Some("Metric: accuracy (binary RE tasks)"),
         BenchmarkSource::CompositeAgentic

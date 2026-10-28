@@ -209,6 +209,7 @@ pub(crate) fn fetch_benchmark_source(
         BenchmarkSource::FrontierCode2 => fetch_frontiercode2(client),
         BenchmarkSource::AABriefcase => fetch_aa_briefcase(client),
         BenchmarkSource::AutomationBenchAA => fetch_automationbench_aa(client),
+        BenchmarkSource::AA3D => fetch_aa_3d(client),
         BenchmarkSource::SWEBenchPro => fetch_swebench_pro(client),
         BenchmarkSource::ValsSREBench => fetch_vals_sre_bench(client),
         BenchmarkSource::CompositeAgentic | BenchmarkSource::CompositeDeployment => {

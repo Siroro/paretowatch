@@ -15,6 +15,7 @@ pub(crate) const REVELO_CODE_INDEX_URL: &str = "https://research.revelo.com/code
 pub(crate) const FRONTIERCODE_URL: &str = "https://cognition.com/frontiercode";
 pub(crate) const ARTIFICIAL_ANALYSIS_URL: &str =
     "https://artificialanalysis.ai/leaderboards/models";
+pub(crate) const AA_3D_URL: &str = "https://artificialanalysis.ai/evaluations/aa-3d";
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 pub(crate) enum PriceMetric {
@@ -214,6 +215,7 @@ pub(crate) enum BenchmarkSource {
     AutomationBenchAA,
     SWEBenchPro,
     ValsSREBench,
+    AA3D,
 }
 
 /// Which question a composite answers. Capability/value asks "how good is the
@@ -251,6 +253,7 @@ impl BenchmarkSource {
             Self::AutomationBenchAA => "AutomationBench-AA",
             Self::SWEBenchPro => "SWE-Bench Pro V2 HARD (Scale)",
             Self::ValsSREBench => "SRE Bench (Vals)",
+            Self::AA3D => "AA-3D (Elo)",
         }
     }
 
@@ -272,6 +275,7 @@ impl BenchmarkSource {
             Self::AutomationBenchAA => "AutomationBench",
             Self::SWEBenchPro => "SWE-Bench Pro",
             Self::ValsSREBench => "SRE Bench",
+            Self::AA3D => "AA-3D",
         }
     }
 
@@ -300,6 +304,7 @@ impl BenchmarkSource {
                 | Self::DesignArena
                 | Self::AABriefcase
                 | Self::AutomationBenchAA
+                | Self::AA3D
         )
     }
 
@@ -316,7 +321,7 @@ impl BenchmarkSource {
         )
     }
 
-    pub(crate) fn remote_sources() -> [Self; 14] {
+    pub(crate) fn remote_sources() -> [Self; 15] {
         [
             // The AA Intelligence Index fetch overlays live leaderboard values
             // onto the bundled snapshot (it never fails — the bundle is the
@@ -333,12 +338,13 @@ impl BenchmarkSource {
             Self::FrontierCode2,
             Self::AABriefcase,
             Self::AutomationBenchAA,
+            Self::AA3D,
             Self::SWEBenchPro,
             Self::ValsSREBench,
         ]
     }
 
-    pub(crate) fn consensus_sources() -> [Self; 14] {
+    pub(crate) fn consensus_sources() -> [Self; 15] {
         [
             Self::ArtificialAnalysisSnapshot,
             Self::SWERebench,
@@ -352,12 +358,13 @@ impl BenchmarkSource {
             Self::FrontierCode2,
             Self::AABriefcase,
             Self::AutomationBenchAA,
+            Self::AA3D,
             Self::SWEBenchPro,
             Self::ValsSREBench,
         ]
     }
 
-    pub(crate) fn display_sources() -> [Self; 14] {
+    pub(crate) fn display_sources() -> [Self; 15] {
         Self::consensus_sources()
     }
 
@@ -381,6 +388,7 @@ impl BenchmarkSource {
             Self::AutomationBenchAA => {
                 "https://artificialanalysis.ai/evaluations/automationbench-aa"
             }
+            Self::AA3D => AA_3D_URL,
             Self::SWEBenchPro => "https://labs.scale.com/leaderboard/swe_bench_pro_public_v2",
             Self::ValsSREBench => VALS_SRE_BENCH_URL,
         }

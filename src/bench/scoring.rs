@@ -26,28 +26,26 @@ pub(crate) const MIN_ANCHORED_POPULATION: usize = 10;
 /// 15 points of measured intelligence. Interpolating over these hand-picked
 /// anchors keeps AA comparable with the other boards while preserving how far
 /// apart two models actually are. Bump together with snapshot bumps if the
-/// score scale shifts: these points are for the v4.3.2 index (the 2026-09-04/07
-/// v4.2+v4.3 revisions compressed the scale — the AA leader moved from 66 to
-/// 53 — and the 2026-09-22 bump moved the top anchor from 50 to 58 when Claude
-/// Opus 5.5 entered as the new leader, which also stopped the old top tier
-/// (Fable 5.1, GPT-6 Astra) from piling onto the 100th-percentile ceiling). The
-/// 2026-09-29 read kept both the index and the anchors: Opus 5.5 still leads
-/// at 58 and Claude Sonnet 5.5 entered at 56, below the anchor. Each landmark
-/// tracks the same reference models as before: the leader tier
-/// ~99th, Gemini-3.x-Flash-class ~90th, Luna/DeepSeek-refresh class ~80th, the
-/// broad frontier mid-pack ~68th.
+/// score scale shifts: these points are for the v5.0 index (the 2026-10-28
+/// rebaseline re-compressed the scale below the leader — the open-weights
+/// frontier fell by 9-14 points while Claude Opus 5.5 stayed the leader at
+/// 58 — so the same reference classes re-anchor roughly ten points lower).
+/// Each landmark tracks the same reference models as before: the leader tier
+/// ~99th (Opus 5.5, 58), the Gemini-3.x-Flash class ~90th (Gemini 3.8 Flash,
+/// 31), the Luna/DeepSeek-refresh class ~80th (GPT-6 Luna, 28), the broad
+/// frontier mid-pack ~68th (DeepSeek V4 Pro 0813, 23), then the open-weights
+/// and small-model tiers down to the 2-point Nano floor.
 pub(crate) const AA_CALIBRATION_POINTS: &[(f64, f64)] = &[
     (58.0, 99.0),
-    (39.0, 90.0),
-    (35.0, 80.0),
-    (28.0, 68.0),
-    (23.0, 55.0),
-    (20.0, 42.0),
-    (15.0, 30.0),
-    (12.0, 22.0),
-    (10.0, 15.0),
-    (7.0, 10.0),
-    (5.0, 6.0),
+    (31.0, 90.0),
+    (28.0, 80.0),
+    (23.0, 68.0),
+    (19.0, 55.0),
+    (14.0, 42.0),
+    (12.0, 30.0),
+    (9.0, 22.0),
+    (6.0, 15.0),
+    (4.0, 10.0),
     (2.0, 3.0),
     (0.0, 0.5),
 ];
@@ -436,6 +434,13 @@ pub(crate) fn build_agentic_composite(
         // AutomationBench-AA overlaps the same publisher correlation and the
         // same frontier cohort, so it anchors like the Code Index.
         (BenchmarkSource::AutomationBenchAA, 0.05_f64),
+        // AA-3D (added 0.31.0) measures agentic code construction — models
+        // build three.js scenes as agents in AA's standardized Stirrup
+        // harness — so it is a model-level agentic board, but it shares the
+        // AA publisher correlation and its construct (interactive 3D
+        // frontends) is adjacent to rather than the same as agentic coding,
+        // so it anchors at the 0.05 tier with the other AA boards.
+        (BenchmarkSource::AA3D, 0.05_f64),
         // SWE-Bench Pro V2 is a third-party, long-horizon SWE standard —
         // top-tier construct weight — but its rows score model+harness
         // pairings (Claude Code / mini-swe-agent / Codex), so it joins the
@@ -2330,8 +2335,8 @@ mod tests {
         // AA world: 6 heroes + 44 fillers stepping down to AA 14. GLM sits
         // tied with K3 just behind Grok — the standing structure the 2026-08-26
         // ruling was calibrated against, re-expressed on the v4.3 scale (the
-        // real snapshot has GLM-5.3 at 44.9, and the live smoke test covers
-        // today's production ordering).
+        // real snapshot has since moved to the v5.0 scale — GLM-5.3 reads 32 —
+        // and the live smoke test covers today's production ordering).
         let mut aa_rows = vec![
             mk("Claude Fable 5", 49.7),
             mk("Claude Opus 5", 50.7),
@@ -2501,6 +2506,7 @@ mod tests {
             BenchmarkSource::FrontierCode,
             BenchmarkSource::AABriefcase,
             BenchmarkSource::AutomationBenchAA,
+            BenchmarkSource::AA3D,
             BenchmarkSource::SWEBenchPro,
             BenchmarkSource::ValsSREBench,
         ] {

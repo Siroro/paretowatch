@@ -1,3 +1,20 @@
+# ParetoWatch v0.31.0
+
+## Features
+
+- **AA-3D joins the board list.** Artificial Analysis's new evaluation — models work as agents in AA's offline Stirrup sandbox, turning a written brief into a single three.js web page (55 tasks across seven domains: landmarks, machines, natural phenomena, living bodies, games/piloting, space, stories/fantasy), with Elo derived from blind pairwise votes by AA's recruited panel (12K+ votes, GPT-6 Luna anchored at 1000) — is now read from `/evaluations/aa-3d` as a new **AA-3D (Elo)** board. The parser takes the board's integer Elo objects from the page's RSC payload (`shortName` → `elo`), a shape that cannot capture the decimal `elo` fields the page also embeds for other boards (AA-Briefcase breakdowns, per-domain win rates). AA-3D is a consensus-grid member, Pareto chart source, and composite input at the 0.05 anchor tier — agentic code construction under AA's own standardized harness, so it is model-level (fully weighted for capability questions, demoted to a third for deployment questions) — alongside AA-Briefcase and AutomationBench-AA. AA's short board names for Nemotron 3 Ultra, Muse Glimmer, Beam 1.0, and Ling 3.1 Flash 1019 now alias onto the Surplus listing names so those rows join exactly (the 0.80 fuzzy bar misses them).
+- **The AA Intelligence Index snapshot rebased to v5.0.** AA's first major rebaseline since v4.3 (announced 2026-10-28): FrontierCode 2.0 and Terminal-Bench-Science joined the index, HLE-Diamond replaced Humanity's Last Exam, AA-Omniscience and CritPt moved to v1.1/v2, GDPval-AA/SciCode/AA-LCR were removed, and 60% of the index now runs on private test sets or held-out answers. Every family with a v5 measurement was re-read from the full leaderboard (GPT-6 Astra 52.8→57, GPT-6.1 Sol 52→55, Claude Sonnet 5.5 56→54, Claude Fable 5.1 53.4→49, Gemini 4 Argon 53→50, Kimi K3.1 Pro 55→46, GLM-5.3 44.9→32, DeepSeek V4.1 Flash 1017 45→32, Claude Haiku 5.5 43→36, Grok 4.7 46→34, Qwen3.8 Max 0902 45.4→34, MiMo-V2.6-Pro 46→30, GPT-6 Luna 38→28, and the rest of the rated board), while families the v5 board shows as dashes — or hides behind null pages (spot-checked on Kimi K3 and GPT-6 Sol) — keep their last v4.3.2-scale read until AA publishes, exactly what the live overlay already assumes for legacy rows. The snapshot is deliberately mixed-scale below the v5-rated frontier; row names disclose the snapshot date either way.
+  - **New model:** GPT-6.1 Terra enters at 51 (max effort), between GPT-6.1 Sol (55) and Gemini 4 Argon (50) — the cheapest top-10 model on the index at $0.96 per index task.
+  - **The composite's AA calibration curve was recalibrated for the v5 scale** in the same change: the same reference classes re-anchor roughly ten points lower (leader tier 58 → ~99th percentile, Gemini-3.x-Flash class 31 → 90th, Luna/DeepSeek-refresh 28 → 80th, frontier mid-pack 23 → 68th). The open-weights frontier fell by 9-14 points while Claude Opus 5.5 stayed the leader at 58 — AA's open-vs-proprietary gap widened from 3 to 12 points.
+
+## Notes
+
+- The snapshot's per-bump regression tests that pinned concrete Intelligence scores were removed: every bump re-reads values, so the pins were guaranteed churn. The structural checks that remain (well-formed rows, unique normalized keys, never-shrinking table, alias/inheritance disclosures, board-name aliasing) are the ones that actually catch breakage.
+
+## Validation
+
+Formatting, locked check, locked Clippy with warnings denied (`--all-targets`), and locked test all pass. The AA-3D parser and the v5 Intelligence overlay were additionally smoke-checked against the live pages (23 AA-3D Elo rows attributed to 23 models with GPT-6 Luna fixed at 1000; 76 v5-scored models extracted, none of the dashed/hidden ones carried a stale score).
+
 # ParetoWatch v0.30.0
 
 ## Features

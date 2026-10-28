@@ -10,6 +10,11 @@
 //! - **AutomationBench-AA** — long-horizon office automation (finance, HR,
 //!   ...). The headline number is the *partial score*: how much of each
 //!   task's objective tree the model completed with no violations.
+//! - **AA-3D** (added 0.31.0) — Elo ratings for interactive 3D experience
+//!   building: each model works as an agent in AA's offline Stirrup sandbox,
+//!   turning a written brief into a single three.js web page, and blind
+//!   pairwise votes from AA's recruited panel produce a Bradley-Terry Elo
+//!   (GPT-6 Luna anchored at 1000).
 //!
 //! The Briefcase page renders a plain server-side table. The
 //! AutomationBench page embeds its per-model data as escaped JSON inside
@@ -17,7 +22,12 @@
 //! with effort suffix) well before its `automationBenchPartialScore`, so
 //! scores are attributed by nearest-preceding-name position — the same
 //! value the site headlines (Gemini 4 Argon's 77.5 partial score matches
-//! the number AA's changelog quotes for it).
+//! the number AA's changelog quotes for it). AA-3D uses that same payload
+//! style: its board objects end with `\"elo\":<integer>` right after the
+//! model's shortName and creator logo. The integer-only, object-end form
+//! matters — the page also embeds decimal `elo` fields for OTHER boards
+//! (AA-Briefcase breakdowns, per-domain win rates), which the pattern
+//! must not capture.
 
 use anyhow::{Result, anyhow};
 use regex::Regex;
@@ -29,6 +39,7 @@ use crate::types::{Benchmark, BenchmarkKind};
 
 const AA_BRIEFCASE_URL: &str = "https://artificialanalysis.ai/evaluations/aa-briefcase";
 const AUTOMATIONBENCH_URL: &str = "https://artificialanalysis.ai/evaluations/automationbench-aa";
+const AA_3D_URL: &str = "https://artificialanalysis.ai/evaluations/aa-3d";
 
 /// Effort tiers AA names in its variant suffixes. Anything else inside the
 /// parentheses (`Default Fallback`, run notes) is configuration, not effort.
@@ -42,6 +53,15 @@ pub(crate) fn alias_display_name(base: &str) -> &str {
         // Surplus lists "Thinking Machines: Inkling"; the creator prefix is
         // not one benchmark matching strips.
         "Inkling" => "Thinking Machines: Inkling",
+        // The v5.0 (2026-10-28) boards drop parameter counts and creator
+        // prefixes from these names; the snapshot rows (and Surplus display
+        // names) carry the full forms, so alias them rather than rely on the
+        // 0.80 fuzzy bar (or miss the join entirely — these fall well under
+        // it).
+        "Nemotron 3 Ultra" => "NVIDIA Nemotron 3 Ultra 550B A55B",
+        "Muse Glimmer" => "Muse Glimmer 30B",
+        "Beam 1.0" => "Reflection: Beam 1.0 501B A23B",
+        "Ling 3.1 Flash 1019" => "inclusionAI: Ling 3.1 Flash 1019",
         other => other,
     }
 }
@@ -201,6 +221,56 @@ pub(crate) fn parse_automationbench_aa(html: &str) -> Vec<Benchmark> {
     dedupe_keep_best(rows)
 }
 
+pub(crate) fn fetch_aa_3d(client: &Client) -> Result<Vec<Benchmark>> {
+    let html = fetch_text(client, AA_3D_URL, "AA-3D leaderboard")?;
+    let rows = parse_aa_3d(&html);
+    if rows.is_empty() {
+        return Err(anyhow!("AA-3D page had no Elo rows"));
+    }
+    Ok(rows)
+}
+
+/// AA-3D Elo from the evaluation page's escaped-JSON RSC payload. The
+/// board's model objects end with `\"elo\":<integer>}` right after the
+/// model's shortName — the same integer the leaderboard table renders
+/// (verified: 23 objects for 23 ranked models, GPT-6 Luna anchored at
+/// 1000). The integer-only object-end form is the discriminator: the page
+/// also embeds DECIMAL `elo` fields with `lower95ci` followers for other
+/// boards (AA-Briefcase breakdowns, per-domain win rates), which must not
+/// be captured — nearest-preceding-name attribution plus this shape pins
+/// each Elo to the model object that carries it.
+pub(crate) fn parse_aa_3d(html: &str) -> Vec<Benchmark> {
+    let name_re = Regex::new(r#"\\?"shortName\\?":\\?"(.{1,120}?)\\?""#).expect("name regex");
+    let elo_re = Regex::new(r#"\\?"elo\\?":([0-9]+)\}"#).expect("elo regex");
+    let names: Vec<(usize, String)> = name_re
+        .captures_iter(html)
+        .map(|c| {
+            (
+                c.get(0).expect("whole match").start(),
+                c.extract::<1>().1[0].to_owned(),
+            )
+        })
+        .collect();
+    let mut rows = Vec::new();
+    for caps in elo_re.captures_iter(html) {
+        let whole = caps.get(0).expect("whole match");
+        let Ok(elo) = caps.extract::<1>().1[0].parse::<f64>() else {
+            continue;
+        };
+        if !(500.0..=3000.0).contains(&elo) {
+            continue;
+        }
+        let Some((_, name)) = names.iter().rev().find(|(pos, _)| *pos < whole.start()) else {
+            continue;
+        };
+        let name = name.replace("\\u0026", "&");
+        if let Some(row) = build_row(&name, elo, "3D Elo") {
+            rows.push(row);
+        }
+    }
+    dedupe_keep_best(rows)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -316,5 +386,44 @@ mod tests {
         let html = r#"<table><tbody><tr><td>14</td><td></td><td>Inkling (xhigh)</td><td>1494</td><td></td><td></td></tr></tbody></table>"#;
         let rows = parse_aa_briefcase(html);
         assert_eq!(rows[0].slug, "Thinking Machines: Inkling");
+    }
+
+    #[test]
+    fn parses_aa_3d_elo_and_ignores_other_boards_elo_fields() {
+        // Mirrors the AA-3D page payload: board objects end with an integer
+        // `elo` right after the model's shortName, while the page ALSO embeds
+        // decimal `elo` fields for other boards (AA-Briefcase breakdowns, the
+        // AA-3D chart's CI block). Only the integer board form may produce
+        // rows.
+        let html = concat!(
+            r#"{"slug":"claude-sonnet-5-5","name":"Claude Sonnet 5.5 (Max, Default Fallback)","shortName":"Claude Sonnet 5.5 (max with fallback)","#,
+            r#""briefcaseElo":1811.82,"briefcaseBreakdown":{"overall":{"elo":1811.82,"lower95ci":1800.1,"upper95ci":1823.5}},"#,
+            r#"{"slug":"gpt-6-luna","shortName":"GPT-6 Luna (max)","creatorLogo":"/img/logos/openai.svg","elo":1000},"#,
+            r#"{"slug":"nemotron-3-ultra-550b-a55b","shortName":"Nemotron 3 Ultra","creatorLogo":"/img/logos/nvidia.svg","elo":573},"#,
+            r##"{"chartBlock":[{"shortName":"Claude Sonnet 5.5 (max with fallback)","creatorColor":"#cc785c","elo":1198.8306,"lower95ci":1166.3291,"upper95ci":1231.3321}]}"##,
+            r#""creatorLogo":"/img/logos/anthropic.svg","elo":1199}"#,
+        );
+        let rows = parse_aa_3d(html);
+        assert_eq!(rows.len(), 3, "decimal elo fields must not add rows");
+        let sonnet = rows
+            .iter()
+            .find(|r| r.slug == "Claude Sonnet 5.5")
+            .expect("effort suffix splits out of the name");
+        assert_eq!(sonnet.agentic_coding, Some(1199.0));
+        assert_eq!(sonnet.reasoning_effort.as_deref(), Some("max"));
+        // GPT-6 Luna is the board's fixed 1000 anchor.
+        let luna = rows.iter().find(|r| r.slug == "GPT-6 Luna").unwrap();
+        assert_eq!(luna.agentic_coding, Some(1000.0));
+        // The board's short family name aliases onto the Surplus listing
+        // name, so the row joins Nemotron quotes by exact key.
+        let nemotron = rows
+            .iter()
+            .find(|r| r.slug == "NVIDIA Nemotron 3 Ultra 550B A55B")
+            .expect("short board name aliases onto the listing name");
+        assert_eq!(nemotron.agentic_coding, Some(573.0));
+        let quote = test_quote("nvidia-nemotron-3-ultra-550b-a55b", 1.0, true);
+        assert!(best_benchmark_match(&quote, &rows).is_some());
+        // Sorted best-first: the leader tops the board.
+        assert_eq!(rows[0].slug, "Claude Sonnet 5.5");
     }
 }
