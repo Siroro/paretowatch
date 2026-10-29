@@ -2,3 +2,5 @@
 .DS_Store
 *.log
 .zcode/
+# Release bundles built at the repo root (paretowatch-vX.Y.Z-<target>.zip)
+/*.zip
