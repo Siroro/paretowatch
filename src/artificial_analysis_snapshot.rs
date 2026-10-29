@@ -337,6 +337,27 @@
 //! re-anchored estimate, and the live overlay replaces it the moment AA
 //! publishes a v5 value).
 //!
+//! The 2026-10-29 bump stayed on v5.0: the leader (Gemini 4 Carbon, 59) and
+//! the scale are unchanged, so `AA_CALIBRATION_POINTS` keeps its anchors,
+//! and only the Mistral Large 4 row moved. Mistral shipped the GA build
+//! the morning after the Preview's 100%-off launch window ended — the
+//! Surplus matrix repriced to $1.36/$4.18 — and AA re-pointed the
+//! canonical page from the deprecated Preview (2026-10-06) at the GA
+//! (2026-10-29): the Intelligence read moved 25 → 26 at high reasoning,
+//! the only effort AA measures for it (the Surplus listing is a single
+//! "Mistral: Mistral Large 4" SKU, so the base row joins it; the separate
+//! mistral-large-4-medium build has no Intelligence measurement). The GA
+//! also re-measured the agentic boards the app fetches live —
+//! AutomationBench-AA now headlines 57.83 where the Preview read 59.90 —
+//! which surfaced a live-validation blind spot fixed the same day: the
+//! AutomationBench reconciliation's truth set unioned the board fields off
+//! every AA eval page's preload, but those preloads embed whatever build
+//! was current when each page last rendered, so it compared the GA's 57.83
+//! against the AA-3D page's stale Preview 59.90. The truth set is scoped
+//! to the AutomationBench page itself now. A preload sweep across the AA
+//! pages found no other family gaining a v5 read, and the live index
+//! table added no new families.
+//!
 //! Deliberately unrated (no AA presence as of 2026-10-23): Aion 2.0/3.0/3.0
 //! Mini, Hermes 3 405B (AA rates only the Hermes 4 generation), Palmyra
 //! Vision 7B, Qwen 2.5 7B, GPT-OSS Safeguard
@@ -370,7 +391,7 @@
 use crate::fetch::score_benchmark;
 use crate::types::{Benchmark, BenchmarkKind};
 
-pub(crate) const ARTIFICIAL_ANALYSIS_SNAPSHOT_DATE: &str = "2026-10-28";
+pub(crate) const ARTIFICIAL_ANALYSIS_SNAPSHOT_DATE: &str = "2026-10-29";
 pub(crate) const ARTIFICIAL_ANALYSIS_SNAPSHOT_VERSION: &str = "v5.0";
 
 /// `(model name, AA Intelligence score)` pairs, one representative row per
@@ -482,15 +503,17 @@ pub(crate) const SNAPSHOT_ROWS: &[(&str, Option<f64>)] = &[
     // GLM-5.3's v5 read — the app also flags the listing as uncensored so it
     // can be filtered without reading the proxy as a measurement. Meta's
     // Muse Wonder re-read 52 → 43 (max; the stronger Full sibling, 50, has
-    // no public API). Mistral Large 4 is read off its Preview release
-    // (2026-10-06, the only version AA rates); re-read 38 → 25. Gemini 4
-    // Argon's general listing (2026-10-14) and the "Meta: Muse Spark 1.3"
-    // SKU join existing rows via creator-prefix stripping; Muse Spark 1.3
-    // keeps its v4.3.2 read (no v5 measurement yet).
+    // no public API). Mistral Large 4 was read off its Preview release
+    // (2026-10-06) through the 2026-10-28 sweep; the 2026-10-29 GA release
+    // re-pointed the canonical page at the GA build and the read moved
+    // 25 → 26 (see the header notes). Gemini 4 Argon's general listing
+    // (2026-10-14) and the "Meta: Muse Spark 1.3" SKU join existing rows via
+    // creator-prefix stripping; Muse Spark 1.3 keeps its v4.3.2 read (no v5
+    // measurement yet).
     ("Claude Haiku 5.5", Some(36.0)),
     ("Abliterated Large V2", Some(32.0)), // ~proxy: GLM-5.3 with refusal directions removed; AA rates no page
     ("Muse Wonder", Some(43.0)),
-    ("Mistral Large 4", Some(25.0)), // Preview read: the only version AA rates
+    ("Mistral Large 4", Some(26.0)), // re-read 2026-10-29 (v5.0): the GA build; was 25.0 off the deprecated Preview
     // Added 2026-09-30 (second same-day bump), re-read 2026-10-28 under
     // v5.0. Gemini 4 Argon re-read 53 → 50 at high reasoning — still the
     // highest effort Argon exposes. `argon` is a codename, not a stripped

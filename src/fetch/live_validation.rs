@@ -915,11 +915,24 @@ fn live_aa_boards_reconcile_with_published_values() {
             if key.is_empty() {
                 continue;
             }
-            for (re, map) in [
-                (&brief_field, &mut ks_brief),
-                (&auto_field, &mut ks_auto),
-                (&three_d_field, &mut ks_3d),
-            ] {
+            // AA-Briefcase and AA-3D truths union every eval page's preload:
+            // their tolerances absorb cross-page drift. The AutomationBench
+            // truth is scoped to the AutomationBench page itself — the other
+            // pages' preloads embed whatever build was current when each page
+            // last rendered (2026-10-29: the AA-3D page still carried the
+            // deprecated Mistral Large 4 Preview at 59.90 while the
+            // AutomationBench page headline measured the GA build at 57.83),
+            // and this board's 0.5-point tolerance cannot absorb that
+            // cross-page build drift.
+            let scopes = [
+                (&brief_field, &mut ks_brief, true),
+                (&auto_field, &mut ks_auto, label == "AutomationBench"),
+                (&three_d_field, &mut ks_3d, true),
+            ];
+            for (re, map, enabled) in scopes {
+                if !enabled {
+                    continue;
+                }
                 if let Some(caps) = re.captures(chunk)
                     && caps.extract::<1>().1[0] != "null"
                     && let Ok(v) = caps.extract::<1>().1[0].parse::<f64>()

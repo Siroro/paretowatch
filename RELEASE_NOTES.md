@@ -1,3 +1,14 @@
+# ParetoWatch v0.33.0
+
+## Updates
+
+- **Snapshot re-read: Mistral Large 4 went GA, and AA re-measured it.** Mistral shipped the GA build the morning of 2026-10-29 (the Preview, 2026-10-06, is now deprecated) and retired its 100%-off launch window — the Surplus matrix repriced from $0.0000 to $1.36/$4.18 per 1M in/out with a $0.14 cache read, so the row finally carries real asks. AA re-pointed the canonical model page from the Preview at the GA, and the Intelligence Index read moved **25 → 26** (high reasoning, the only effort AA measures for it; the Surplus listing is a single "Mistral: Mistral Large 4" SKU, and the separate `mistral-large-4-medium` build has no Intelligence measurement). The GA's agentic re-measures land on the boards the app fetches live with no code change: AutomationBench-AA now headlines 57.83 where the Preview read 59.90. The scale, the index revision (v5.0), and the leader (Gemini 4 Carbon, 59) are unchanged, so `AA_CALIBRATION_POINTS` keeps its anchors. The rest of the sweep came back clean: the live index table added no new families and a preload sweep across AA's evaluation pages found no unrated family gaining a v5 read.
+- **Fixed: the live AutomationBench reconciliation no longer crosses pages.** The GA launch broke the check: its truth set unioned `automationBenchPartialScore` fields off every AA evaluation page's preload objects, but those preloads embed whatever build was current when each page last rendered — on launch day the AA-3D page still carried the deprecated Preview at 59.90 while the AutomationBench page itself headlined the GA at 57.83, and the check's tight 0.5-point tolerance compared the app's correct 57.83 against the stale number and failed. The truth set is now scoped to the AutomationBench page (still an independent extraction channel over the same payload: object-chunked attribution vs the app's nearest-preceding-name stream); the AA-Briefcase and AA-3D truths keep their cross-page unions, whose tolerances absorb preload drift.
+
+## Validation
+
+Formatting, locked check, locked Clippy with warnings denied (`--all-targets`), and locked test all pass. The live validation suite (20 checks) passes: every board's fetch/parse against its real upstream, the AA boards' values reconciled against independently parsed server tables and payload objects (Intelligence Index 38 families, standardized speed 97, AA-Briefcase 60, AutomationBench 29, AA-3D 23 — zero mismatches), and the model-join audit across all 13 boards × the 270-quote Surplus catalogue with zero suspicious joins.
+
 # ParetoWatch v0.32.0
 
 ## Features
