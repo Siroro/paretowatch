@@ -346,6 +346,31 @@ pub(crate) fn carry_forward(series: &[(f64, f64)], ts: f64) -> Option<f64> {
     }
 }
 
+/// Clips a blended series to a recent window ending at `now`-side cutoff,
+/// carrying the last price at or before the cutoff forward so the line starts
+/// at the value that was actually in effect when the window opened — a model
+/// with no moves inside the window renders as one flat step, not nothing.
+/// `None` keeps every point (the "All" window).
+pub(crate) fn clip_series_to_window(points: &[(f64, f64)], cutoff: Option<f64>) -> Vec<(f64, f64)> {
+    let Some(cutoff) = cutoff else {
+        return points.to_vec();
+    };
+    let carried = points
+        .iter()
+        .rev()
+        .find(|(ts, _)| *ts <= cutoff)
+        .map(|&(_, price)| (cutoff, price));
+    let mut out: Vec<(f64, f64)> = points
+        .iter()
+        .copied()
+        .filter(|(ts, _)| *ts > cutoff)
+        .collect();
+    if let Some(start) = carried {
+        out.insert(0, start);
+    }
+    out
+}
+
 /// Lowest value ever recorded for a price metric, with the timestamp of the
 /// change that established it. Blended lows fold the whole merged timeline,
 /// so a low that existed only when input and output were combined counts even
@@ -412,6 +437,32 @@ mod tests {
     use super::*;
     use std::fs;
 
+    #[test]
+    fn window_clip_carries_the_price_in_effect_at_the_cutoff() {
+        let series = [(100.0, 5.0), (200.0, 3.0), (300.0, 8.0), (400.0, 2.0)];
+        // A cutoff between changes starts at the value then in effect and
+        // keeps only later changes.
+        assert_eq!(
+            clip_series_to_window(&series, Some(250.0)),
+            [(250.0, 3.0), (300.0, 8.0), (400.0, 2.0)]
+        );
+        // A cutoff exactly on a change counts that change as in effect.
+        assert_eq!(
+            clip_series_to_window(&series, Some(300.0)),
+            [(300.0, 8.0), (400.0, 2.0)]
+        );
+        // Nothing changed inside the window: one flat carried step.
+        assert_eq!(
+            clip_series_to_window(&series, Some(350.0 + 500.0)),
+            [(850.0, 2.0)]
+        );
+        // The whole series starts inside the window: kept as-is.
+        assert_eq!(clip_series_to_window(&series, Some(50.0)), series);
+        // All window: untouched.
+        assert_eq!(clip_series_to_window(&series, None), series);
+        assert!(clip_series_to_window(&[], Some(100.0)).is_empty());
+    }
+
     fn temp_path(tag: &str) -> std::path::PathBuf {
         let dir = std::env::temp_dir()
             .join("paretowatch-history-tests")
@@ -449,6 +500,8 @@ mod tests {
             ttft_p50_ms: None,
             ttft_samples: None,
             uptime_pct: None,
+            released_at: None,
+            listed_at: None,
         }
     }
 

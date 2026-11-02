@@ -31,6 +31,14 @@ pub(crate) fn parse_deepswe_json(root: &Value) -> Result<Vec<Benchmark>> {
             json_shape(root)
         )
     })?;
+    // The feed has shipped pass rates both as 0–1 fractions and 0–100
+    // percents, so the encoding is inferred per payload, not per row: a
+    // percent-scale 0.8 sits at or below 1.0 and must not be inflated to 80.
+    // Only when every score is at most 1.0 is the board fraction-scale; an
+    // empty score set keeps the old per-row fraction rule.
+    let fraction_scale = rows
+        .iter()
+        .all(|row| raw_score(row).is_none_or(|raw| raw.is_finite() && raw <= 1.0));
     let mut best: HashMap<String, (i32, Benchmark)> = HashMap::new();
     for row in rows {
         let Some(model) = row
@@ -49,14 +57,10 @@ pub(crate) fn parse_deepswe_json(root: &Value) -> Result<Vec<Benchmark>> {
         if !harness.is_empty() && !normalize(harness).contains("mini swe agent") {
             continue;
         }
-        let Some(raw_score) = row
-            .get("pass_at_1")
-            .and_then(number_value)
-            .or_else(|| row.get("pass_rate").and_then(number_value))
-        else {
+        let Some(raw_score) = raw_score(row) else {
             continue;
         };
-        let score = if raw_score <= 1.0 {
+        let score = if fraction_scale {
             raw_score * 100.0
         } else {
             raw_score
@@ -118,6 +122,13 @@ pub(crate) fn parse_deepswe_json(root: &Value) -> Result<Vec<Benchmark>> {
     Ok(out)
 }
 
+/// A row's raw pass rate, before any scale inference.
+fn raw_score(row: &Value) -> Option<f64> {
+    row.get("pass_at_1")
+        .and_then(number_value)
+        .or_else(|| row.get("pass_rate").and_then(number_value))
+}
+
 pub(crate) fn reasoning_effort_rank(effort: &str) -> i32 {
     match normalize(effort).as_str() {
         "max" => 60,
@@ -150,5 +161,21 @@ mod tests {
         assert_eq!(rows[0].kind, BenchmarkKind::Model);
         assert!(rows[0].agent.as_deref().unwrap().contains("mini"));
         assert_eq!(rows[0].tokens_per_task, Some(7_967_666.0));
+    }
+
+    #[test]
+    fn percent_scale_payload_keeps_sub_one_percent_scores() {
+        // A per-row ≤ 1.0 guess inflates a percent-scale 0.8 to 80. The
+        // 72.67 companion proves the payload is percent-scale, so the 0.8
+        // must survive unscaled.
+        let v = serde_json::json!({"rows": [
+            {"model":"gpt-5-6-sol","harness":"mini-swe-agent","reasoning_effort":"high","pass_at_1":0.8},
+            {"model":"kimi-k3","harness":"mini-swe-agent","reasoning_effort":"high","pass_at_1":72.67}
+        ]});
+        let rows = parse_deepswe_json(&v).unwrap();
+        assert_eq!(rows.len(), 2);
+        let by = |m: &str| rows.iter().find(|r| r.slug == m).unwrap();
+        assert!((by("gpt-5-6-sol").agentic_coding.unwrap() - 0.8).abs() < 1e-9);
+        assert!((by("kimi-k3").agentic_coding.unwrap() - 72.67).abs() < 1e-9);
     }
 }

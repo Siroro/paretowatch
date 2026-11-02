@@ -71,16 +71,40 @@ pub(crate) fn split_scale_name(raw: &str) -> (String, Option<String>, Option<Str
 pub(crate) fn parse_swebench_pro(html: &str) -> Vec<Benchmark> {
     // Each row server-renders as
     // `<p data-model-name="true" ...>Opus 5 (Claude Code) xhigh</p>` with the
-    // resolve-rate span a short, non-greedy hop later in the same row block.
-    let row_re = Regex::new(
-        r#"(?s)data-model-name="true"[^>]*>([^<]+)</p>.{0,600}?<span class="text-ink">([0-9]+\.?[0-9]*)</span>"#,
-    )
-    .expect("valid row regex");
+    // resolve-rate span a short hop later in the same row block. Parsing is
+    // row-local — the segment between one name marker and the next belongs
+    // to that row — so a row whose score span is missing is dropped alone
+    // instead of pairing the NEXT row's score and shifting every later
+    // name/score pairing.
+    let name_re =
+        Regex::new(r#"data-model-name="true"[^>]*>([^<]+)</p>"#).expect("valid name regex");
+    let score_re = Regex::new(r#"<span class="text-ink">([0-9]+\.?[0-9]*)</span>"#)
+        .expect("valid score regex");
+    let anchors: Vec<(usize, usize, String)> = name_re
+        .captures_iter(html)
+        .map(|caps| {
+            let whole = caps.get(0).expect("whole match");
+            (
+                whole.start(),
+                whole.end(),
+                caps.extract::<1>().1[0].to_owned(),
+            )
+        })
+        .collect();
     let mut rows = Vec::new();
-    for caps in row_re.captures_iter(html) {
-        let (base, agent, effort) = split_scale_name(caps.extract::<2>().1[0]);
+    for (idx, (_, name_end, raw_name)) in anchors.iter().enumerate() {
+        let segment_end = anchors
+            .get(idx + 1)
+            .map_or(html.len(), |(next_start, _, _)| *next_start);
+        // The score span must still sit within a short hop of the name (the
+        // old row regex's `.{0,600}?`), inside this row's own segment.
+        let window = &html[*name_end..(*name_end + 600).min(segment_end)];
+        let Some(score_caps) = score_re.captures(window) else {
+            continue;
+        };
+        let (base, agent, effort) = split_scale_name(raw_name);
         let base = alias_display_name(&base).to_owned();
-        let Ok(score) = caps.extract::<2>().1[1].parse::<f64>() else {
+        let Ok(score) = score_caps.extract::<1>().1[0].parse::<f64>() else {
             continue;
         };
         if base.is_empty() || !score.is_finite() {
@@ -180,6 +204,30 @@ mod tests {
         // Aliased names join their Surplus listings.
         assert_eq!(rows[2].slug, "Muse Wonder");
         assert!(rows.iter().any(|r| r.slug == "Thinking Machines: Inkling"));
+    }
+
+    #[test]
+    fn row_missing_score_is_dropped_without_cascading() {
+        // The middle row publishes no resolve-rate span. Row-local parsing
+        // must drop only that row; a whole-page name-then-next-score regex
+        // would pair its name with the NEXT row's score and shift every
+        // later pairing.
+        let html = concat!(
+            r#"<div><p data-model-name="true" class="text-xs">Opus 5 (Claude Code) xhigh</p><p><span class="text-ink">98.00</span></p></div>"#,
+            r#"<div><p data-model-name="true" class="text-xs">Gemini 4 Argon (mini-swe-agent) high</p><p>no score published</p></div>"#,
+            r#"<div><p data-model-name="true" class="text-xs">Inkling (mini-swe-agent) xhigh</p><p><span class="text-ink">56.90</span></p></div>"#,
+        );
+        let rows = parse_swebench_pro(html);
+        assert_eq!(rows.len(), 2);
+        assert!(
+            rows.iter()
+                .any(|r| r.slug == "Opus 5" && r.agentic_coding == Some(98.0))
+        );
+        assert!(
+            rows.iter()
+                .any(|r| r.slug == "Thinking Machines: Inkling" && r.agentic_coding == Some(56.9))
+        );
+        assert!(!rows.iter().any(|r| r.slug.contains("Gemini")));
     }
 
     #[test]

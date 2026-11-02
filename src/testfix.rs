@@ -40,6 +40,8 @@ pub(crate) fn test_quote(model: &str, input: f64, live_market: bool) -> Quote {
         ttft_p50_ms: None,
         ttft_samples: None,
         uptime_pct: None,
+        released_at: None,
+        listed_at: None,
     }
 }
 
@@ -63,5 +65,7 @@ pub(crate) fn test_joined_point() -> JoinedPoint {
         free_offer_listed: false,
         vision: false,
         uncensored: false,
+        released_at: None,
+        listed_at: None,
     }
 }

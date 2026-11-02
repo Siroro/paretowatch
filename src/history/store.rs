@@ -99,8 +99,9 @@ pub(crate) struct EventStore {
 
 impl EventStore {
     /// Opens (or creates) the log and replays it. A corrupt/unknown-format
-    /// file is moved aside rather than lost; an unwritable location degrades
-    /// to memory-only operation instead of taking the app down.
+    /// file is moved aside rather than lost; an unwritable location or a
+    /// failed replay degrades to memory-only operation instead of taking the
+    /// app down.
     pub fn open(path: &Path) -> (EventStore, Replay) {
         let (mut replay, note) = match Self::read_all(path) {
             Ok(r) => (r, None),
@@ -120,9 +121,15 @@ impl EventStore {
             frame_count: replay.frames.len() as u64,
             degraded_reason: note,
         };
-        match OpenOptions::new().create(true).append(true).open(path) {
-            Ok(file) => store.file = Some(file),
-            Err(err) => store.degraded_reason = Some(format!("history not persisted: {err}")),
+        // Only append to a log that replayed cleanly: a failed read leaves
+        // `last_ts` at 0, and appending onto it would stamp every new event
+        // decades into the future (and break per-day telemetry dedup). Stay
+        // memory-only until the next launch replays the log successfully.
+        if store.degraded_reason.is_none() {
+            match OpenOptions::new().create(true).append(true).open(path) {
+                Ok(file) => store.file = Some(file),
+                Err(err) => store.degraded_reason = Some(format!("history not persisted: {err}")),
+            }
         }
         (store, replay)
     }
@@ -212,9 +219,14 @@ impl EventStore {
         Ok(5)
     }
 
-    /// Move an unreadable log aside (nothing is deleted) and start fresh.
+    /// Move an unreadable log aside and start fresh. Each corruption event
+    /// archives under its own timestamped name, so a second corruption never
+    /// overwrites a previous archive. Best-effort: if the rename is refused
+    /// (locked file), the fresh log replaces the unreadable bytes.
     fn archive_and_restart(path: &Path) -> Result<u64, String> {
-        let _ = fs::rename(path, path.with_extension("bin.old"));
+        let stamp = chrono::Utc::now().format("%Y%m%dT%H%M%S%.3fZ");
+        let archived = path.with_extension(format!("bin.old-{stamp}"));
+        let _ = fs::rename(path, &archived);
         Self::fresh_log(path)
     }
 
@@ -308,6 +320,25 @@ mod tests {
                 creator: "openai".into(),
             },
         }
+    }
+
+    /// Existing `history.bin.old-<timestamp>` archives of `path`, oldest
+    /// first (the timestamp sorts lexicographically).
+    fn archives_of(path: &Path) -> Vec<PathBuf> {
+        let prefix = format!("{}.old-", path.file_name().unwrap().to_string_lossy());
+        let mut found: Vec<PathBuf> = fs::read_dir(path.parent().unwrap())
+            .into_iter()
+            .flatten()
+            .flatten()
+            .map(|entry| entry.path())
+            .filter(|p| {
+                p.file_name()
+                    .and_then(|n| n.to_str())
+                    .is_some_and(|n| n.starts_with(&prefix))
+            })
+            .collect();
+        found.sort();
+        found
     }
 
     #[test]
@@ -412,9 +443,86 @@ mod tests {
         let (store, replay) = EventStore::open(&path);
         assert_eq!(replay.frames.len(), 0);
         assert_eq!(store.frame_count, 0);
-        assert!(path.with_extension("bin.old").exists() || fs::read(&path).unwrap()[..4] == MAGIC);
+        assert!(fs::read(&path).unwrap()[..4] == MAGIC);
+        let archives = archives_of(&path);
+        assert_eq!(archives.len(), 1);
+        assert_eq!(fs::read(&archives[0]).unwrap(), b"JUNKJUNKJUNK");
         let _ = fs::remove_file(&path);
-        let _ = fs::remove_file(path.with_extension("bin.old"));
+        for archive in archives {
+            let _ = fs::remove_file(archive);
+        }
+    }
+
+    #[test]
+    fn second_corruption_preserves_the_first_archive() {
+        let path = temp_path("double-corruption");
+        let _ = fs::remove_file(&path);
+        fs::write(&path, b"first-corruption").unwrap();
+        EventStore::open(&path);
+        fs::write(&path, b"second-corruption").unwrap();
+        EventStore::open(&path);
+        // Each corruption event kept its own bytes: the timestamped archive
+        // name means the second one cannot overwrite the first.
+        let archives = archives_of(&path);
+        assert_eq!(archives.len(), 2);
+        assert_eq!(fs::read(&archives[0]).unwrap(), b"first-corruption");
+        assert_eq!(fs::read(&archives[1]).unwrap(), b"second-corruption");
+        let _ = fs::remove_file(&path);
+        for archive in archives {
+            let _ = fs::remove_file(archive);
+        }
+    }
+
+    #[test]
+    fn unreadable_log_degrades_to_memory_only() {
+        // A log path whose parent does not exist cannot be read (missing) or
+        // written: the store must degrade to memory-only operation without
+        // panicking.
+        let path = std::env::temp_dir()
+            .join("paretowatch-history-tests")
+            .join("missing-parent")
+            .join(format!("degraded-{}", std::process::id()))
+            .join("history.bin");
+        let (mut store, replay) = EventStore::open(&path);
+        assert_eq!(replay.frames.len(), 0);
+        assert!(store.degraded_reason().is_some());
+        assert!(store.file.is_none());
+        assert_eq!(store.append(&[(1_000, added_frame(0, "a/b"))]), 0);
+    }
+
+    /// A replay failure must leave the store memory-only: appending onto an
+    /// unreplayed log would compute `dt` from `last_ts == 0` and stamp every
+    /// event decades into the future. Simulate an unreadable-but-writable
+    /// log by holding a handle that denies read-sharing (so `fs::read` fails
+    /// with a sharing violation) while still permitting append access.
+    #[cfg(windows)]
+    #[test]
+    fn append_after_failed_replay_does_not_touch_the_log() {
+        use std::os::windows::fs::OpenOptionsExt;
+        const FILE_SHARE_WRITE: u32 = 0x2;
+        let path = temp_path("replay-failed");
+        let _ = fs::remove_file(&path);
+        {
+            let mut store = EventStore::open(&path).0;
+            store.append(&[(1_000, added_frame(0, "a/b"))]);
+        }
+        let good = fs::read(&path).unwrap();
+        {
+            let _lock = OpenOptions::new()
+                .read(true)
+                .share_mode(FILE_SHARE_WRITE)
+                .open(&path)
+                .unwrap();
+            let (mut store, replay) = EventStore::open(&path);
+            assert!(replay.frames.is_empty());
+            assert!(store.degraded_reason().is_some());
+            // The unreadable log is never opened for append.
+            assert!(store.file.is_none());
+            assert_eq!(store.append(&[(2_000, added_frame(1, "c/d"))]), 0);
+        }
+        // The append wrote nothing: the replayed bytes are intact.
+        assert_eq!(fs::read(&path).unwrap(), good);
+        let _ = fs::remove_file(&path);
     }
 
     #[test]

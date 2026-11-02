@@ -88,9 +88,10 @@ fn live_aa_intelligence_index_and_speed() {
 
     let rows = index.expect("AA Intelligence Index fetch failed");
     validate_board("AA Intelligence Index", &rows, 30, 0.0, 100.0);
-    // The fetch never fails (the bundled snapshot is the fallback), so prove
-    // the live page actually parsed: overlay re-tags matched rows "live".
-    let today = chrono::Local::now().format("%Y-%m-%d").to_string();
+    // A failed fetch now surfaces as Err, so reaching here proves the live
+    // page parsed: overlay re-tags matched rows "live" (UTC dates, matching
+    // the provenance tag).
+    let today = chrono::Utc::now().format("%Y-%m-%d").to_string();
     let live_rows = rows
         .iter()
         .filter(|row| row.name.contains(&format!("live {today}")))
@@ -241,8 +242,8 @@ fn live_worker_dispatch_routes_sources() {
     let rows = super::fetch_benchmark_source(&client, crate::types::BenchmarkSource::DeepSWE11)
         .expect("dispatched DeepSWE fetch failed");
     validate_board("Worker dispatch (DeepSWE11)", &rows, 3, 0.0, 100.0);
-    // The AA snapshot dispatch must not error either (it never does — the
-    // bundled snapshot is its fallback).
+    // The AA snapshot dispatch errors only when the live page is unusable
+    // (the app then keeps its last good board); here it must still succeed.
     super::fetch_benchmark_source(
         &client,
         crate::types::BenchmarkSource::ArtificialAnalysisSnapshot,

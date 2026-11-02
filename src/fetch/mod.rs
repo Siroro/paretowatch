@@ -30,12 +30,15 @@ pub(crate) use swebench_pro::*;
 pub(crate) use terminal_bench::*;
 pub(crate) use vals_sre::*;
 
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
+use std::io::Read;
+use std::path::{Path, PathBuf};
 use std::sync::mpsc::{self, Receiver, Sender};
 use std::thread;
 use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result, anyhow};
+use directories::ProjectDirs;
 use eframe::egui;
 use regex::Regex;
 use reqwest::blocking::Client;
@@ -49,6 +52,12 @@ use crate::worker::{WorkerCommand, WorkerMessage};
 
 pub(crate) const BENCHMARK_REFRESH_SECS: u64 = 6 * 60 * 60;
 
+/// Hard cap on buffered response bodies. The largest fetch (the AA
+/// leaderboard page) is a few megabytes, so anything bigger means the
+/// endpoint drifted or lied about its content: error out instead of
+/// ballooning memory.
+const MAX_RESPONSE_BYTES: u64 = 25 * 1024 * 1024;
+
 pub(crate) fn start_worker(
     ctx: egui::Context,
     initial_settings: Settings,
@@ -58,32 +67,62 @@ pub(crate) fn start_worker(
     let (msg_tx, msg_rx) = mpsc::channel::<WorkerMessage>();
 
     thread::spawn(move || {
-        let client = Client::builder()
+        // A failed client build must not panic here: that would kill the
+        // worker thread before its loop and leave the UI on "Starting…"
+        // forever. Surface it as a pricing error instead.
+        let client = match Client::builder()
             .timeout(Duration::from_secs(20))
             .user_agent(concat!("ParetoWatch/", env!("CARGO_PKG_VERSION")))
             .build()
-            .expect("HTTP client");
+        {
+            Ok(client) => client,
+            Err(err) => {
+                let _ = msg_tx.send(WorkerMessage::Prices(Err(format!(
+                    "HTTP client init failed: {err}"
+                ))));
+                return;
+            }
+        };
         let mut settings = initial_settings;
-        let mut alert_state: HashMap<u64, bool> = HashMap::new();
+        // Edge-trigger state for the worker-evaluated level alerts. It is
+        // persisted so a standing condition does not re-fire on every app
+        // start: an absent entry reads as `false`, which is the firing edge.
+        let mut saved_alert_state: HashMap<u64, bool> = load_alert_state();
+        let mut alert_state: HashMap<u64, bool> = saved_alert_state.clone();
+        // Prune to the live alert ids the same way settings saves do, so
+        // entries for deleted alerts cannot linger in the file.
+        alert_state.retain(|id, _| settings.alerts.iter().any(|a| a.id == *id));
         let mut previous_quotes: HashMap<String, Quote> = HashMap::new();
+        // Base feed of the last accepted poll, so alert evaluation can tell
+        // a real price move apart from the fetch fallback chain switching
+        // between catalog and text sources with different per-model prices.
+        let mut previous_base_source: Option<String> = None;
         let mut last_benchmark_fetch: Option<Instant> = None;
 
         loop {
             let price_result = fetch_prices(&client, &settings);
             if let Ok(snapshot) = &price_result {
+                // No previous poll yet means no comparison, not a switch
+                // (mirroring the empty `previous_quotes` seeding below).
+                let base_source_changed = previous_base_source
+                    .as_deref()
+                    .is_some_and(|source| source != snapshot.base_source);
                 evaluate_alerts(
                     snapshot,
                     &settings,
                     &mut alert_state,
                     &previous_quotes,
+                    base_source_changed,
                     &notifications,
                 );
+                persist_alert_state(&alert_state, &mut saved_alert_state);
                 previous_quotes = snapshot
                     .quotes
                     .iter()
                     .cloned()
                     .map(|q| (q.model.clone(), q))
                     .collect();
+                previous_base_source = Some(snapshot.base_source.clone());
             }
             let _ = msg_tx.send(WorkerMessage::Prices(
                 price_result.map_err(|e| format!("{e:#}")),
@@ -109,7 +148,11 @@ pub(crate) fn start_worker(
                         let result = if source == BenchmarkSource::ArtificialAnalysisSnapshot {
                             let (index, speed) = fetch_aa_index_and_speed(&benchmark_client);
                             let _ = benchmark_tx.send(WorkerMessage::AaSpeed(speed));
-                            index.map_err(|e| format!("{e:#}"))
+                            // Already a String error: an index failure must
+                            // reach the app as an Err so it keeps its last
+                            // good board instead of regressing to the older
+                            // bundled snapshot.
+                            index
                         } else {
                             fetch_benchmark_source(&benchmark_client, source)
                                 .map_err(|e| format!("{e:#}"))
@@ -126,6 +169,7 @@ pub(crate) fn start_worker(
                 Ok(WorkerCommand::UpdateSettings(new_settings)) => {
                     settings = new_settings;
                     alert_state.retain(|id, _| settings.alerts.iter().any(|a| a.id == *id));
+                    persist_alert_state(&alert_state, &mut saved_alert_state);
                 }
                 Ok(WorkerCommand::FetchPerformance(models)) => {
                     // Route analytics are polled per model (no bulk endpoint),
@@ -151,26 +195,89 @@ pub(crate) fn start_worker(
     (cmd_tx, msg_rx)
 }
 
+/// Persisted edge-trigger state for the worker-evaluated level alerts,
+/// alongside the other config files: an unparseable or missing file starts
+/// from the empty state (the pre-persistence behavior), never a panic.
+fn alert_state_path() -> PathBuf {
+    if let Some(project) = ProjectDirs::from("ai", "ParetoWatch", "ParetoWatch") {
+        project.config_dir().join("alert_state.json")
+    } else {
+        PathBuf::from("paretowatch-alert-state.json")
+    }
+}
+
+fn load_alert_state_from(path: &Path) -> HashMap<u64, bool> {
+    std::fs::read(path)
+        .ok()
+        .and_then(|bytes| serde_json::from_slice(&bytes).ok())
+        .unwrap_or_default()
+}
+
+fn load_alert_state() -> HashMap<u64, bool> {
+    load_alert_state_from(&alert_state_path())
+}
+
+/// Atomic write (temp + rename, the notification log's pattern). Best
+/// effort: a failed save only costs a re-fire on the next app start.
+fn save_alert_state_to(path: &Path, state: &HashMap<u64, bool>) {
+    if let Some(parent) = path.parent() {
+        let _ = std::fs::create_dir_all(parent);
+    }
+    // Sorted keys keep the file bytes stable for identical state.
+    let ordered: BTreeMap<u64, bool> = state.iter().map(|(k, v)| (*k, *v)).collect();
+    if let Ok(bytes) = serde_json::to_vec(&ordered) {
+        let tmp = path.with_extension("json.tmp");
+        if std::fs::write(&tmp, bytes).is_ok() && std::fs::rename(&tmp, path).is_err() {
+            let _ = std::fs::remove_file(path);
+            let _ = std::fs::rename(&tmp, path);
+        }
+    }
+}
+
+/// `evaluate_alerts` rewrites the whole map every poll, so only touch the
+/// disk when the map actually changed since the last write.
+fn persist_alert_state_to(
+    path: &Path,
+    state: &HashMap<u64, bool>,
+    last_saved: &mut HashMap<u64, bool>,
+) {
+    if *state != *last_saved {
+        save_alert_state_to(path, state);
+        *last_saved = state.clone();
+    }
+}
+
+fn persist_alert_state(state: &HashMap<u64, bool>, last_saved: &mut HashMap<u64, bool>) {
+    persist_alert_state_to(&alert_state_path(), state, last_saved)
+}
+
 pub(crate) fn fetch_json(client: &Client, url: &str, label: &str) -> Result<Value> {
-    client
+    let response = client
         .get(url)
         .send()
         .with_context(|| format!("{label} request failed ({url})"))?
         .error_for_status()
-        .with_context(|| format!("{label} returned an HTTP error ({url})"))?
-        .json::<Value>()
-        .with_context(|| format!("{label} returned invalid JSON ({url})"))
+        .with_context(|| format!("{label} returned an HTTP error ({url})"))?;
+    if let Some(len) = response.content_length() {
+        ensure_body_within_cap(len, label, url)?;
+    }
+    let body = read_capped_body(response, label, url)?;
+    let text = decode_body(body, label, url)?;
+    serde_json::from_str(&text).with_context(|| format!("{label} returned invalid JSON ({url})"))
 }
 
 pub(crate) fn fetch_text(client: &Client, url: &str, label: &str) -> Result<String> {
-    client
+    let response = client
         .get(url)
         .send()
         .with_context(|| format!("{label} request failed ({url})"))?
         .error_for_status()
-        .with_context(|| format!("{label} returned an HTTP error ({url})"))?
-        .text()
-        .with_context(|| format!("Could not read {label} response ({url})"))
+        .with_context(|| format!("{label} returned an HTTP error ({url})"))?;
+    if let Some(len) = response.content_length() {
+        ensure_body_within_cap(len, label, url)?;
+    }
+    let body = read_capped_body(response, label, url)?;
+    decode_body(body, label, url)
 }
 
 pub(crate) fn fetch_json_post(
@@ -179,15 +286,53 @@ pub(crate) fn fetch_json_post(
     body: &Value,
     label: &str,
 ) -> Result<Value> {
-    client
+    let response = client
         .post(url)
         .json(body)
         .send()
         .with_context(|| format!("{label} request failed ({url})"))?
         .error_for_status()
-        .with_context(|| format!("{label} returned an HTTP error ({url})"))?
-        .json::<Value>()
-        .with_context(|| format!("{label} returned invalid JSON ({url})"))
+        .with_context(|| format!("{label} returned an HTTP error ({url})"))?;
+    if let Some(len) = response.content_length() {
+        ensure_body_within_cap(len, label, url)?;
+    }
+    let bytes = read_capped_body(response, label, url)?;
+    let text = decode_body(bytes, label, url)?;
+    serde_json::from_str(&text).with_context(|| format!("{label} returned invalid JSON ({url})"))
+}
+
+fn ensure_body_within_cap(len: u64, label: &str, url: &str) -> Result<()> {
+    if len > MAX_RESPONSE_BYTES {
+        return Err(anyhow!(
+            "{label} response of {len} bytes exceeds the {MAX_RESPONSE_BYTES}-byte cap ({url})"
+        ));
+    }
+    Ok(())
+}
+
+/// Buffer the response body under [`MAX_RESPONSE_BYTES`]. The stream is read
+/// one byte past the cap so a body that lies about (or omits) its
+/// Content-Length is detected rather than silently truncated.
+fn read_capped_body<R: Read>(response: R, label: &str, url: &str) -> Result<Vec<u8>> {
+    let mut limited = response.take(MAX_RESPONSE_BYTES + 1);
+    let mut body = Vec::new();
+    limited
+        .read_to_end(&mut body)
+        .with_context(|| format!("Could not read {label} response ({url})"))?;
+    ensure_body_within_cap(body.len() as u64, label, url)?;
+    Ok(body)
+}
+
+/// Decode a capped body the way reqwest's `text()` does for the UTF-8
+/// responses these feeds serve, including stripping a leading BOM.
+fn decode_body(body: Vec<u8>, label: &str, url: &str) -> Result<String> {
+    String::from_utf8(body)
+        .map(|text| {
+            text.strip_prefix('\u{feff}')
+                .map(str::to_owned)
+                .unwrap_or(text)
+        })
+        .with_context(|| format!("Could not read {label} response ({url})"))
 }
 
 pub(crate) fn fetch_benchmark_source(
@@ -301,4 +446,89 @@ fn value_at_path<'a>(mut value: &'a Value, path: &[&str]) -> Option<&'a Value> {
 pub(crate) fn string_at(value: &Value, keys: &[&str]) -> Option<String> {
     keys.iter()
         .find_map(|k| value.get(*k).and_then(Value::as_str).map(str::to_owned))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn temp_state_path(name: &str) -> PathBuf {
+        std::env::temp_dir()
+            .join("paretowatch-alert-state-tests")
+            .join(format!("{}-{name}.json", std::process::id()))
+    }
+
+    #[test]
+    fn alert_state_roundtrips_through_disk() {
+        let path = temp_state_path("roundtrip");
+        let _ = std::fs::remove_file(&path);
+        let mut state: HashMap<u64, bool> = HashMap::new();
+        state.insert(7, true);
+        state.insert(11, false);
+        save_alert_state_to(&path, &state);
+        assert_eq!(load_alert_state_from(&path), state);
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn alert_state_tolerates_corrupt_or_missing_files() {
+        // Never panic, never seed stale edges: an unreadable file is the
+        // empty state (the pre-persistence behavior).
+        let path = temp_state_path("corrupt");
+        std::fs::write(&path, b"{not json").unwrap();
+        assert!(load_alert_state_from(&path).is_empty());
+        let _ = std::fs::remove_file(&path);
+        assert!(load_alert_state_from(&path).is_empty());
+    }
+
+    #[test]
+    fn alert_state_persists_only_when_changed() {
+        // evaluate_alerts rewrites the map every poll; the file must not be
+        // rewritten alongside it unless an edge actually moved.
+        let path = temp_state_path("changed-only");
+        let _ = std::fs::remove_file(&path);
+        let mut saved: HashMap<u64, bool> = HashMap::new();
+        let mut state: HashMap<u64, bool> = HashMap::new();
+        state.insert(3, true);
+        persist_alert_state_to(&path, &state, &mut saved);
+        assert_eq!(load_alert_state_from(&path).get(&3), Some(&true));
+        // Same state again: no write — a hand-mangled file survives intact.
+        std::fs::write(&path, b"mangled").unwrap();
+        persist_alert_state_to(&path, &state, &mut saved);
+        assert_eq!(std::fs::read(&path).unwrap(), b"mangled");
+        // A changed edge is written through and becomes the new baseline.
+        state.insert(3, false);
+        persist_alert_state_to(&path, &state, &mut saved);
+        assert_eq!(load_alert_state_from(&path).get(&3), Some(&false));
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn oversized_bodies_are_rejected_with_source_named() {
+        let url = "https://example.test/feed";
+        assert!(ensure_body_within_cap(MAX_RESPONSE_BYTES, "Feed", url).is_ok());
+        let err =
+            ensure_body_within_cap(MAX_RESPONSE_BYTES + 1, "Feed", url).expect_err("over the cap");
+        let message = format!("{err:#}");
+        assert!(message.contains("Feed") && message.contains(url));
+    }
+
+    #[test]
+    fn body_reads_stop_at_the_cap_even_when_the_stream_does_not() {
+        // A stream with no end: the Take limit must stop the read and the
+        // cap check must then reject it instead of truncating silently.
+        let stream = std::io::repeat(0u8).take(MAX_RESPONSE_BYTES + 2);
+        let err = read_capped_body(stream, "Feed", "https://example.test/feed")
+            .expect_err("unbounded stream");
+        let message = format!("{err:#}");
+        assert!(message.contains("Feed") && message.contains("cap"));
+    }
+
+    #[test]
+    fn bodies_within_the_cap_are_buffered_whole() {
+        let stream = std::io::Cursor::new(b"payload".to_vec());
+        let body =
+            read_capped_body(stream, "Feed", "https://example.test/feed").expect("small body");
+        assert_eq!(body, b"payload");
+    }
 }

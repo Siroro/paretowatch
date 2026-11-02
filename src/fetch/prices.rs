@@ -87,6 +87,8 @@ pub(crate) fn fetch_prices(client: &Client, settings: &Settings) -> Result<Price
                 quote.creator = catalog.creator.clone();
                 quote.vision = catalog.vision;
                 quote.uncensored = catalog.uncensored;
+                quote.released_at = catalog.released_at;
+                quote.listed_at = catalog.listed_at;
                 // Keep the catalogue's published cache list price even for
                 // models whose cheapest market provider publishes no cache
                 // ask; blended pricing falls back to it.
@@ -108,7 +110,9 @@ pub(crate) fn fetch_prices(client: &Client, settings: &Settings) -> Result<Price
     } else {
         // If modality metadata is temporarily unavailable, fail closed on obvious
         // non-LLM products instead of filling the tray with image/video/audio rows.
-        quotes.retain(|q| is_probably_text_model_label(&q.model, &q.display_name));
+        // Same rule as the catalog gate, with no catalog evidence: nothing is
+        // explicitly kept, so the media-word blocklist stands.
+        quotes.retain(|q| is_probably_text_model_label(&q.model, &q.display_name, false));
     }
 
     if quotes.is_empty() {
@@ -360,6 +364,11 @@ pub(crate) fn parse_price_matrix(value: &Value, settings: &Settings) -> Result<V
                 ttft_p50_ms: None,
                 ttft_samples: None,
                 uptime_pct: None,
+                // Release metadata is resolved for the catalog rows and
+                // copied onto these quotes in the fetch merge, where the
+                // catalog's canonical display name is already known.
+                released_at: None,
+                listed_at: None,
             });
         }
     }
@@ -402,6 +411,14 @@ pub(crate) fn parse_model_catalog(value: &Value) -> Result<Vec<Quote>> {
         let creator = string_at(model, &["provider", "creator", "organization"])
             .unwrap_or_else(|| infer_creator(&id));
         let uncensored = is_uncensored_model(&id, &name, &creator);
+        // Age provenance: the marketplace's own listing timestamp, plus the
+        // bundled release table resolved against the display name and — for
+        // rows whose name carries no model words the key normalizer can
+        // match — the raw slug. Release wins in the UI; this is the
+        // fallback.
+        let listed_at = model.get("added_at").and_then(Value::as_i64);
+        let released_at = crate::release_dates::release_date(&name)
+            .or_else(|| crate::release_dates::release_date(&id));
         out.push(Quote {
             model: id.clone(),
             display_name: name,
@@ -430,6 +447,8 @@ pub(crate) fn parse_model_catalog(value: &Value) -> Result<Vec<Quote>> {
             ttft_p50_ms: None,
             ttft_samples: None,
             uptime_pct: None,
+            released_at,
+            listed_at,
         });
     }
     Ok(out)
@@ -459,7 +478,11 @@ pub(crate) fn catalog_supports_vision(model: &Value) -> bool {
 }
 
 pub(crate) fn catalog_is_text_model(model: &Value, id: &str, name: &str) -> bool {
-    if !is_probably_text_model_label(id, name) {
+    // The slug blocklist is a heuristic; the catalog's own architecture
+    // metadata is authoritative. A vision-capable entry (image input, text
+    // output) survives a media-word slug — the output-modality checks below
+    // still exclude image/audio generators.
+    if !is_probably_text_model_label(id, name, catalog_supports_vision(model)) {
         return false;
     }
     let Some(architecture) = model.get("architecture") else {
@@ -491,7 +514,14 @@ pub(crate) fn catalog_is_text_model(model: &Value, id: &str, name: &str) -> bool
     true
 }
 
-pub(crate) fn is_probably_text_model_label(id: &str, name: &str) -> bool {
+pub(crate) fn is_probably_text_model_label(id: &str, name: &str, catalog_kept: bool) -> bool {
+    if catalog_kept {
+        // The catalog's own modality metadata marked this entry as a real
+        // (vision-capable) model; a media word in the slug must not overrule
+        // it. Output-modality checks at the call site still exclude
+        // image/audio generators.
+        return true;
+    }
     let n = format!("{} {}", normalize(id), normalize(name));
     // Product families that are not text-generating LLMs. Keep multimodal-input
     // LLMs unless the product itself is explicitly an image/video/audio generator.
@@ -1369,6 +1399,57 @@ mod tests {
         assert!(by_id("vision-llm").vision);
         assert!(!by_id("text-llm").vision);
         assert!(by_id("modality-string-only").vision);
+    }
+
+    #[test]
+    fn vision_capable_entries_survive_media_word_slugs() {
+        // A text-output vision LLM whose id contains a media word must not
+        // be dropped by the label blocklist when the catalog marks it
+        // vision-capable; genuinely audio-only entries are still excluded,
+        // with or without architecture metadata.
+        let v = serde_json::json!({"data": [
+            {
+                "id":"gpt-image-chat", "name":"GPT Image Chat", "provider":"Example",
+                "architecture":{"input_modalities":["text","image"],"output_modalities":["text"]},
+                "pricing":{"prompt":"0.000001","completion":"0.000002"}
+            },
+            {
+                "id":"voice-audio-pro", "name":"Voice Audio Pro", "provider":"Example",
+                "architecture":{"input_modalities":["text","audio"],"output_modalities":["audio"]},
+                "pricing":{"prompt":"0.000001","completion":"0.000002"}
+            },
+            {
+                "id":"audio-tts-plain", "name":"Audio TTS Plain", "provider":"Example",
+                "pricing":{"prompt":"0.000001","completion":"0.000002"}
+            }
+        ]});
+        let rows = parse_model_catalog(&v).unwrap();
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].model, "gpt-image-chat");
+        assert!(rows[0].vision);
+    }
+
+    #[test]
+    fn text_model_label_blocklist_exempts_only_catalog_kept_entries() {
+        // The degraded no-catalog path passes no explicit-keep signal, so
+        // the media-word blocklist stands there; the catalog gate passes
+        // its own vision verdict instead.
+        assert!(!is_probably_text_model_label(
+            "gpt-image-chat",
+            "GPT Image Chat",
+            false
+        ));
+        assert!(is_probably_text_model_label(
+            "gpt-image-chat",
+            "GPT Image Chat",
+            true
+        ));
+        // A plain text-model label is unaffected either way.
+        assert!(is_probably_text_model_label(
+            "gpt-5.6-sol",
+            "GPT-5.6 Sol",
+            false
+        ));
     }
 
     #[test]

@@ -475,6 +475,111 @@ impl ModalityFilter {
     }
 }
 
+/// Chart age filter. A model's age runs from its release date when the
+/// bundled [`crate::release_dates`] table knows one, else from the
+/// marketplace `added_at` listing date; models with neither date pass only
+/// the Any option, mirroring how the modality filter treats missing
+/// metadata.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
+pub(crate) enum AgeFilter {
+    #[default]
+    All,
+    /// Released/listed within the last ~30 days.
+    Month1,
+    Months3,
+    Months6,
+    Year1,
+    /// Older than a year — the vintage end of the catalogue.
+    Older,
+}
+
+impl AgeFilter {
+    pub(crate) const ALL: [Self; 6] = [
+        Self::All,
+        Self::Month1,
+        Self::Months3,
+        Self::Months6,
+        Self::Year1,
+        Self::Older,
+    ];
+
+    pub(crate) fn label(self) -> &'static str {
+        match self {
+            Self::All => "Any",
+            Self::Month1 => "≤ 1 mo",
+            Self::Months3 => "≤ 3 mo",
+            Self::Months6 => "≤ 6 mo",
+            Self::Year1 => "≤ 1 yr",
+            Self::Older => "Older",
+        }
+    }
+
+    /// Bucket ceilings in days, kept aligned with [`Self::ALL`]'s order.
+    fn ceiling_days(self) -> f64 {
+        match self {
+            Self::All => f64::INFINITY,
+            Self::Month1 => 31.0,
+            Self::Months3 => 92.0,
+            Self::Months6 => 183.0,
+            Self::Year1 => 366.0,
+            Self::Older => f64::INFINITY,
+        }
+    }
+
+    pub(crate) fn allows(self, age_days: Option<f64>) -> bool {
+        match (self, age_days) {
+            (Self::All, _) => true,
+            (_, None) => false,
+            (Self::Older, Some(days)) => days > Self::Year1.ceiling_days(),
+            (_, Some(days)) => days <= self.ceiling_days(),
+        }
+    }
+}
+
+/// How far back the model card's price-history sparkline and expanded plot
+/// reach. Display-only: recording and alerts are unaffected.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
+pub(crate) enum HistoryWindow {
+    #[default]
+    Hours24,
+    Days3,
+    Days7,
+    Days30,
+    All,
+}
+
+impl HistoryWindow {
+    pub(crate) const ALL: [Self; 5] = [
+        Self::Hours24,
+        Self::Days3,
+        Self::Days7,
+        Self::Days30,
+        Self::All,
+    ];
+
+    pub(crate) fn label(self) -> &'static str {
+        match self {
+            Self::Hours24 => "24h",
+            Self::Days3 => "3d",
+            Self::Days7 => "7d",
+            Self::Days30 => "30d",
+            Self::All => "All",
+        }
+    }
+
+    /// Window length in seconds; `None` = everything recorded since first
+    /// launch.
+    pub(crate) fn secs(self) -> Option<f64> {
+        match self {
+            Self::Hours24 => Some(24.0 * 3_600.0),
+            Self::Days3 => Some(3.0 * 86_400.0),
+            Self::Days7 => Some(7.0 * 86_400.0),
+            Self::Days30 => Some(30.0 * 86_400.0),
+            Self::All => None,
+        }
+    }
+}
+
 /// Speed filter, shared by the Models tab table. The measured value is the
 /// market-wide median tokens/second from the live market feed's 24h rolling
 /// telemetry (`Quote::throughput_p50`); models without speed data pass only
@@ -748,6 +853,9 @@ pub(crate) struct Settings {
     /// on the chart (faded) but the frontier line skips them, and frontier
     /// entry/exit alerts ignore them.
     pub(crate) hidden_frontier_models: Vec<String>,
+    /// How far back the model card's price-history graph reaches. Display
+    /// only — the history log records everything regardless.
+    pub(crate) history_window: HistoryWindow,
 }
 
 impl Default for Settings {
@@ -765,6 +873,7 @@ impl Default for Settings {
             quiet_hours_start: 22,
             quiet_hours_end: 7,
             hidden_frontier_models: vec![],
+            history_window: HistoryWindow::Hours24,
         }
     }
 }
@@ -874,9 +983,36 @@ pub(crate) struct Quote {
     /// Share of requests across the whole market that did not fail, over the
     /// last 24h.
     pub(crate) uptime_pct: Option<f64>,
+    /// Unix timestamp of the model's release date, resolved from the bundled
+    /// [`crate::release_dates`] table when it names this model. `None` when
+    /// the table has no entry — the UI then falls back to `listed_at`.
+    pub(crate) released_at: Option<i64>,
+    /// Unix timestamp of the model's marketplace listing date (the Surplus
+    /// catalog's `added_at`). `None` on comparison-matrix quotes and in
+    /// catalog-less fallbacks.
+    pub(crate) listed_at: Option<i64>,
 }
 
 impl Quote {
+    /// The timestamp the model's age runs from: the true release date when
+    /// the bundled table knows one, else the marketplace listing date. The
+    /// `bool` reports which kind the caller is looking at, so the UI can say
+    /// "Released" vs "Listed" instead of silently equating the two.
+    pub(crate) fn age_timestamp(&self) -> Option<(i64, bool)> {
+        match self.released_at {
+            Some(ts) => Some((ts, true)),
+            None => self.listed_at.map(|ts| (ts, false)),
+        }
+    }
+
+    /// Age in whole days from [`Self::age_timestamp`] to `now` (unix
+    /// seconds). Future timestamps clamp to zero — a clock skew should never
+    /// render a negative age.
+    pub(crate) fn age_days(&self, now: i64) -> Option<f64> {
+        let (ts, _) = self.age_timestamp()?;
+        Some((((now - ts) as f64) / 86_400.0).max(0.0).floor())
+    }
+
     /// Cache-read rate a cost calculation should bill when the quote is used
     /// as-is: the selected provider's own cache ask, else the cheapest cache
     /// ask anywhere in this model's market. `None` when no provider in the
@@ -1631,6 +1767,58 @@ mod tests {
         assert!(!ModalityFilter::Vision.allows(false));
         assert!(!ModalityFilter::TextOnly.allows(true));
         assert!(ModalityFilter::TextOnly.allows(false));
+    }
+
+    #[test]
+    fn history_windows_expose_labels_and_lengths() {
+        assert_eq!(HistoryWindow::default(), HistoryWindow::Hours24);
+        for option in HistoryWindow::ALL {
+            assert!(!option.label().is_empty());
+            match option {
+                HistoryWindow::All => assert_eq!(option.secs(), None),
+                _ => assert!(option.secs().is_some_and(|s| s > 0.0)),
+            }
+        }
+        assert_eq!(HistoryWindow::Hours24.secs(), Some(86_400.0));
+    }
+
+    #[test]
+    fn age_filter_buckets_partition_the_timeline() {
+        let fresh = Some(6.0);
+        let recent = Some(45.0);
+        let mid = Some(120.0);
+        let aging = Some(300.0);
+        let old = Some(500.0);
+        let ancient = Some(800.0);
+        for (filter, value, expected) in [
+            (AgeFilter::All, None, true),
+            (AgeFilter::All, ancient, true),
+            (AgeFilter::Month1, None, false),
+            (AgeFilter::Month1, fresh, true),
+            (AgeFilter::Month1, recent, false),
+            (AgeFilter::Months3, recent, true),
+            (AgeFilter::Months3, mid, false),
+            (AgeFilter::Months6, mid, true),
+            (AgeFilter::Months6, aging, false),
+            (AgeFilter::Year1, aging, true),
+            (AgeFilter::Year1, old, false),
+            (AgeFilter::Older, old, true),
+            (AgeFilter::Older, ancient, true),
+            (AgeFilter::Older, aging, false),
+        ] {
+            assert_eq!(filter.allows(value), expected, "{filter:?}({value:?})");
+        }
+        // The buckets must tile the timeline: every age is allowed by at
+        // least one non-Any option.
+        for age in [fresh, recent, mid, aging, old, ancient] {
+            assert!(
+                AgeFilter::ALL
+                    .iter()
+                    .filter(|f| **f != AgeFilter::All)
+                    .any(|f| f.allows(age)),
+                "{age:?} days falls through every bucket"
+            );
+        }
     }
 
     #[test]

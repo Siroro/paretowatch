@@ -15,14 +15,14 @@ use crate::format::{
     format_compact_number, format_compact_usd, format_latency_ms, format_price_tick,
     format_throughput,
 };
-use crate::history::track::{ModelSeries, historical_low};
+use crate::history::track::{ModelSeries, blended_series, clip_series_to_window, historical_low};
 use crate::pareto::{JoinedPoint, pareto_search_matches, price_from_plot_x, price_to_plot_x};
 use crate::theme::{
-    PRICE_DOWN, PRICE_UP, copyable_slug, creator_color, discount_color, free_offer_badge,
-    group_label,
+    PRICE_DOWN, PRICE_UP, age_color, age_label, copyable_slug, creator_color, discount_color,
+    free_offer_badge, group_label,
 };
 use crate::types::{
-    ANY_MODEL, AlertMode, BenchmarkMetric, BenchmarkSource, ComparisonMode, CostBasis,
+    ANY_MODEL, AgeFilter, AlertMode, BenchmarkMetric, BenchmarkSource, ComparisonMode, CostBasis,
     LiquidityFilter, ModalityFilter, PriceMetric, PricingSource, Quote, UncensoredFilter,
     blended_price,
 };
@@ -138,6 +138,7 @@ impl ParetoWatchApp {
                     + usize::from(self.liquidity_filter != LiquidityFilter::Any)
                     + usize::from(self.modality_filter != ModalityFilter::All)
                     + usize::from(self.uncensored_filter != UncensoredFilter::All)
+                    + usize::from(self.age_filter != AgeFilter::All)
                     + usize::from(self.pricing_source != PricingSource::All);
             let filters_label = if active_filters > 0 {
                 format!("Filters · {active_filters} ▾")
@@ -148,7 +149,7 @@ impl ParetoWatchApp {
                 ui,
                 "pareto_filters",
                 egui::RichText::new(filters_label),
-                Some("Pricing source, comparison basis, market quality, modality, safety, and price-axis options"),
+                Some("Pricing source, comparison basis, market quality, modality, safety, release age, and price-axis options"),
                 |ui| {
                     ui.set_min_width(400.0);
                     egui::Grid::new("pareto_filter_grid")
@@ -242,6 +243,28 @@ impl ParetoWatchApp {
                                     (UncensoredFilter::SafetyTuned, "Safety-tuned"),
                                 ],
                             ) {
+                                chart_axes_changed = true;
+                                reset_zoom = true;
+                                self.selected_pareto_model = None;
+                            }
+                            ui.end_row();
+
+                            ui.label("Age").on_hover_text(
+                                "Keep only models released — or, when no release date is on \
+                                 file, first listed on Surplus — within the window. Models \
+                                 with no date at all pass only 'Any'.",
+                            );
+                            let mut age_changed = false;
+                            for option in AgeFilter::ALL {
+                                age_changed |= ui
+                                    .selectable_value(
+                                        &mut self.age_filter,
+                                        option,
+                                        option.label(),
+                                    )
+                                    .changed();
+                            }
+                            if age_changed {
                                 chart_axes_changed = true;
                                 reset_zoom = true;
                                 self.selected_pareto_model = None;
@@ -626,6 +649,12 @@ impl ParetoWatchApp {
                         },
                     ));
                 }
+                if self.age_filter != AgeFilter::All {
+                    ui.small(format!(
+                        "'{}' age filter is active — models with no release or listing date are hidden.",
+                        self.age_filter.label(),
+                    ));
+                }
                 if self.pricing_source == PricingSource::LiveMarket {
                     ui.small("'Live market' pricing is active — models with no live-market ask are hidden.");
                 }
@@ -668,12 +697,9 @@ impl ParetoWatchApp {
         );
         // Every orb is hoverable, so the tooltip formatter must be able to
         // resolve any series name back to its model: plain orbs are named
-        // after the display name, while the selection/search halos carry a
-        // `*_ring_{model_id}` prefix.
-        let series_to_id: HashMap<String, String> = joined
-            .iter()
-            .map(|p| (p.model.clone(), p.model_id.clone()))
-            .collect();
+        // after their model id (unique even when two slugs share a display
+        // name — egui_plot derives hover ids from the name), while the
+        // selection/search halos carry a `*_ring_{model_id}` prefix.
         let hover_cache = Arc::clone(view.as_ref().expect("joined is non-empty"));
         let history = &self.history;
         let score_source = match self.benchmark_source {
@@ -751,11 +777,7 @@ impl ParetoWatchApp {
             .set_margin_fraction(egui::vec2(0.04, 0.06))
             .label_formatter(move |pos| match pos {
                 HoverPosition::NearDataPoint { plot_name, position, .. } if !plot_name.is_empty() => {
-                    let model_id = plot_name
-                        .strip_prefix("sel_ring_")
-                        .or_else(|| plot_name.strip_prefix("search_ring_"))
-                        .map(str::to_owned)
-                        .or_else(|| series_to_id.get(*plot_name).cloned())?;
+                    let model_id = hover_series_model_id(plot_name);
                     let p = hover_cache
                         .joined
                         .iter()
@@ -766,7 +788,7 @@ impl ParetoWatchApp {
                         .find(|q| q.model == model_id);
                     let ctx = HoverContext {
                         quote,
-                        history: history.series(&model_id),
+                        history: history.series(model_id),
                         low_metric,
                         cost_basis,
                         weights,
@@ -803,7 +825,10 @@ impl ParetoWatchApp {
                     }
                     let plot_x = price_to_plot_x(p.cost, log_price_axis);
                     let pts = PlotPoints::from(vec![[plot_x, p.score]]);
-                    plot_ui.points(Points::new(p.model.clone(), pts).radius(radius).color(color));
+                    // Named by the unique model id: a display name can be
+                    // shared by two slugs, and egui_plot derives each item's
+                    // hover id from the name.
+                    plot_ui.points(Points::new(p.model_id.clone(), pts).radius(radius).color(color));
                     if is_selected {
                         // egui_plot paints highlighted items last — above our
                         // labels. A hollow ring drawn in normal order keeps the
@@ -970,6 +995,9 @@ impl ParetoWatchApp {
             if self.uncensored_filter != UncensoredFilter::All {
                 active_filters.push(self.uncensored_filter.label().to_owned());
             }
+            if self.age_filter != AgeFilter::All {
+                active_filters.push(format!("age {}", self.age_filter.label()));
+            }
             match self.pricing_source {
                 PricingSource::All => {}
                 PricingSource::LiveMarket => active_filters.push("live market only".to_owned()),
@@ -991,7 +1019,7 @@ impl ParetoWatchApp {
         // Detail card and frontier table share one row when the window is wide
         // enough; narrow windows keep them stacked (card above, table below).
         if let (true, Some(p)) = (ui.available_width() >= 860.0, selected) {
-            let card_width = (ui.available_width() * 0.42).clamp(340.0, 560.0);
+            let card_width = (ui.available_width() * 0.5).clamp(380.0, 680.0);
             ui.horizontal(|ui| {
                 ui.vertical(|ui| {
                     ui.set_max_width(card_width);
@@ -1018,305 +1046,712 @@ impl ParetoWatchApp {
         let consensus = selected_quote
             .as_ref()
             .and_then(|quote| self.cached_consensus(quote));
-        egui::Frame::group(ui.style()).show(ui, |ui| {
-            ui.horizontal(|ui| {
-                ui.label(
-                    egui::RichText::new("●")
-                        .color(creator_color(&p.creator))
-                        .size(16.0),
-                );
-                ui.heading(&p.model);
-                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    if ui
-                        .small_button("✗")
-                        .on_hover_text("Clear the selection")
-                        .clicked()
-                    {
-                        self.selected_pareto_model = None;
-                    }
-                    ui.menu_button(egui::RichText::new("🔔").size(16.0), |ui| {
-                        if self.cost_basis == CostBasis::PerMillion
-                            && ui.button("Price threshold").clicked()
-                        {
-                            self.alert_model = p.model_id.clone();
-                            self.alert_mode = AlertMode::Threshold;
-                            self.alert_metric = self.price_metric;
-                            self.alert_cost_basis = CostBasis::PerMillion;
-                            self.alert_threshold = p.cost;
-                            self.tab = Tab::Alerts;
-                            ui.close();
-                        }
-                        if ui.button("Any price change").clicked() {
-                            self.alert_model = p.model_id.clone();
-                            self.alert_mode = AlertMode::AnyChange;
-                            self.tab = Tab::Alerts;
-                            ui.close();
-                        }
-                        if ui.button("Pareto frontier entry").clicked() {
-                            self.alert_model = p.model_id.clone();
-                            self.alert_mode = AlertMode::EntersFrontier;
-                            self.alert_metric = self.price_metric;
-                            self.alert_cost_basis = self.cost_basis;
-                            self.tab = Tab::Alerts;
-                            ui.close();
-                        }
-                        if ui.button("Pareto frontier exit").clicked() {
-                            self.alert_model = p.model_id.clone();
-                            self.alert_mode = AlertMode::LeavesFrontier;
-                            self.alert_metric = self.price_metric;
-                            self.alert_cost_basis = self.cost_basis;
-                            self.tab = Tab::Alerts;
-                            ui.close();
-                        }
-                        if ui.button("Cheapest at or above current score").clicked() {
-                            self.alert_model = p.model_id.clone();
-                            self.alert_mode = AlertMode::CheapestAboveScore;
-                            self.alert_metric = self.price_metric;
-                            self.alert_cost_basis = self.cost_basis;
-                            self.alert_score_threshold = p.score;
-                            self.tab = Tab::Alerts;
-                            ui.close();
-                        }
-                    })
-                    .response
-                    .on_hover_text("Add alarm");
-                    // Frontier visibility: hidden models keep a faded orb but
-                    // leave the frontier line and its entry/exit alerts.
-                    let hidden = self
-                        .settings
-                        .hidden_frontier_models
-                        .iter()
-                        .any(|m| m == &p.model_id);
-                    let toggle = if hidden {
-                        "⊕ Show on frontier"
-                    } else {
-                        "⊖ Hide from frontier"
-                    };
-                    if ui
-                        .button(toggle)
-                        .on_hover_text(
-                            "Hidden models stay on the chart (faded) — the frontier line \
-                             and frontier entry/exit alerts skip them",
-                        )
-                        .clicked()
-                    {
-                        self.toggle_frontier_hidden(&p.model_id);
-                    }
-                });
-            });
-            copyable_slug(ui, &p.model_id);
-            ui.horizontal_wrapped(|ui| {
-                if p.vision {
-                    ui.colored_label(egui::Color32::from_rgb(120, 200, 255), "vision");
-                } else {
-                    ui.small("text-only");
-                }
-                if p.uncensored {
-                    ui.colored_label(egui::Color32::from_rgb(240, 170, 60), "uncensored")
-                        .on_hover_text(
-                            "Listing presents itself as uncensored — refusal behavior removed \
-                             (abliterated/uncensored finetune)",
-                        );
-                }
-                if self.pricing_source == PricingSource::Catalog {
-                    ui.strong("catalog list price").on_hover_text(
-                        "Catalog pricing is active — every model is billed at its published \
-                         list rates, not the live-market asks",
-                    );
-                } else if p.live_market {
-                    ui.strong("live market");
-                    if p.free_offer_listed {
-                        free_offer_badge(ui);
-                    }
-                } else {
-                    ui.label("comparison/catalog price");
-                }
-            });
-            ui.horizontal_wrapped(|ui| {
-                ui.label(format!(
-                    "Selected cost: ${:.4} {}",
-                    p.cost,
-                    self.cost_basis.unit()
-                ));
-                ui.separator();
-                ui.label(match self.benchmark_source {
-                    BenchmarkSource::LiveBench => format!(
-                        "LiveBench {}: {:.1}",
-                        self.benchmark_metric.label(),
-                        p.score
-                    ),
-                    _ => format!("{}: {:.1}", self.benchmark_source.short_label(), p.score),
-                });
-                ui.separator();
-                ui.label(format!("Input ${:.4}", p.input));
-                if let Some(cache_read) = p.cache_read {
-                    ui.separator();
-                    ui.label(format!("Cache read ${:.4}", cache_read));
-                }
-                ui.separator();
-                ui.label(format!("Output ${:.4}", p.output));
-            });
-            if self.cost_basis == CostBasis::EstimatedPerTask
-                && let Some(tokens) = p.tokens_per_task
-            {
-                ui.horizontal_wrapped(|ui| {
-                    ui.label(format!(
-                        "Benchmark workload: {} tokens/task",
-                        format_compact_number(tokens)
-                    ));
-                    if let Some(profile) = &p.token_profile {
-                        ui.separator();
-                        ui.small(profile);
-                    }
-                    ui.separator();
-                    ui.small("repriced with current Surplus blended rate");
-                });
-            }
-            ui.horizontal_wrapped(|ui| {
-                let mut shown = false;
-                if !p.creator.is_empty() {
-                    ui.label(format!("Creator: {}", p.creator));
-                    shown = true;
-                }
-                if !p.provider.is_empty() {
-                    if shown {
-                        ui.separator();
-                    }
-                    ui.label(format!("Provider: {}", p.provider));
-                    shown = true;
-                }
-                // Composite row names carry the full method disclosure and the
-                // source-by-source grid below repeats it; skip the duplicate.
-                if !self.benchmark_source.is_composite() {
-                    if shown {
-                        ui.separator();
-                    }
-                    ui.label(format!(
-                        "{} match: {}",
-                        self.benchmark_source.short_label(),
-                        p.benchmark_name
-                    ));
-                }
-            });
 
-            if let Some(quote) = &selected_quote {
-                // Speed summary: AA's standardized medians lead (true
-                // percentiles under a uniform protocol); the live-market
-                // buckets follow as the marketplace-reality secondary. The
-                // per-provider split joins in the market-quality grid below.
-                let aa_entry = self
-                    .aa_speed_lookup()
-                    .and_then(|join| join.get(&quote.model).cloned());
-                ui.horizontal_wrapped(|ui| {
-                    ui.label("Speed:");
-                    if let Some(entry) = &aa_entry {
-                        match (entry.median_tps, entry.median_ttft_s) {
-                            (Some(tps), Some(ttft)) => {
-                                ui.label(format!(
-                                    "{} \u{00b7} TTFT {}",
-                                    format_throughput(tps),
-                                    format_latency_ms(ttft * 1000.0)
-                                ));
-                            }
-                            (Some(tps), None) => {
-                                ui.label(format_throughput(tps));
-                            }
-                            (None, Some(ttft)) => {
-                                ui.label(format!("TTFT {}", format_latency_ms(ttft * 1000.0)));
-                            }
-                            (None, None) => {}
-                        };
-                        let band = match (entry.tps_p05, entry.tps_p95) {
-                            (Some(lo), Some(hi)) => format!(
-                                " \u{00b7} p05\u{2013}p95 {}\u{2013}{}",
-                                format_throughput(lo),
-                                format_throughput(hi)
-                            ),
-                            _ => String::new(),
-                        };
-                        ui.small(format!("AA standardized{band}"))
-                            .on_hover_text(format!(
-                                "Median of AA's controlled generations under a uniform \
-                             protocol{} \u{2014} independent of any marketplace route",
-                                entry
-                                    .effort
-                                    .as_deref()
-                                    .map(|e| format!(" ({e} variant)"))
-                                    .unwrap_or_default(),
-                            ));
-                    }
-                    match (quote.throughput_p50, quote.ttft_p50_ms) {
-                        (Some(tps), Some(ttft)) => {
-                            ui.label(format!(
-                                "{}\u{2020} \u{00b7} TTFT {}\u{2020}",
-                                format_throughput(tps),
-                                format_latency_ms(ttft)
-                            ));
-                        }
-                        (Some(tps), None) => {
-                            ui.label(format!("{}\u{2020}", format_throughput(tps)));
-                        }
-                        (None, Some(ttft)) => {
-                            ui.label(format!("TTFT {}\u{2020}", format_latency_ms(ttft)));
-                        }
-                        (None, None) => {}
-                    };
-                    if let Some(pct) = quote.uptime_pct {
-                        ui.separator();
-                        ui.label(format!("{pct:.1}% uptime"));
-                    }
-                    if quote.throughput_p50.is_some() || quote.ttft_p50_ms.is_some() {
-                        ui.separator();
-                        ui.small("\u{2020} market buckets \u{00b7} 24h")
-                            .on_hover_text(
-                                "Live-market medians pooled across every seller \u{2014} the feed \
-                             publishes only coarse histogram midpoints, so treat them as \
-                             approximate",
-                            );
-                    }
-                    if aa_entry.is_none()
-                        && quote.throughput_p50.is_none()
-                        && quote.ttft_p50_ms.is_none()
-                    {
-                        ui.label(egui::RichText::new("no speed data").weak());
-                    }
-                });
-                // Selecting the card is the on-demand trigger for this
-                // model's per-provider breakdown.
-                self.ensure_performance(&quote.model, ON_DEMAND_REFRESH_SECS);
-                self.market_quality_section(ui, quote);
-            }
-
-            if let Some(consensus) = &consensus {
-                ui.collapsing("Source-by-source percentile", |ui| {
-                    // Bounded so an open grid cannot push the Pareto-efficient
-                    // table below the window edge; long boards scroll inside.
-                    egui::ScrollArea::vertical()
-                        .max_height(220.0)
-                        .auto_shrink([true, true])
-                        .show(ui, |ui| {
-                            egui::Grid::new("selected_consensus_grid")
-                                .striped(true)
-                                .show(ui, |ui| {
-                                    ui.strong("Benchmark");
-                                    ui.strong("Percentile");
-                                    ui.strong("Rank");
-                                    ui.strong("Score");
-                                    ui.strong("Matched row");
-                                    ui.end_row();
-                                    for entry in &consensus.entries {
-                                        ui.label(entry.source.short_label());
-                                        ui.label(format_percentile(entry.percentile));
-                                        ui.label(format!("#{}/{}", entry.rank, entry.total));
-                                        ui.label(format!("{:.1}", entry.score));
-                                        ui.label(&entry.benchmark_name);
-                                        ui.end_row();
-                                    }
-                                });
-                        });
-                });
-            }
+        // Age provenance: the true release date when the bundled table knows
+        // one, the marketplace listing date otherwise. One color drives the
+        // accent bar, the age chip, and the date line.
+        let now = chrono::Utc::now().timestamp();
+        let age = p
+            .released_at
+            .map(|ts| (ts, true))
+            .or_else(|| p.listed_at.map(|ts| (ts, false)));
+        let age_days = age.map(|(ts, _)| (((now - ts) as f64) / 86_400.0).max(0.0).floor());
+        let age_color = age_days.map(age_color);
+        // Rank on the current frontier (cost-ascending, so #1 is cheapest).
+        let frontier_rank = self.pareto_cache.as_ref().and_then(|cache| {
+            cache
+                .frontier
+                .iter()
+                .position(|f| f.model_id == p.model_id)
+                .map(|idx| (idx + 1, cache.frontier.len()))
         });
+
+        let card = egui::Frame::group(ui.style()).show(ui, |ui| {
+            ui.vertical(|ui| {
+                // Header: creator dot, name, age chip. The chip is the one
+                // element that carries the model's age at a glance.
+                ui.horizontal(|ui| {
+                    ui.label(
+                        egui::RichText::new("\u{25cf}")
+                            .color(creator_color(&p.creator))
+                            .size(16.0),
+                    );
+                    ui.heading(&p.model);
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        if let (Some(days), Some(color)) = (age_days, age_color)
+                            && let Some((ts, is_release)) = age
+                        {
+                            let date_text = DateTime::from_timestamp(ts, 0)
+                                .map(|dt| dt.format("%Y-%m-%d").to_string())
+                                .unwrap_or_default();
+                            let chip_hover = if is_release {
+                                format!(
+                                    "Released {date_text} \u{2014} age from the bundled \
+                                     release-date table; color marks freshness"
+                                )
+                            } else {
+                                format!(
+                                    "Listed on Surplus {date_text} \u{2014} no release date \
+                                     on file for this model, so its age runs from the \
+                                     marketplace listing"
+                                )
+                            };
+                            pill(ui, &age_label(days), color, Some(&chip_hover));
+                        }
+                    });
+                });
+                // Slug + selection actions on one line: the identifier to
+                // copy on the left, the destructive/secondary actions on the
+                // right.
+                ui.horizontal(|ui| {
+                    copyable_slug(ui, &p.model_id);
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        if ui
+                            .small_button("\u{2715}")
+                            .on_hover_text("Clear the selection")
+                            .clicked()
+                        {
+                            self.selected_pareto_model = None;
+                        }
+                        ui.menu_button(egui::RichText::new("\u{1f514}").size(16.0), |ui| {
+                            if self.cost_basis == CostBasis::PerMillion
+                                && ui.button("Price threshold").clicked()
+                            {
+                                self.alert_model = p.model_id.clone();
+                                self.alert_mode = AlertMode::Threshold;
+                                self.alert_metric = self.price_metric;
+                                self.alert_cost_basis = CostBasis::PerMillion;
+                                self.alert_threshold = p.cost;
+                                self.tab = Tab::Alerts;
+                                ui.close();
+                            }
+                            if ui.button("Any price change").clicked() {
+                                self.alert_model = p.model_id.clone();
+                                self.alert_mode = AlertMode::AnyChange;
+                                self.tab = Tab::Alerts;
+                                ui.close();
+                            }
+                            if ui.button("Pareto frontier entry").clicked() {
+                                self.alert_model = p.model_id.clone();
+                                self.alert_mode = AlertMode::EntersFrontier;
+                                self.alert_metric = self.price_metric;
+                                self.alert_cost_basis = self.cost_basis;
+                                self.tab = Tab::Alerts;
+                                ui.close();
+                            }
+                            if ui.button("Pareto frontier exit").clicked() {
+                                self.alert_model = p.model_id.clone();
+                                self.alert_mode = AlertMode::LeavesFrontier;
+                                self.alert_metric = self.price_metric;
+                                self.alert_cost_basis = self.cost_basis;
+                                self.tab = Tab::Alerts;
+                                ui.close();
+                            }
+                            if ui.button("Cheapest at or above current score").clicked() {
+                                self.alert_model = p.model_id.clone();
+                                self.alert_mode = AlertMode::CheapestAboveScore;
+                                self.alert_metric = self.price_metric;
+                                self.alert_cost_basis = self.cost_basis;
+                                self.alert_score_threshold = p.score;
+                                self.tab = Tab::Alerts;
+                                ui.close();
+                            }
+                        })
+                        .response
+                        .on_hover_text("Add alarm");
+                        // Frontier visibility: hidden models keep a faded orb
+                        // but leave the frontier line and its entry/exit
+                        // alerts.
+                        let hidden = self
+                            .settings
+                            .hidden_frontier_models
+                            .iter()
+                            .any(|m| m == &p.model_id);
+                        let toggle = if hidden {
+                            "\u{2295} Show on frontier"
+                        } else {
+                            "\u{2296} Hide from frontier"
+                        };
+                        if ui
+                            .button(toggle)
+                            .on_hover_text(
+                                "Hidden models stay on the chart (faded) \u{2014} the frontier \
+                                 line and frontier entry/exit alerts skip them",
+                            )
+                            .clicked()
+                        {
+                            self.toggle_frontier_hidden(&p.model_id);
+                        }
+                    });
+                });
+                // Modality / pricing-source / frontier status as compact
+                // pills; every pill carries its disclosure on hover.
+                ui.horizontal_wrapped(|ui| {
+                    if p.vision {
+                        pill(
+                            ui,
+                            "vision",
+                            egui::Color32::from_rgb(120, 200, 255),
+                            Some(
+                                "Accepts image input alongside text (catalog architecture \
+                                 metadata)",
+                            ),
+                        );
+                    } else {
+                        pill(
+                            ui,
+                            "text-only",
+                            ui.visuals().weak_text_color(),
+                            Some("No image input in the catalog architecture metadata"),
+                        );
+                    }
+                    if p.uncensored {
+                        pill(
+                            ui,
+                            "uncensored",
+                            egui::Color32::from_rgb(240, 170, 60),
+                            Some(
+                                "Listing presents itself as uncensored \u{2014} refusal behavior \
+                                 removed (abliterated/uncensored finetune)",
+                            ),
+                        );
+                    }
+                    if self.pricing_source == PricingSource::Catalog {
+                        pill(
+                            ui,
+                            "catalog list price",
+                            egui::Color32::from_rgb(240, 170, 60),
+                            Some(
+                                "Catalog pricing is active \u{2014} every model is billed at its \
+                                 published list rates, not the live-market asks",
+                            ),
+                        );
+                    } else if p.live_market {
+                        pill(
+                            ui,
+                            "live market",
+                            egui::Color32::from_rgb(54, 179, 126),
+                            Some(
+                                "Priced at the cheapest live-market ask that actually costs money",
+                            ),
+                        );
+                        if p.free_offer_listed {
+                            free_offer_badge(ui);
+                        }
+                    } else {
+                        pill(
+                            ui,
+                            "comparison/catalog price",
+                            ui.visuals().weak_text_color(),
+                            Some("No live-market ask \u{2014} priced from the comparison/catalog list"),
+                        );
+                    }
+                    if let Some((rank, total)) = frontier_rank {
+                        let mut hover = format!(
+                            "#{rank} of {total} on the current Pareto frontier \u{2014} cheapest \
+                             model is #1"
+                        );
+                        if rank == 1 {
+                            hover.push_str(" (this model is the cheapest)");
+                        }
+                        pill(
+                            ui,
+                            &format!("\u{2605} frontier #{rank}"),
+                            egui::Color32::from_rgb(246, 190, 80),
+                            Some(&hover),
+                        );
+                    }
+                });
+
+                // Hero band: the plotted price is the headline; the score is
+                // its counterpart on the right.
+                ui.add_space(2.0);
+                let score_label = match self.benchmark_source {
+                    BenchmarkSource::LiveBench => {
+                        format!("LiveBench {}", self.benchmark_metric.label())
+                    }
+                    source => source.short_label().to_owned(),
+                };
+                egui::Frame::new()
+                    .fill(ui.visuals().faint_bg_color)
+                    .corner_radius(egui::CornerRadius::same(4))
+                    .inner_margin(egui::Margin::symmetric(8, 6))
+                    .show(ui, |ui| {
+                        ui.set_min_width(ui.available_width());
+                        ui.horizontal(|ui| {
+                            // Same magnitude-aware formatting as the axis
+                            // ticks and hover: a fixed 4 decimals renders
+                            // cheap models as "$0.0000".
+                            ui.label(
+                                egui::RichText::new(format_price_tick(p.cost))
+                                    .size(24.0)
+                                    .strong(),
+                            );
+                            ui.label(egui::RichText::new(self.cost_basis.unit()).size(11.5).weak())
+                                .on_hover_text(
+                                    "Plotted price under the current pricing source, metric, and \
+                                     workload mix",
+                                );
+                            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                                ui.label(
+                                    egui::RichText::new(format!("{:.1}", p.score))
+                                        .size(17.0)
+                                        .strong(),
+                                );
+                                ui.label(egui::RichText::new(&score_label).size(10.5).weak());
+                            });
+                        });
+                    });
+                ui.add_space(3.0);
+
+                // Speed provenance: AA's standardized medians lead; the
+                // live-market buckets follow (daggered) where AA has no read.
+                let aa_entry = selected_quote.as_ref().and_then(|quote| {
+                    self.aa_speed_lookup()
+                        .and_then(|join| join.get(&quote.model).cloned())
+                });
+                let aa_tps = aa_entry.as_ref().and_then(|e| e.median_tps);
+                let aa_ttft = aa_entry.as_ref().and_then(|e| e.median_ttft_s);
+                let mkt_tps = selected_quote.as_ref().and_then(|q| q.throughput_p50);
+                let mkt_ttft = selected_quote.as_ref().and_then(|q| q.ttft_p50_ms);
+                let uptime = selected_quote.as_ref().and_then(|q| q.uptime_pct);
+
+                let (speed_value, speed_hover) = if let Some(tps) = aa_tps {
+                    let band = match (
+                        aa_entry.as_ref().and_then(|e| e.tps_p05),
+                        aa_entry.as_ref().and_then(|e| e.tps_p95),
+                    ) {
+                        (Some(lo), Some(hi)) => format!(
+                            " p05\u{2013}p95 {}\u{2013}{}",
+                            format_throughput(lo),
+                            format_throughput(hi)
+                        ),
+                        _ => String::new(),
+                    };
+                    let effort = aa_entry
+                        .as_ref()
+                        .and_then(|e| e.effort.as_deref())
+                        .map(|e| format!(" ({e} variant)"))
+                        .unwrap_or_default();
+                    (
+                        format_throughput(tps),
+                        Some(format!(
+                            "Median of AA's controlled generations under a uniform protocol{effort} \
+                             \u{2014} independent of any marketplace route.{band}"
+                        )),
+                    )
+                } else if let Some(tps) = mkt_tps {
+                    (
+                        format!("{}\u{2020}", format_throughput(tps)),
+                        Some(
+                            "Live-market median pooled across every seller over the last 24h \
+                             \u{2014} the feed publishes only coarse histogram midpoints, so treat \
+                             it as approximate"
+                                .to_owned(),
+                        ),
+                    )
+                } else {
+                    ("\u{2014}".to_owned(), None)
+                };
+                let (ttft_value, ttft_hover) = if let Some(ttft) = aa_ttft {
+                    (
+                        format_latency_ms(ttft * 1000.0),
+                        Some(
+                            "Median time-to-first-token of AA's controlled generations under a \
+                             uniform protocol"
+                                .to_owned(),
+                        ),
+                    )
+                } else if let Some(ms) = mkt_ttft {
+                    (
+                        format!("{}\u{2020}", format_latency_ms(ms)),
+                        Some(
+                            "Live-market median TTFT over the last 24h \u{2014} coarse feed \
+                             buckets, treat as approximate"
+                                .to_owned(),
+                        ),
+                    )
+                } else {
+                    ("\u{2014}".to_owned(), None)
+                };
+
+                // The stat grid: pricing legs on one row, telemetry on the
+                // next, and the benchmark workload when the per-task basis
+                // needs it for the hero price to stay auditable. Each cell
+                // claims a third of the card so values never cramp onto a
+                // second line when there is width to spare.
+                let stat_w = ((ui.available_width() - 36.0) / 3.0).max(90.0);
+                egui::Grid::new("pareto_card_stats")
+                    .num_columns(3)
+                    .spacing([18.0, 10.0])
+                    .show(ui, |ui| {
+                        stat_cell(
+                            ui,
+                            "Input",
+                            format!("${:.4}", p.input),
+                            "/1M",
+                            Some("Per-1M ask billed under the current pricing source".to_owned()),
+                            stat_w,
+                        );
+                        stat_cell(
+                            ui,
+                            "Cache read",
+                            match p.cache_read {
+                                Some(rate) => format!("${rate:.4}"),
+                                None => "\u{2014}".to_owned(),
+                            },
+                            "",
+                            match p.cache_read {
+                                Some(_) => Some(
+                                    "Resolved cache-read rate: provider ask, market best, or \
+                                     catalogue list under the current pricing source"
+                                        .to_owned(),
+                                ),
+                                None => Some(
+                                    "No cache-read ask published anywhere in this market; blended \
+                                     pricing assumes a share of the input price"
+                                        .to_owned(),
+                                ),
+                            },
+                            stat_w,
+                        );
+                        stat_cell(
+                            ui,
+                            "Output",
+                            format!("${:.4}", p.output),
+                            "/1M",
+                            Some("Per-1M ask billed under the current pricing source".to_owned()),
+                            stat_w,
+                        );
+                        ui.end_row();
+                        stat_cell(ui, "Speed", speed_value, "", speed_hover, stat_w);
+                        stat_cell(ui, "TTFT", ttft_value, "", ttft_hover, stat_w);
+                        stat_cell(
+                            ui,
+                            "Uptime",
+                            match uptime {
+                                Some(pct) => format!("{pct:.1}%"),
+                                None => "\u{2014}".to_owned(),
+                            },
+                            "",
+                            uptime.map(|_| {
+                                "Share of requests across the whole market that did not fail, over \
+                                 the last 24h"
+                                    .to_owned()
+                            }),
+                            stat_w,
+                        );
+                        ui.end_row();
+                        if self.cost_basis == CostBasis::EstimatedPerTask
+                            && let Some(tokens) = p.tokens_per_task
+                        {
+                            let profile_hover = p.token_profile.clone().unwrap_or_else(|| {
+                                "Benchmark-reported token volume per task".to_owned()
+                            });
+                            stat_cell(
+                                ui,
+                                "Workload",
+                                format_compact_number(tokens),
+                                "/task",
+                                Some(profile_hover),
+                                stat_w,
+                            );
+                            ui.label("");
+                            ui.label("");
+                            ui.end_row();
+                        }
+                    });
+                let market_fallback = (aa_tps.is_none() && mkt_tps.is_some())
+                    || (aa_ttft.is_none() && mkt_ttft.is_some());
+                let no_speed = aa_tps.is_none()
+                    && aa_ttft.is_none()
+                    && mkt_tps.is_none()
+                    && mkt_ttft.is_none()
+                    && uptime.is_none();
+                if market_fallback {
+                    ui.small("\u{2020} market buckets \u{00b7} 24h").on_hover_text(
+                        "Live-market medians pooled across every seller \u{2014} the feed \
+                         publishes only coarse histogram midpoints, so treat them as approximate",
+                    );
+                } else if no_speed {
+                    ui.label(egui::RichText::new("no speed data").weak());
+                }
+                if self.cost_basis == CostBasis::EstimatedPerTask && p.tokens_per_task.is_some() {
+                    ui.small("est. $/task = workload \u{00d7} current Surplus blended rate");
+                }
+
+                // Provenance footer: the age basis, then who made, sells, and
+                // benchmarked this row.
+                ui.horizontal_wrapped(|ui| {
+                    let mut shown = false;
+                    if let Some((ts, is_release)) = age {
+                        let date_text = DateTime::from_timestamp(ts, 0)
+                            .map(|dt| dt.format("%Y-%m-%d").to_string())
+                            .unwrap_or_default();
+                        let (basis, hover): (&str, String) = if is_release {
+                            (
+                                "Released",
+                                "True release date from the app's bundled release-date table"
+                                    .to_owned(),
+                            )
+                        } else {
+                            (
+                                "Listed on Surplus",
+                                "No release date on file for this model \u{2014} showing the day \
+                                 it first appeared on the Surplus marketplace"
+                                    .to_owned(),
+                            )
+                        };
+                        ui.small(format!("{basis} {date_text}"))
+                            .on_hover_text(hover);
+                        shown = true;
+                    }
+                    if !p.creator.is_empty() {
+                        if shown {
+                            ui.separator();
+                        }
+                        ui.label(format!("Creator: {}", p.creator));
+                        shown = true;
+                    }
+                    if !p.provider.is_empty() {
+                        if shown {
+                            ui.separator();
+                        }
+                        ui.label(format!("Provider: {}", p.provider));
+                        shown = true;
+                    }
+                    // Composite row names carry the full method disclosure
+                    // and the source-by-source grid below repeats it; skip
+                    // the duplicate.
+                    if !self.benchmark_source.is_composite() {
+                        if shown {
+                            ui.separator();
+                        }
+                        ui.label(format!(
+                            "{} match: {}",
+                            self.benchmark_source.short_label(),
+                            p.benchmark_name
+                        ));
+                    }
+                });
+
+                if let Some(quote) = &selected_quote {
+                    // Selecting the card is the on-demand trigger for this
+                    // model's per-provider breakdown.
+                    self.ensure_performance(&quote.model, ON_DEMAND_REFRESH_SECS);
+                    self.market_quality_section(ui, quote);
+                }
+
+                // Price history: the recorded blended price over the
+                // configured window (24h by default, change it in Settings),
+                // as a small always-on sparkline that expands to a full
+                // log-scale plot.
+                let weights = (
+                    self.settings.input_weight,
+                    self.settings.cache_read_weight,
+                    self.settings.output_weight,
+                    self.settings.cache_read_fallback_pct,
+                );
+                let history_window = self.settings.history_window;
+                if let Some(series) = self.history.series(&p.model_id) {
+                    let all_points =
+                        blended_series(series, weights.0, weights.1, weights.2, weights.3);
+                    let now_ts = chrono::Utc::now().timestamp() as f64;
+                    let cutoff = history_window.secs().map(|s| now_ts - s);
+                    let points = clip_series_to_window(&all_points, cutoff);
+                    if !points.is_empty() {
+                        // Extend the last recorded price to the right edge so
+                        // the line reads as "held to now", not "ended".
+                        let mut step: Vec<(f64, f64)> = Vec::with_capacity(points.len() * 2 + 1);
+                        let mut prev: Option<(f64, f64)> = None;
+                        for &(ts, price) in &points {
+                            if let Some((pts, pprice)) = prev {
+                                step.push((pts, pprice));
+                                step.push((ts, pprice));
+                            }
+                            prev = Some((ts, price));
+                        }
+                        if let Some((pts, pprice)) = prev {
+                            step.push((pts, pprice));
+                            step.push((now_ts, pprice));
+                        }
+                        let (lo, hi) = points.iter().fold(
+                            (f64::MAX, f64::MIN),
+                            |(lo, hi), &(_, v)| (lo.min(v), hi.max(v)),
+                        );
+                        let (low_ts, low_price) = points
+                            .iter()
+                            .copied()
+                            .min_by(|a, b| a.1.total_cmp(&b.1))
+                            .unwrap_or((0.0, 0.0));
+                        let expand_id =
+                            egui::Id::new("pw_price_history_expanded").with(p.model_id.as_str());
+                        let mut expanded = ui
+                            .ctx()
+                            .data_mut(|d| d.get_temp::<bool>(expand_id).unwrap_or(false));
+                        ui.horizontal(|ui| {
+                            ui.strong("Price history");
+                            ui.label(
+                                egui::RichText::new(history_window.label())
+                                    .size(10.5)
+                                    .weak(),
+                            )
+                            .on_hover_text(
+                                "How far back this graph reaches — change it in Settings \
+                                 \u{2192} Price history",
+                            );
+                            ui.small(format!(
+                                "low {} on {} \u{00b7} now {}",
+                                format_price_tick(low_price),
+                                format_short_date(low_ts),
+                                format_price_tick(points[points.len() - 1].1),
+                            ))
+                            .on_hover_text(format!(
+                                "Blended $/1M at the current workload mix over the last {} \
+                                 \u{2014} the history log itself records everything regardless",
+                                history_window.label(),
+                            ));
+                            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                                let label = if expanded { "Collapse" } else { "Expand" };
+                                if ui.small_button(label).clicked() {
+                                    expanded = !expanded;
+                                    ui.ctx().data_mut(|d| d.insert_temp(expand_id, expanded));
+                                }
+                            });
+                        });
+                        if expanded {
+                            let line: PlotPoints = step
+                                .iter()
+                                .map(|&(ts, price)| [ts, price_to_plot_x(price, true)])
+                                .collect();
+                            Plot::new("pw_price_history_plot")
+                                .height(220.0)
+                                .x_axis_formatter(|mark, _range| {
+                                    DateTime::from_timestamp(mark.value as i64, 0)
+                                        .map(|dt| dt.format("%d %b %H:%M").to_string())
+                                        .unwrap_or_default()
+                                })
+                                .y_axis_formatter(|mark, _range| {
+                                    format_price_tick(10_f64.powf(mark.value))
+                                })
+                                .allow_zoom(true)
+                                .allow_drag(false)
+                                .allow_scroll(false)
+                                .show(ui, |plot_ui| {
+                                    plot_ui.line(
+                                        Line::new("blended", line)
+                                            .width(1.5)
+                                            .color(egui::Color32::from_rgb(120, 180, 255))
+                                            .allow_hover(false),
+                                    );
+                                    plot_ui.points(
+                                        Points::new(
+                                            "low",
+                                            PlotPoints::from(vec![[
+                                                low_ts,
+                                                price_to_plot_x(low_price, true),
+                                            ]]),
+                                        )
+                                        .radius(3.5)
+                                        .color(PRICE_DOWN)
+                                        // Decoration like the line above: hover
+                                        // would show a bare "low" tooltip instead
+                                        // of the card's own price readouts.
+                                        .allow_hover(false),
+                                    );
+                                });
+                        } else {
+                            // Sparkline: a step line (prices change in jumps)
+                            // with a soft halo, linear over the observed range.
+                            let (rect, response) = ui.allocate_exact_size(
+                                egui::vec2(ui.available_width(), 40.0),
+                                egui::Sense::hover(),
+                            );
+                            let span = (step[step.len() - 1].0 - step[0].0).max(1.0);
+                            let range = (hi - lo).max(1e-9);
+                            let mut line_pts: Vec<egui::Pos2> = Vec::with_capacity(step.len());
+                            for &(ts, price) in &step {
+                                let x =
+                                    rect.left() + ((ts - step[0].0) / span) as f32 * rect.width();
+                                let y =
+                                    rect.bottom() - ((price - lo) / range) as f32 * rect.height();
+                                let pos = egui::pos2(x, y);
+                                if let Some(last) = line_pts.last() {
+                                    line_pts.push(egui::pos2(pos.x, last.y));
+                                }
+                                line_pts.push(pos);
+                            }
+                            ui.painter().add(egui::Shape::line(
+                                line_pts.clone(),
+                                egui::Stroke::new(
+                                    7.0,
+                                    egui::Color32::from_rgba_unmultiplied(120, 180, 255, 26),
+                                ),
+                            ));
+                            ui.painter().add(egui::Shape::line(
+                                line_pts,
+                                egui::Stroke::new(1.5, egui::Color32::from_rgb(120, 180, 255)),
+                            ));
+                            response.on_hover_text(format!(
+                                "Blended {} \u{2013} {} \u{00b7} low {} on {}",
+                                format_price_tick(lo),
+                                format_price_tick(hi),
+                                format_price_tick(low_price),
+                                format_short_date(low_ts),
+                            ));
+                        }
+                    } else {
+                        ui.small("no price history yet (recording since first launch)");
+                    }
+                }
+
+                if let Some(consensus) = &consensus {
+                    ui.collapsing("Source-by-source percentile", |ui| {
+                        // Bounded and contained: the grid scrolls inside the card on
+                        // both axes, so long benchmark names and deep histories can
+                        // never stretch the card wider or push the frontier table
+                        // out of reach.
+                        egui::ScrollArea::both()
+                            .max_height(320.0)
+                            .auto_shrink([false, true])
+                            .show(ui, |ui| {
+                                egui::Grid::new("selected_consensus_grid")
+                                    .striped(true)
+                                    .show(ui, |ui| {
+                                        ui.strong("Benchmark");
+                                        ui.strong("Percentile");
+                                        ui.strong("Rank");
+                                        ui.strong("Score");
+                                        ui.strong("Matched row");
+                                        ui.end_row();
+                                        for entry in &consensus.entries {
+                                            ui.label(entry.source.short_label());
+                                            ui.label(format_percentile(entry.percentile));
+                                            ui.label(format!("#{}/{}", entry.rank, entry.total));
+                                            ui.label(format!("{:.1}", entry.score));
+                                            ui.label(&entry.benchmark_name);
+                                            ui.end_row();
+                                        }
+                                    });
+                            });
+                    });
+                }
+            });
+        });
+        // Age accent bar over the card's left edge: the same color the chip
+        // uses, so the selection reads as "this model and its freshness" from
+        // across the chart.
+        if let Some(color) = age_color {
+            let rect = card.response.rect;
+            ui.painter().rect_filled(
+                egui::Rect::from_min_max(
+                    rect.min + egui::vec2(0.0, 1.0),
+                    egui::pos2(rect.left() + 3.0, rect.bottom() - 1.0),
+                ),
+                egui::CornerRadius::same(2),
+                color,
+            );
+        }
     }
 
     /// "Market quality" collapsible: headline trust/seller/telemetry metadata
@@ -1389,6 +1824,11 @@ impl ParetoWatchApp {
                 } else {
                     "All providers in this market (workload $/1M at current weights, \u{25cf} = plotted):"
                 });
+                egui::ScrollArea::both()
+                    .id_salt(format!("mq_scroll_{}", quote.model))
+                    .max_height(280.0)
+                    .auto_shrink([false, true])
+                    .show(ui, |ui| {
                 egui::Grid::new("market_quality_providers").striped(true).show(ui, |ui| {
                     ui.strong("");
                     ui.strong("Provider");
@@ -1448,6 +1888,7 @@ impl ParetoWatchApp {
                         }
                         ui.end_row();
                     }
+                });
                 });
             }
         });
@@ -1542,15 +1983,14 @@ impl ParetoWatchApp {
                         }
                     });
                     ui.horizontal(|ui| {
-                        if let Some(delta) = latest_moves.get(&p.model_id) {
-                            let (arrow, color) = if *delta > 0.0 {
-                                ("▲", PRICE_UP)
-                            } else {
-                                ("▼", PRICE_DOWN)
-                            };
+                        if let Some((arrow, color)) = latest_moves
+                            .get(&p.model_id)
+                            .copied()
+                            .and_then(price_move_arrow)
+                        {
                             ui.label(egui::RichText::new(arrow).size(9.0).color(color));
                         }
-                        ui.label(format!("${:.4}", p.cost));
+                        ui.label(format_price_tick(p.cost));
                     });
                     ui.label(format!("{:.1}", p.score));
                     ui.label(match self.pricing_source {
@@ -1581,7 +2021,36 @@ fn price_axis_label(axis: (PriceMetric, CostBasis)) -> &'static str {
         (PriceMetric::Blended, CostBasis::EstimatedPerTask) => "Blended · est. $/task",
         (PriceMetric::Input, CostBasis::PerMillion) => "Input · $/1M",
         (PriceMetric::Output, CostBasis::PerMillion) => "Output · $/1M",
-        _ => unreachable!("input/output metrics have no per-task basis"),
+        // Both fields are restored from ui_state.json with only a version
+        // check, so a stale or hand-edited file can carry a pairing the
+        // selector never offers. The chart can't plot it, but degrading to
+        // the metric's plain label beats panicking on the first frame.
+        _ => axis.0.label(),
+    }
+}
+
+/// Series name → model id for the Pareto plot's hover resolution. Orbs are
+/// named by their model id — unique even when two slugs share a display
+/// name, so egui_plot's name-derived hover ids can't collide — while the
+/// selection/search halos carry a `*_ring_{model_id}` prefix.
+fn hover_series_model_id(plot_name: &str) -> &str {
+    plot_name
+        .strip_prefix("sel_ring_")
+        .or_else(|| plot_name.strip_prefix("search_ring_"))
+        .unwrap_or(plot_name)
+}
+
+/// Arrow + color for a frontier row's latest blended-price move. An exact
+/// zero is reachable (any-leg-changed moves whose blended contribution nets
+/// out under the current workload mix) and is neither a rise nor a drop, so
+/// it gets no direction glyph at all.
+fn price_move_arrow(delta: f64) -> Option<(&'static str, egui::Color32)> {
+    if delta > 0.0 {
+        Some(("▲", PRICE_UP))
+    } else if delta < 0.0 {
+        Some(("▼", PRICE_DOWN))
+    } else {
+        None
     }
 }
 
@@ -1741,6 +2210,61 @@ fn pareto_hover_label(p: &JoinedPoint, ctx: &HoverContext<'_>, score: f64) -> St
     lines.join("\n")
 }
 
+/// A small rounded pill with colored text on a translucent fill of the same
+/// hue — the detail card's badge primitive (age chip, modality, pricing
+/// source, frontier rank). Hover carries the disclosure, keeping the pill
+/// itself to a glanceable word or two.
+fn pill(
+    ui: &mut egui::Ui,
+    text: &str,
+    color: egui::Color32,
+    hover: Option<&str>,
+) -> egui::Response {
+    let response = egui::Frame::new()
+        .fill(color.gamma_multiply(0.14))
+        .stroke(egui::Stroke::new(1.0, color.gamma_multiply(0.55)))
+        .corner_radius(egui::CornerRadius::same(9))
+        .inner_margin(egui::Margin::symmetric(6, 2))
+        .show(ui, |ui| {
+            ui.set_min_height(14.0);
+            ui.label(egui::RichText::new(text).size(11.0).color(color))
+        })
+        .response;
+    match hover {
+        Some(text) => response.on_hover_text(text),
+        None => response,
+    }
+}
+
+/// One labeled statistic in the detail card's stat grid: a tiny uppercase
+/// caption over a value (with an optional muted unit), hovering to disclose
+/// provenance. `min_width` stretches the cell to its grid share so values
+/// use the card's full width instead of hugging their content.
+fn stat_cell(
+    ui: &mut egui::Ui,
+    caption: &str,
+    value: String,
+    unit: &str,
+    hover: Option<String>,
+    min_width: f32,
+) {
+    let cell = ui
+        .vertical(|ui| {
+            ui.set_min_width(min_width);
+            ui.label(egui::RichText::new(caption.to_uppercase()).size(9.5).weak());
+            ui.horizontal(|ui| {
+                ui.label(egui::RichText::new(value).size(14.0));
+                if !unit.is_empty() {
+                    ui.label(egui::RichText::new(unit).size(11.0).weak());
+                }
+            });
+        })
+        .response;
+    if let Some(hover) = hover {
+        cell.on_hover_text(hover);
+    }
+}
+
 /// Compact date for the historical-low line: month + day, or month + year
 /// when the low predates the current year.
 fn format_short_date(ts: f64) -> String {
@@ -1752,5 +2276,64 @@ fn format_short_date(ts: f64) -> String {
         dt.format("%d %b").to_string()
     } else {
         dt.format("%b %Y").to_string()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn hover_series_names_resolve_to_model_ids() {
+        // Orbs are named by their unique model id, so two slugs sharing a
+        // display name still get distinct hover targets and each resolves to
+        // its own tooltip data.
+        assert_eq!(hover_series_model_id("gpt-6-sol"), "gpt-6-sol");
+        assert_eq!(hover_series_model_id("claude-opus-5.5"), "claude-opus-5.5");
+        assert_eq!(hover_series_model_id("sel_ring_gpt-6-sol"), "gpt-6-sol");
+        assert_eq!(
+            hover_series_model_id("search_ring_muse-wonder"),
+            "muse-wonder"
+        );
+    }
+
+    #[test]
+    fn price_move_arrow_skips_exact_zero_deltas() {
+        assert_eq!(price_move_arrow(0.5), Some(("▲", PRICE_UP)));
+        assert_eq!(price_move_arrow(-0.5), Some(("▼", PRICE_DOWN)));
+        // A move whose legs cancel out under the workload mix is neither a
+        // rise nor a drop — no direction glyph.
+        assert_eq!(price_move_arrow(0.0), None);
+    }
+
+    #[test]
+    fn price_axis_label_tolerates_impossible_metric_basis_pairs() {
+        // The pairs the selector offers.
+        assert_eq!(
+            price_axis_label((PriceMetric::Blended, CostBasis::PerMillion)),
+            "Blended · $/1M"
+        );
+        assert_eq!(
+            price_axis_label((PriceMetric::Blended, CostBasis::EstimatedPerTask)),
+            "Blended · est. $/task"
+        );
+        assert_eq!(
+            price_axis_label((PriceMetric::Input, CostBasis::PerMillion)),
+            "Input · $/1M"
+        );
+        assert_eq!(
+            price_axis_label((PriceMetric::Output, CostBasis::PerMillion)),
+            "Output · $/1M"
+        );
+        // A stale or hand-edited ui_state.json can carry the rest; it must
+        // degrade to a plain label, not panic on the first Pareto frame.
+        assert_eq!(
+            price_axis_label((PriceMetric::Input, CostBasis::EstimatedPerTask)),
+            "Input"
+        );
+        assert_eq!(
+            price_axis_label((PriceMetric::Output, CostBasis::EstimatedPerTask)),
+            "Output"
+        );
     }
 }

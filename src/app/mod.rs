@@ -47,8 +47,8 @@ use crate::settings_store::{load_settings, save_settings};
 use crate::tray::create_tray;
 use crate::tray::{UiCommand, install_tray_event_handlers};
 use crate::types::{
-    ANY_MODEL, AaSpeedEntry, AaSpeedSnapshot, AlertDirection, AlertMode, AlertRearm, AlertRule,
-    AlertSound, Benchmark, BenchmarkMetric, BenchmarkSource, ComparisonMode, CostBasis,
+    ANY_MODEL, AaSpeedEntry, AaSpeedSnapshot, AgeFilter, AlertDirection, AlertMode, AlertRearm,
+    AlertRule, AlertSound, Benchmark, BenchmarkMetric, BenchmarkSource, ComparisonMode, CostBasis,
     LiquidityFilter, ModalityFilter, MoveDirection, PerformanceSnapshot, PriceMetric,
     PriceSnapshot, PricingSource, Quote, Settings, UncensoredFilter, default_common_scaffold,
 };
@@ -150,6 +150,10 @@ type AaSpeedJoin = (
 
 pub(crate) struct ParetoWatchApp {
     settings: Settings,
+    /// Edit-in-progress copy the Settings tab writes to; it only becomes the
+    /// real `settings` (and with it the chart, alert evaluation, and worker
+    /// config) when that tab's Save button applies it.
+    settings_draft: Settings,
     price_snapshot: Option<PriceSnapshot>,
     benchmark_sets: HashMap<BenchmarkSource, Vec<Benchmark>>,
     benchmark_errors: HashMap<BenchmarkSource, String>,
@@ -207,6 +211,9 @@ pub(crate) struct ParetoWatchApp {
     /// Pareto chart safety-tuning filter (e.g. uncensored-only), applied at
     /// the quote level like the modality filter.
     uncensored_filter: UncensoredFilter,
+    /// Pareto chart release-age filter, applied at the quote level like the
+    /// modality filter; models with no known date pass only the Any option.
+    age_filter: AgeFilter,
     /// Pareto chart pricing source: live-market asks only, all sources, or
     /// every model billed at its published list rates.
     pricing_source: PricingSource,
@@ -239,6 +246,14 @@ pub(crate) struct ParetoWatchApp {
     alert_mode: AlertMode,
     alert_metric: PriceMetric,
     alert_cost_basis: CostBasis,
+    /// Alert-form copies of the benchmark controls: the Pareto chart's
+    /// shared dials (`benchmark_source`, `comparison_mode`, …) must not move
+    /// when an alert is edited here, and vice versa.
+    alert_benchmark_source: BenchmarkSource,
+    alert_benchmark_metric: BenchmarkMetric,
+    alert_comparison_mode: ComparisonMode,
+    alert_common_scaffold: String,
+    alert_liquidity_filter: LiquidityFilter,
     alert_direction: AlertDirection,
     alert_threshold: f64,
     alert_score_threshold: f64,
@@ -278,12 +293,47 @@ pub(crate) struct ParetoWatchApp {
     last_price_error: Option<String>,
     is_visible: bool,
     quitting: bool,
+    /// Workload-mix edits from the Pareto tab's popover awaiting its Apply;
+    /// cleared by every `save_and_push_settings`.
     settings_dirty: bool,
+    /// Whether the Settings tab's draft differs from the applied settings;
+    /// drives that tab's Save button.
+    draft_dirty: bool,
     /// egui clock time of the last workload-mix Apply click, for the transient
     /// ✓ Applied confirmation next to the button.
     weights_applied_at: Option<f64>,
     #[cfg(not(target_os = "linux"))]
     _tray: Option<TrayIcon>,
+}
+
+/// Collapse every run of consecutive `Toggle` commands to its first. Tray
+/// left-clicks queue faster than frames render: several Toggles drained in
+/// one pass all landed before any of them was shown, so applying each would
+/// cancel out and leave the window hidden. A `Show` between runs still wins —
+/// only *consecutive* Toggles collapse.
+fn collapse_consecutive_toggles(commands: Vec<UiCommand>) -> Vec<UiCommand> {
+    let mut kept: Vec<UiCommand> = Vec::with_capacity(commands.len());
+    for cmd in commands {
+        if matches!(cmd, UiCommand::Toggle) && matches!(kept.last(), Some(UiCommand::Toggle)) {
+            continue;
+        }
+        kept.push(cmd);
+    }
+    kept
+}
+
+/// Merge one poll's delistings into the batch awaiting the post-drain
+/// listing-alert evaluation, deduped by display name (the feed's canonical
+/// model label; `ListingChange` carries no id).
+fn merge_delisted(delisted: &mut Vec<ListingChange>, changes: Vec<ListingChange>) {
+    for change in changes {
+        if !delisted
+            .iter()
+            .any(|existing| existing.display_name == change.display_name)
+        {
+            delisted.push(change);
+        }
+    }
 }
 
 impl ParetoWatchApp {
@@ -308,7 +358,26 @@ impl ParetoWatchApp {
         }
         cc.egui_ctx.set_fonts(fonts);
 
-        let settings = load_settings().unwrap_or_default();
+        // Startup notes accumulate here (settings-load failure, tray
+        // failure, then the cache notes below) before landing in `status`.
+        let mut status_note: Option<String> = None;
+
+        // An unreadable config was already archived by `load_settings` as
+        // config.json.bad-<timestamp>; run on defaults instead of dying, but
+        // tell the user the reset happened.
+        let settings = match load_settings() {
+            Ok(settings) => settings,
+            Err(err) => {
+                let note = format!(
+                    "Settings reset to defaults ({err:#}) — previous config saved as config.json.bad-…"
+                );
+                status_note = Some(match status_note.take() {
+                    Some(existing) => format!("{existing} · {note}"),
+                    None => note,
+                });
+                Settings::default()
+            }
+        };
         let notifications: SharedNotifications =
             Arc::new(Mutex::new(NotificationLog::open(&settings)));
         let (worker_tx, worker_rx) = start_worker(
@@ -320,8 +389,20 @@ impl ParetoWatchApp {
 
         install_tray_event_handlers(cc.egui_ctx.clone(), ui_tx);
 
+        // A transient shell failure must not kill the app at startup: run
+        // window-only and surface it in the status note instead.
         #[cfg(not(target_os = "linux"))]
-        let tray = Some(create_tray().expect("failed to create system tray icon"));
+        let tray = match create_tray() {
+            Ok(tray) => Some(tray),
+            Err(err) => {
+                let note = format!("System tray unavailable ({err:#}) — running window-only");
+                status_note = Some(match status_note.take() {
+                    Some(existing) => format!("{existing} · {note}"),
+                    None => note,
+                });
+                None
+            }
+        };
 
         let _ = worker_tx.send(WorkerCommand::Refresh);
 
@@ -332,8 +413,6 @@ impl ParetoWatchApp {
             settings.cache_read_weight,
             settings.output_weight,
         );
-
-        let mut status_note: Option<String> = None;
 
         // Route analytics restore the same way the benchmark boards do:
         // last session's cached rows are available instantly, and the slow
@@ -348,8 +427,10 @@ impl ParetoWatchApp {
             cached_performance = rows;
         }
 
+        let settings_draft = settings.clone();
         let mut app = Self {
             settings,
+            settings_draft,
             price_snapshot: None,
             benchmark_sets: {
                 // Bundled AA rows first (instant, offline), then the previous
@@ -407,6 +488,7 @@ impl ParetoWatchApp {
             liquidity_filter: LiquidityFilter::Any,
             modality_filter: ModalityFilter::All,
             uncensored_filter: UncensoredFilter::All,
+            age_filter: AgeFilter::All,
             pricing_source: PricingSource::All,
             pareto_search: String::new(),
             selected_pareto_model: None,
@@ -430,6 +512,11 @@ impl ParetoWatchApp {
             alert_mode: AlertMode::Threshold,
             alert_metric: PriceMetric::Blended,
             alert_cost_basis: CostBasis::PerMillion,
+            alert_benchmark_source: BenchmarkSource::CompositeAgentic,
+            alert_benchmark_metric: BenchmarkMetric::Overall,
+            alert_comparison_mode: ComparisonMode::BestAvailableAgent,
+            alert_common_scaffold: default_common_scaffold(),
+            alert_liquidity_filter: LiquidityFilter::Any,
             alert_direction: AlertDirection::BelowOrEqual,
             alert_threshold: 1.0,
             alert_score_threshold: 50.0,
@@ -455,6 +542,7 @@ impl ParetoWatchApp {
             is_visible: true,
             quitting: false,
             settings_dirty: false,
+            draft_dirty: false,
             weights_applied_at: None,
             #[cfg(not(target_os = "linux"))]
             _tray: tray,
@@ -500,10 +588,17 @@ impl ParetoWatchApp {
         {
             return;
         }
-        self.performance_pending.insert(key);
-        let _ = self
+        // Latch "pending" only if the command actually reached the worker: a
+        // dead channel would otherwise leave the model pending all session.
+        // Send errors are silently ignored at every other call site, so no
+        // status is surfaced here either.
+        if self
             .worker_tx
-            .send(WorkerCommand::FetchPerformance(vec![model.to_owned()]));
+            .send(WorkerCommand::FetchPerformance(vec![model.to_owned()]))
+            .is_ok()
+        {
+            self.performance_pending.insert(key);
+        }
     }
 
     /// Slow background refresh of the cached route analytics: every row older
@@ -548,7 +643,13 @@ impl ParetoWatchApp {
     }
 
     fn handle_ui_commands(&mut self, ctx: &egui::Context) {
+        // Batch-drain first so consecutive tray Toggles can collapse (see
+        // `collapse_consecutive_toggles`).
+        let mut commands = Vec::new();
         while let Ok(cmd) = self.ui_rx.try_recv() {
+            commands.push(cmd);
+        }
+        for cmd in collapse_consecutive_toggles(commands) {
             match cmd {
                 UiCommand::Toggle => self.set_visible(ctx, !self.is_visible),
                 UiCommand::Show => self.set_visible(ctx, true),
@@ -583,8 +684,10 @@ impl ParetoWatchApp {
                     if let Some(previous) = &self.price_snapshot {
                         let changes = detect_price_changes(previous, &snapshot, &self.settings);
                         if let Ok(mut log) = self.notifications.lock() {
-                            for change in changes {
-                                log.push_price_move(PriceMoveRecord {
+                            // One persist for the whole poll: per-record pushes
+                            // re-serialize the entire log for every price move.
+                            log.push_price_moves(changes.into_iter().map(|change| {
+                                PriceMoveRecord {
                                     model: change.model,
                                     display_name: change.display_name,
                                     at: change.at,
@@ -595,10 +698,18 @@ impl ParetoWatchApp {
                                     old_output: change.old_output,
                                     new_output: change.new_output,
                                     source: change.source.to_owned(),
-                                });
-                            }
+                                }
+                            }));
                         }
-                        delisted = detect_delisted(previous, &snapshot, &self.settings);
+                        // Delistings accumulate across coalesced polls: this
+                        // message only diffs against its own predecessor, so
+                        // overwriting the batch would let a queued second
+                        // snapshot erase the first one's disappearances
+                        // (listing alerts are evaluated once, after the drain).
+                        merge_delisted(
+                            &mut delisted,
+                            detect_delisted(previous, &snapshot, &self.settings),
+                        );
                     }
                     if self.alert_model.is_empty()
                         && let Some(q) = snapshot.quotes.first()
@@ -671,7 +782,9 @@ impl ParetoWatchApp {
                             );
                         }
                     }
-                    save_performance_cache(&self.performance.rows);
+                    // Prunes past the cache cap as a side effect, so the
+                    // persisted file and the in-memory rows stay bounded.
+                    save_performance_cache(&mut self.performance.rows);
                 }
                 Err(TryRecvError::Empty) | Err(TryRecvError::Disconnected) => break,
             }
@@ -993,6 +1106,7 @@ impl ParetoWatchApp {
             liquidity_filter: self.liquidity_filter,
             modality_filter: self.modality_filter,
             uncensored_filter: self.uncensored_filter,
+            age_filter: self.age_filter,
             pricing_source: self.pricing_source,
             hidden_groups,
             hidden_models: {
@@ -1024,11 +1138,15 @@ impl ParetoWatchApp {
             self.settings.output_weight,
             self.settings.cache_read_fallback_pct,
         );
+        // Day-granularity age clock: bucket boundaries are days, so a stale
+        // "now" within one refresh cycle cannot change what passes.
+        let now = chrono::Utc::now().timestamp();
         let filtered_quotes = snapshot
             .quotes
             .iter()
             .filter(|quote| self.modality_filter.allows(quote.vision))
             .filter(|quote| self.uncensored_filter.allows(quote.uncensored))
+            .filter(|quote| self.age_filter.allows(quote.age_days(now)))
             .filter(|quote| pricing_source_allows(self.pricing_source, quote))
             .filter_map(|quote| {
                 self.liquidity_filter
@@ -1689,6 +1807,11 @@ impl ParetoWatchApp {
             .worker_tx
             .send(WorkerCommand::UpdateSettings(self.settings.clone()));
         self.settings_dirty = false;
+        // Re-sync the Settings tab's draft so its next Save cannot clobber
+        // changes applied here from another path (alert edits, the Pareto
+        // workload mix, frontier hiding).
+        self.settings_draft.clone_from(&self.settings);
+        self.draft_dirty = false;
     }
 
     fn top_bar(&mut self, ui: &mut egui::Ui) {
@@ -1869,5 +1992,64 @@ impl eframe::App for ParetoWatchApp {
 impl Drop for ParetoWatchApp {
     fn drop(&mut self) {
         let _ = self.worker_tx.send(WorkerCommand::Quit);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn consecutive_tray_toggles_collapse_to_one() {
+        let kept = collapse_consecutive_toggles(vec![
+            UiCommand::Toggle,
+            UiCommand::Toggle,
+            UiCommand::Toggle,
+        ]);
+        assert_eq!(
+            kept.len(),
+            1,
+            "a double-click before a repaint must not cancel out"
+        );
+        assert!(matches!(kept[0], UiCommand::Toggle));
+
+        // Only consecutive runs collapse: other commands break the run, and
+        // each run keeps its first Toggle.
+        let kept = collapse_consecutive_toggles(vec![
+            UiCommand::Toggle,
+            UiCommand::Toggle,
+            UiCommand::Refresh,
+            UiCommand::Show,
+            UiCommand::Toggle,
+            UiCommand::Toggle,
+        ]);
+        assert_eq!(kept.len(), 4);
+        assert!(matches!(kept[0], UiCommand::Toggle));
+        assert!(matches!(kept[1], UiCommand::Refresh));
+        assert!(matches!(kept[2], UiCommand::Show));
+        assert!(matches!(kept[3], UiCommand::Toggle));
+
+        assert!(collapse_consecutive_toggles(Vec::new()).is_empty());
+    }
+
+    #[test]
+    fn delistings_accumulate_across_coalesced_polls_without_duplicates() {
+        let change = |name: &str, blend: f64| ListingChange {
+            display_name: name.to_owned(),
+            last_blended: blend,
+        };
+        let mut delisted = Vec::new();
+        merge_delisted(
+            &mut delisted,
+            vec![change("Model A", 1.0), change("Model B", 2.0)],
+        );
+        // A queued second poll still sees A gone and adds C: the batch must
+        // grow, not reset, and A must not appear twice.
+        merge_delisted(
+            &mut delisted,
+            vec![change("Model A", 1.0), change("Model C", 3.0)],
+        );
+        let names: Vec<&str> = delisted.iter().map(|d| d.display_name.as_str()).collect();
+        assert_eq!(names, ["Model A", "Model B", "Model C"]);
     }
 }

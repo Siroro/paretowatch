@@ -135,6 +135,10 @@ pub(crate) fn model_core(s: &str) -> String {
         .map(str::to_owned)
         .collect::<Vec<_>>();
     let mut out = Vec::new();
+    // A year token opens a two-part date (`2024-11-20`): the all-digit tokens
+    // right after it are its month and day. A KEPT non-digit token disarms
+    // the counter — without that, an unrelated digit later in the name
+    // ("X 2025 chat 5") is eaten as a date part that never existed.
     let mut skip_date_parts = 0usize;
     for token in tokens {
         if skip_date_parts > 0 && token.chars().all(|c| c.is_ascii_digit()) {
@@ -156,6 +160,7 @@ pub(crate) fn model_core(s: &str) -> String {
         if is_model_modifier(&token) {
             continue;
         }
+        skip_date_parts = 0;
         out.push(token);
     }
     out.join(" ")
@@ -431,5 +436,22 @@ mod tests {
             benchmark_model_key("Qwen3 Coder 480B Turbo"),
             benchmark_model_key("Qwen 3 Coder 480B Turbo")
         );
+    }
+
+    #[test]
+    fn date_skip_disarms_when_a_kept_word_token_intervenes() {
+        // A year token opens a two-part date, but a kept word after it must
+        // disarm the counter: "X 2025 chat 5" lost its "5" to the still-armed
+        // skip and keyed as "x chat".
+        assert_eq!(model_core("X 2025 chat 5"), "x chat 5");
+        assert_eq!(model_core("Model 2026 lite 7"), "model lite 7");
+        // The guarded real cases keep behaving: a year token's own date parts
+        // are still eaten, and MMDD-style release tags are not year tokens.
+        assert_eq!(model_core("GPT-4 2024-11-20"), "gpt 4");
+        assert_eq!(
+            model_core("DeepSeek V4 Flash 0731"),
+            "deepseek v4 flash 0731"
+        );
+        assert_eq!(model_core("Qwen3 235B A22B 2507"), "qwen3 235b a22b 2507");
     }
 }

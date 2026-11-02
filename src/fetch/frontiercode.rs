@@ -69,6 +69,29 @@ fn parse_frontiercode_board(board: &Value) -> Vec<Benchmark> {
         return Vec::new();
     };
 
+    // `new_score` has shipped both as a 0–1 fraction and as an
+    // already-percent number, so the encoding is inferred per payload (like
+    // the DeepSWE feed): multiplying a percent-scale board would clamp every
+    // score to a meaningless 100.0. Only when every score is at most 1.0 is
+    // the board fraction-scale; an empty board keeps the old per-row
+    // fraction rule.
+    let fraction_scale = data.values().all(|efforts| {
+        efforts
+            .as_object()
+            .into_iter()
+            .flatten()
+            .all(|(_, subsets)| {
+                match subsets
+                    .get("main")
+                    .and_then(|entry| entry.get("new_score"))
+                    .and_then(Value::as_f64)
+                {
+                    Some(score) => score.is_finite() && score <= 1.0,
+                    None => true,
+                }
+            })
+    });
+
     // Model → chart color and lab → color let the board name each model's lab
     // (including harness-native models like SWE-1.7 → Cognition that the
     // catalogue-side name heuristics do not know).
@@ -126,7 +149,8 @@ fn parse_frontiercode_board(board: &Value) -> Vec<Benchmark> {
             .and_then(Value::as_str)
             .map(str::to_owned);
         let reasoning_effort = NAMED_EFFORTS.contains(&effort).then_some(effort.to_owned());
-        let score = (score * 100.0).clamp(0.0, 100.0);
+        let score = if fraction_scale { score * 100.0 } else { score };
+        let score = score.clamp(0.0, 100.0);
         let mut b = super::score_benchmark(
             slugify(model),
             score,
@@ -259,6 +283,27 @@ mod tests {
         let rows = parse_frontiercode(&board_json());
         let q = test_quote("claude-fable-5", 1.0, true);
         assert!(best_benchmark_match(&q, &rows).is_some());
+    }
+
+    #[test]
+    fn percent_scale_boards_are_not_clamped_to_full_marks() {
+        // If the feed switches new_score to percent scale, multiplying every
+        // value would clamp each row to exactly 100.0; the encoding is
+        // inferred per payload instead (the 88.5 companion proves percent
+        // scale, so the 0.8 survives unscaled too).
+        let board = json!({
+            "v1_1": {
+                "data": {
+                    "Model A": {"high": {"main": {"new_score": 88.5}}},
+                    "Model B": {"high": {"main": {"new_score": 0.8}}}
+                }
+            }
+        });
+        let rows = parse_frontiercode(&board);
+        assert_eq!(rows.len(), 2);
+        let by = |n: &str| rows.iter().find(|r| r.name == n).unwrap();
+        assert!((by("Model A").agentic_coding.unwrap() - 88.5).abs() < 1e-9);
+        assert!((by("Model B").agentic_coding.unwrap() - 0.8).abs() < 1e-9);
     }
 
     #[test]

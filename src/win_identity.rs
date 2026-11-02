@@ -29,7 +29,7 @@ const PKEY_APPUSERMODEL_ID: PROPERTYKEY = PROPERTYKEY {
     pid: 5,
 };
 
-/// Register the AUMID if it is not already registered. Errors are reported
+/// Register (or refresh) the AUMID for the current exe. Errors are reported
 /// to stderr and otherwise swallowed: on failure toasts fall back to the
 /// borrowed PowerShell identity exactly as before.
 pub(crate) fn ensure_registered() {
@@ -102,7 +102,12 @@ fn create_start_menu_shortcut() -> Result<(), Box<dyn Error>> {
         store.SetValue(&PKEY_APPUSERMODEL_ID, &PROPVARIANT::from(AUMID))?;
         store.Commit()?;
         let persist: IPersistFile = link.cast()?;
-        persist.Save(&windows::core::HSTRING::from(lnk.as_os_str()), true)?;
+        // fFailIfExists=FALSE: the shortcut is rewritten on every successful
+        // registration, so when an update relocates the exe its target
+        // self-heals to the new path instead of staying pinned to a stale
+        // one. Idempotency comes from writing the same content, not from
+        // skipping the save.
+        persist.Save(&windows::core::HSTRING::from(lnk.as_os_str()), false)?;
     }
     Ok(())
 }

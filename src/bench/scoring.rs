@@ -81,10 +81,12 @@ pub(crate) fn calibrated_aa_percentile(score: f64) -> f64 {
 
 /// Coverage-normalization scale for the confidence tier: how much
 /// population-scaled evidence weight a model must absorb before the
-/// composite reports full confidence. It is a calibrated constant, not the
-/// literal sum of the agentic base weights (TB4, FrontierCode, and the
-/// 2026-10 AA/Scale additions push that sum past 1.0): with more boards
-/// live, well-covered models saturate at 1.0 sooner, which is the intent.
+/// composite reports full confidence. The non-AA agentic base weights in
+/// `build_agentic_composite`'s table currently sum to 0.91 (the AA snapshot
+/// is the prior, not a contribution), so broad board coverage overshoots
+/// this constant. It is a calibrated constant, not that sum: with more
+/// boards live, well-covered models saturate at 1.0 sooner, which is the
+/// intent.
 pub(crate) const AGENTIC_EVIDENCE_TOTAL_WEIGHT: f64 = 0.65;
 
 /// Weight of the AA prior inside the posterior. Small on purpose: among the
@@ -238,6 +240,120 @@ pub(crate) fn pre_v5_estimate_entries(
             let key = benchmark_model_key(model);
             (!key.is_empty() && !scored.contains(&key))
                 .then_some((key, reanchor_pre_v5_score(*old)))
+        })
+        .collect()
+}
+
+/// Ranked-population policy for every anchored scale (the AA prior cohort
+/// and each board's anchored percentile cohort): a same-weights checkpoint
+/// must occupy exactly ONE cohort slot, under its base variant's key. Alias
+/// keys whose base is also present are dropped here, and
+/// [`assign_alias_percentiles`] later gives them the base's percentile. The
+/// identical-rating property is the point of the alias mechanism, but the
+/// alias must not ALSO occupy a cohort slot: an inflated population widens
+/// every tie span and shifts every model's percentile.
+fn dedup_alias_scores(
+    scores: impl Iterator<Item = (String, f64)>,
+    aliases: &HashMap<String, String>,
+) -> Vec<(String, f64)> {
+    let all: Vec<(String, f64)> = scores.collect();
+    let present: std::collections::HashSet<String> = all.iter().map(|(k, _)| k.clone()).collect();
+    all.into_iter()
+        .filter(|(key, _)| aliases.get(key).is_none_or(|base| !present.contains(base)))
+        .collect()
+}
+
+/// Give every same-weights alias key the percentile its base variant earned
+/// on this scale. Alias and base are the same checkpoint with identical
+/// evidence (the alias inherits the base's rows), so they must end up on the
+/// same percentile — without the alias having occupied a cohort slot (see
+/// [`dedup_alias_scores`]). Returns the alias keys that received an
+/// inherited standing so callers can propagate prior labels. Runs to a
+/// fixpoint so an alias whose base is itself an alias resolves.
+fn assign_alias_percentiles(
+    map: &mut HashMap<String, f64>,
+    aliases: &HashMap<String, String>,
+) -> std::collections::HashSet<String> {
+    let mut assigned: std::collections::HashSet<String> = std::collections::HashSet::new();
+    loop {
+        let mut changed = false;
+        for (sku, base) in aliases {
+            if assigned.contains(sku) {
+                continue;
+            }
+            if let Some(pct) = map.get(base).copied() {
+                map.insert(sku.clone(), pct);
+                assigned.insert(sku.clone());
+                changed = true;
+            }
+        }
+        if !changed {
+            return assigned;
+        }
+    }
+}
+
+/// Anchored-scale `~est` standings for a board's rows the AA snapshot does
+/// not list. When the anchored cohort is large enough to restrict ranking,
+/// such keys earn no board percentile — and before this pass they were
+/// dropped from the composite entirely. Each one is INSERTION-RANKED by its
+/// raw score among the board's anchored cohort (where would this score land
+/// among the AA-covered set), then re-priced through the field's AA
+/// standings — the same field-quality calibration the cohort's own
+/// percentiles go through — so the estimate lands on the anchored scale.
+/// Neutral by construction: the cohort's percentiles are computed before the
+/// newcomer joins and are never perturbed by it, the same guarantee the AA
+/// map's `~est` path provides. Empty when anchoring did not restrict this
+/// board (the keys already earned real full-board percentiles) or no anchor
+/// cohort exists.
+fn anchored_est_standings(
+    scores: impl Iterator<Item = (String, f64)>,
+    anchor: Option<&std::collections::HashSet<String>>,
+    aa_percentiles: Option<&HashMap<String, f64>>,
+) -> Vec<(String, f64)> {
+    let Some(anchor) = anchor else {
+        return Vec::new();
+    };
+    let all: Vec<(String, f64)> = scores.collect();
+    let cohort: Vec<f64> = all
+        .iter()
+        .filter(|(k, _)| anchor.contains(k))
+        .map(|(_, s)| *s)
+        .collect();
+    if cohort.len() < MIN_ANCHORED_POPULATION {
+        return Vec::new();
+    }
+    let mut sorted = cohort;
+    sorted.sort_by(|a, b| a.total_cmp(b));
+    let n = sorted.len();
+    let mut field: Vec<f64> = aa_percentiles
+        .map(|aa| {
+            all.iter()
+                .filter_map(|(k, _)| aa.get(k).copied())
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default();
+    field.sort_by(|a, b| a.total_cmp(b));
+    let calibrate = field.len() >= MIN_CALIBRATION_FIELD;
+    all.into_iter()
+        .filter(|(k, _)| !k.is_empty() && !anchor.contains(k))
+        .map(|(key, score)| {
+            let less = sorted.iter().filter(|s| **s < score - 1e-9).count();
+            let equal = sorted
+                .iter()
+                .filter(|s| (**s - score).abs() <= 1e-9)
+                .count();
+            // Tie-aware midpoint of the newcomer's slot within cohort + itself,
+            // on the cohort's own percentile scale (the endpoints agree: above
+            // the whole cohort is the 100th percentile, below it the 0th),
+            // clamped to the percentile scale.
+            let pct = ((less as f64 + equal as f64 / 2.0) / n as f64 * 100.0).clamp(0.0, 100.0);
+            let standing = if calibrate {
+                field_quantile(&field, pct)
+            } else {
+                pct
+            };
+            (key, standing)
         })
         .collect()
 }
@@ -547,15 +663,6 @@ pub(crate) fn build_agentic_composite(
                 by_model.insert(key, (row, score));
             }
         }
-        // Same-weights SKU aliases (e.g. `...-sol-pro`, the Contributor
-        // tier) inherit the base variant's rows so same-weights SKUs rate
-        // identically; native rows for the SKU itself always win over
-        // inherited ones.
-        for (mode_key, base_key) in &aliases {
-            if let Some(entry) = by_model.get(base_key).cloned() {
-                by_model.entry(mode_key.clone()).or_insert(entry);
-            }
-        }
         source_scores.insert(source, by_model);
     }
 
@@ -595,18 +702,34 @@ pub(crate) fn build_agentic_composite(
         .map(|rows| rows.keys().cloned().collect())
         .unwrap_or_default();
     let pre_v5_estimates = pre_v5_estimate_entries(&aa_scored_keys);
-    let estimated_keys: std::collections::HashSet<String> =
+    let mut estimated_keys: std::collections::HashSet<String> =
         pre_v5_estimates.iter().map(|(k, _)| k.clone()).collect();
     let aa_prior_percentiles: Option<HashMap<String, f64>> = source_scores
         .get(&BenchmarkSource::ArtificialAnalysisSnapshot)
         .and_then(|aa_rows| {
             anchored_aa_percentiles(
-                aa_rows.iter().map(|(k, (_, s))| (k.clone(), *s)),
+                dedup_alias_scores(aa_rows.iter().map(|(k, (_, s))| (k.clone(), *s)), &aliases)
+                    .into_iter(),
                 pre_v5_estimates.iter().cloned(),
                 &board_union,
             )
         })
-        .map(|(map, _)| map);
+        .map(|(mut map, _)| {
+            // Alias keys join at their base's standing once the checkpoint has
+            // ranked exactly once (see dedup_alias_scores).
+            let assigned = assign_alias_percentiles(&mut map, &aliases);
+            for sku in &assigned {
+                // An inherited standing inherits the base's prior label too:
+                // the base's real v5 measurement must not be disclosed as the
+                // SKU's "~est", and the base's ~est keeps the SKU consistent.
+                if estimated_keys.contains(&aliases[sku]) {
+                    estimated_keys.insert(sku.clone());
+                } else {
+                    estimated_keys.remove(sku);
+                }
+            }
+            map
+        });
 
     let mut percentiles: HashMap<BenchmarkSource, HashMap<String, f64>> = HashMap::new();
     let mut populations: HashMap<BenchmarkSource, usize> = HashMap::new();
@@ -617,13 +740,59 @@ pub(crate) fn build_agentic_composite(
         let Some(rows) = source_scores.get(&source) else {
             continue;
         };
-        let (map, population) = tie_aware_percentiles(
-            rows.iter().map(|(k, (_, s))| (k.clone(), *s)),
-            anchor.as_ref(),
-        );
-        let map = calibrate_percentiles_to_field_quality(&map, aa_prior_percentiles.as_ref());
+        let deduped = dedup_alias_scores(rows.iter().map(|(k, (_, s))| (k.clone(), *s)), &aliases);
+        let (map, population) = tie_aware_percentiles(deduped.iter().cloned(), anchor.as_ref());
+        let mut map = calibrate_percentiles_to_field_quality(&map, aa_prior_percentiles.as_ref());
+        assign_alias_percentiles(&mut map, &aliases);
         percentiles.insert(source, map);
         populations.insert(source, population);
+    }
+
+    // Board rows the AA snapshot does not list get an insertion-ranked ~est
+    // standing (see anchored_est_standings) instead of vanishing from the
+    // composite: coverage-first keeps them on the chart at the standing their
+    // board evidence implies, without perturbing the anchored scale. Boards
+    // are merged with the same population precision weighting the composite
+    // gives their percentiles.
+    let mut board_est_priors: HashMap<String, (f64, f64)> = HashMap::new();
+    for (source, _) in weights {
+        if source == BenchmarkSource::ArtificialAnalysisSnapshot {
+            continue;
+        }
+        let Some(rows) = source_scores.get(&source) else {
+            continue;
+        };
+        let deduped = dedup_alias_scores(rows.iter().map(|(k, (_, s))| (k.clone(), *s)), &aliases);
+        let weight = population_factor(populations.get(&source).copied().unwrap_or(0));
+        let standings = anchored_est_standings(
+            deduped.into_iter(),
+            anchor.as_ref(),
+            aa_prior_percentiles.as_ref(),
+        );
+        for (key, standing) in standings {
+            let entry = board_est_priors.entry(key).or_insert((0.0, 0.0));
+            entry.0 += weight * standing;
+            entry.1 += weight;
+        }
+    }
+    let board_est_priors: HashMap<String, f64> = board_est_priors
+        .into_iter()
+        .filter(|(_, (_, weight))| *weight > 0.0)
+        .map(|(key, (sum, weight))| (key, sum / weight))
+        .collect();
+
+    // Same-weights SKU aliases (e.g. `...-sol-pro`, the Contributor tier)
+    // inherit the base variant's rows so same-weights SKUs rate identically;
+    // native rows for the SKU itself always win over inherited ones. Injected
+    // only AFTER every ranked population and percentile map is computed: each
+    // checkpoint ranks exactly once, under its base key, and the alias keys
+    // were assigned the base's percentile above.
+    for rows in source_scores.values_mut() {
+        for (sku_key, base_key) in &aliases {
+            if let Some(entry) = rows.get(base_key).cloned() {
+                rows.entry(sku_key.clone()).or_insert(entry);
+            }
+        }
     }
 
     let mut all_keys = std::collections::HashSet::new();
@@ -698,10 +867,14 @@ pub(crate) fn build_agentic_composite(
         } else {
             None
         };
+        let board_est_prior = board_est_priors.get(&key).copied();
         let (prior_pct, prior_label) = match anchored_prior.or(pure_aa_prior) {
             Some(pct) if estimated_keys.contains(&key) => (pct, format!("AA ~est {:.0}th", pct)),
             Some(pct) => (pct, format!("AA {:.0}th", pct)),
-            None => (50.0, "neutral 50th".to_owned()),
+            None => match board_est_prior {
+                Some(pct) => (pct, format!("board ~est {:.0}th", pct)),
+                None => (50.0, "neutral 50th".to_owned()),
+            },
         };
         let mut prior_weight = PRIOR_WEIGHT;
         let mut missing_boards = 0usize;
@@ -725,7 +898,11 @@ pub(crate) fn build_agentic_composite(
             missing_boards += 1;
         }
 
-        if anchored_prior.is_none() && pure_aa_prior.is_none() && contribs.is_empty() {
+        if anchored_prior.is_none()
+            && pure_aa_prior.is_none()
+            && board_est_prior.is_none()
+            && contribs.is_empty()
+        {
             continue;
         }
 
@@ -783,8 +960,12 @@ pub(crate) fn build_agentic_composite(
             adjusted
         } else {
             let confidence = evidence_confidence(coverage);
-            prior_pct + (adjusted - prior_pct) * confidence
-                - RANK_UNCERTAINTY_PENALTY * (1.0 - confidence)
+            // Percentile scale: the ordinal discount can push a fully
+            // ranked-last model just below zero — clamp without disturbing
+            // in-range scores.
+            (prior_pct + (adjusted - prior_pct) * confidence
+                - RANK_UNCERTAINTY_PENALTY * (1.0 - confidence))
+                .clamp(0.0, 100.0)
         };
         let measured = if robust_w.iter().any(|w| *w > 0.0) {
             let mut sum = 0.0;
@@ -854,6 +1035,10 @@ pub(crate) fn build_agentic_composite(
         b.agentic_coding
             .unwrap_or_default()
             .total_cmp(&a.agentic_coding.unwrap_or_default())
+            // Exact score ties would otherwise fall back to the iteration
+            // order of `all_keys` (a HashSet) and shuffle between launches —
+            // the same disease the leaderboard collapse fixed (bench/mod.rs).
+            .then_with(|| a.slug.cmp(&b.slug))
     });
     out
 }
@@ -939,14 +1124,22 @@ pub(crate) fn benchmark_consensus_for_quote(
         .map(|keyed| keyed.iter().map(|(k, _)| k.clone()).collect())
         .unwrap_or_default();
     let pre_v5_estimates = pre_v5_estimate_entries(&aa_scored_keys);
+    let aliases = same_weights_sku_aliases();
     let aa_ranked: Option<(HashMap<String, f64>, usize)> = keyed_by_source
         .get(&BenchmarkSource::ArtificialAnalysisSnapshot)
         .and_then(|keyed| {
             anchored_aa_percentiles(
-                keyed.iter().cloned(),
+                dedup_alias_scores(keyed.iter().cloned(), &aliases).into_iter(),
                 pre_v5_estimates.iter().cloned(),
                 &board_union,
             )
+        })
+        .map(|(mut map, n)| {
+            // Alias keys join at their base's standing (see
+            // dedup_alias_scores), so a quote for the SKU resolves to the
+            // same AA percentile the composite priced.
+            assign_alias_percentiles(&mut map, &aliases);
+            (map, n)
         });
 
     let mut entries = Vec::new();
@@ -987,12 +1180,25 @@ pub(crate) fn benchmark_consensus_for_quote(
                 }
             }
         } else {
-            let (raw, population) = tie_aware_percentiles(keyed.iter().cloned(), anchor.as_ref());
+            let deduped = dedup_alias_scores(keyed.iter().cloned(), &aliases);
+            let (raw, population) = tie_aware_percentiles(deduped.iter().cloned(), anchor.as_ref());
             // Same field-quality calibration the composite weighs, so the
             // grid's board percentiles agree with what actually moved the
             // score. Rank stays the raw position in the field.
-            let calibrated =
+            let mut calibrated =
                 calibrate_percentiles_to_field_quality(&raw, aa_ranked.as_ref().map(|(m, _)| m));
+            // Rows the AA snapshot does not list are priced by the composite
+            // with an insertion-ranked ~est standing (see
+            // anchored_est_standings); the grid carries the same estimate
+            // instead of omitting the source's row.
+            for (key, standing) in anchored_est_standings(
+                deduped.into_iter(),
+                anchor.as_ref(),
+                aa_ranked.as_ref().map(|(m, _)| m),
+            ) {
+                calibrated.entry(key).or_insert(standing);
+            }
+            assign_alias_percentiles(&mut calibrated, &aliases);
             (calibrated, raw.get(&matched_key).copied(), population)
         };
         let Some(percentile) = percentiles.get(&matched_key).copied() else {
@@ -2829,6 +3035,302 @@ mod tests {
             "expected the AA leader Gemini 4 Carbon on top, got {}",
             leader.name
         );
+    }
+
+    #[test]
+    fn alias_checkpoint_ranks_once_and_the_alias_inherits_its_percentile() {
+        // Two directly-scored same-weights rows (the GPT-6.1 Sol / Sol Pro
+        // snapshot shape) must not occupy two cohort slots: the ranked
+        // population counts the checkpoint once, every other model's
+        // percentile is unchanged, and the alias key ends up at its base's
+        // percentile.
+        let aliases: HashMap<String, String> = [("sol pro".to_owned(), "sol".to_owned())].into();
+        let cohort: Vec<(String, f64)> = (0..11)
+            .map(|i| (format!("m{i}"), 20.0 + 3.0 * i as f64))
+            .collect();
+        let mut bare = cohort.clone();
+        bare.push(("sol".to_owned(), 55.0));
+        let mut doubled = bare.clone();
+        doubled.push(("sol pro".to_owned(), 55.0)); // same weights, scored twice
+
+        let union_of = |scores: &[(String, f64)]| {
+            scores
+                .iter()
+                .map(|(k, _)| k.clone())
+                .collect::<std::collections::HashSet<String>>()
+        };
+        let (bare_map, bare_n) =
+            anchored_aa_percentiles(bare.iter().cloned(), std::iter::empty(), &union_of(&bare))
+                .expect("cohort is large enough");
+        let deduped = dedup_alias_scores(doubled.iter().cloned(), &aliases);
+        assert_eq!(deduped.len(), doubled.len() - 1, "the alias slot must go");
+        let (mut map, n) =
+            anchored_aa_percentiles(deduped.into_iter(), std::iter::empty(), &union_of(&doubled))
+                .expect("cohort is large enough");
+        assert_eq!(n, bare_n, "each checkpoint ranks exactly once");
+        for (key, _) in &bare {
+            assert_eq!(
+                map.get(key).copied(),
+                bare_map.get(key).copied(),
+                "the alias slot perturbed {key}'s percentile"
+            );
+        }
+        let assigned = assign_alias_percentiles(&mut map, &aliases);
+        assert!(assigned.contains("sol pro"));
+        assert_eq!(map["sol pro"], map["sol"]);
+    }
+
+    #[test]
+    fn alias_sku_does_not_inflate_the_anchored_population_and_grid_agrees() {
+        // The composite's ranked populations are built from native rows and
+        // count each checkpoint once: the Pro SKU (directly scored under the
+        // same weights) must not occupy a second AA cohort slot, and the
+        // grid's AA percentile must agree with the composite's prior for the
+        // base, the alias, and an AA row outside the board cohort (the
+        // insertion-ranked path) — the agreement the grid's scale comment
+        // promises.
+        let mk =
+            |name: &str, score: f64| score_benchmark(name, score, None, None, BenchmarkKind::Model);
+        let mut sets = HashMap::new();
+        sets.insert(
+            BenchmarkSource::ArtificialAnalysisSnapshot,
+            vec![
+                mk("GPT-6.1 Sol", 57.0),
+                mk("GPT-6.1 Sol Pro", 57.0), // same weights, directly scored twice
+                mk("m1", 30.0),
+                mk("m2", 33.0),
+                mk("m3", 36.0),
+                mk("m4", 39.0),
+                mk("m5", 43.0),
+                mk("m6", 46.0),
+                mk("m7", 49.0),
+                mk("m8", 52.0),
+                mk("m9", 55.0),
+                mk("Cohort External", 41.0), // AA covers it; no board does
+            ],
+        );
+        sets.insert(
+            BenchmarkSource::TerminalBench4,
+            vec![
+                mk("GPT-6.1 Sol", 62.3),
+                mk("m1", 20.0),
+                mk("m2", 24.0),
+                mk("m3", 28.0),
+                mk("m4", 32.0),
+                mk("m5", 36.0),
+                mk("m6", 40.0),
+                mk("m7", 44.0),
+                mk("m8", 48.0),
+                mk("m9", 52.0),
+            ],
+        );
+        let composite = build_agentic_composite(
+            &sets,
+            ComparisonMode::ModelCapability,
+            "",
+            CompositeFlavor::Capability,
+        );
+        let find = |key: &str| {
+            composite
+                .iter()
+                .find(|b| benchmark_model_key(&b.slug) == key)
+                .unwrap_or_else(|| panic!("no composite row for {key}"))
+        };
+        let sol = find("gpt 6 1 sol");
+        let pro = find("gpt 6 1 sol pro");
+        assert!(
+            (sol.agentic_coding.unwrap() - pro.agentic_coding.unwrap()).abs() < 1e-9,
+            "the SKU must rate identically to its base\nsol: {}\npro: {}",
+            sol.agentic_coding.unwrap(),
+            pro.agentic_coding.unwrap()
+        );
+        assert!(
+            pro.name.contains("Terminal-Bench 4 62.3"),
+            "pro did not inherit the base row: {}",
+            pro.name
+        );
+        let prior_of = |row: &Benchmark| {
+            row.name
+                .split("prior AA ")
+                .nth(1)
+                .and_then(|rest| rest.split('t').next())
+                .and_then(|v| v.parse::<f64>().ok())
+                .unwrap_or(f64::NAN)
+        };
+        for (quote_model, key) in [
+            ("gpt-6-1-sol", "gpt 6 1 sol"),
+            ("gpt-6-1-sol-pro", "gpt 6 1 sol pro"),
+            ("cohort-external", "cohort external"),
+        ] {
+            let quote = test_quote(quote_model, 1.0, true);
+            let consensus =
+                benchmark_consensus_for_quote(&quote, &sets, ComparisonMode::ModelCapability, "")
+                    .unwrap_or_else(|| panic!("no consensus for {quote_model}"));
+            let aa = consensus
+                .entries
+                .iter()
+                .find(|e| e.source == BenchmarkSource::ArtificialAnalysisSnapshot)
+                .unwrap_or_else(|| panic!("no AA grid entry for {quote_model}"));
+            assert_eq!(
+                aa.total, 10,
+                "the Pro SKU must not occupy a second cohort slot ({quote_model})"
+            );
+            let prior = prior_of(find(key));
+            assert!(
+                (aa.percentile - prior).abs() < 0.5,
+                "{quote_model}: grid AA percentile {:.2} disagrees with the composite prior {:.2}\n{}",
+                aa.percentile,
+                prior,
+                find(key).name
+            );
+        }
+    }
+
+    /// Fixture for the snapshot-absent regression: a 12-model AA cohort whose
+    /// board ordering agrees with AA, plus one board row the snapshot does
+    /// not list, scored exactly midway between two cohort neighbors.
+    fn snapshot_absent_fixture() -> HashMap<BenchmarkSource, Vec<Benchmark>> {
+        let mk =
+            |name: &str, score: f64| score_benchmark(name, score, None, None, BenchmarkKind::Model);
+        let mut sets = HashMap::new();
+        sets.insert(
+            BenchmarkSource::ArtificialAnalysisSnapshot,
+            (0..12)
+                .map(|i| mk(&format!("c{i}"), 20.0 + 3.0 * i as f64))
+                .collect(),
+        );
+        let mut board: Vec<Benchmark> = (0..12)
+            .map(|i| mk(&format!("c{i}"), 10.0 + 4.0 * i as f64))
+            .collect();
+        board.push(mk("New Arrival", 32.0)); // between c5 (30) and c6 (34)
+        sets.insert(BenchmarkSource::TerminalBench4, board);
+        sets
+    }
+
+    #[test]
+    fn snapshot_absent_board_model_gets_an_insertion_ranked_est_prior() {
+        // A live-board model the bundled snapshot does not list used to be
+        // dropped from the composite entirely (no anchored percentile, no
+        // prior). It must instead enter at an insertion-ranked ~est standing:
+        // its board score positioned within the anchored cohort, re-priced
+        // through the field's AA standings — strictly between its
+        // score-neighbors' anchored percentiles, never perturbing them.
+        let sets = snapshot_absent_fixture();
+        let composite = build_agentic_composite(
+            &sets,
+            ComparisonMode::ModelCapability,
+            "",
+            CompositeFlavor::Capability,
+        );
+        let find = |key: &str| {
+            composite
+                .iter()
+                .find(|b| benchmark_model_key(&b.slug) == key)
+                .unwrap_or_else(|| panic!("no composite row for {key}"))
+        };
+        let newcomer = find("new arrival");
+        let score = newcomer.agentic_coding.unwrap();
+        assert!(
+            newcomer.name.contains("board ~est"),
+            "the board-derived estimate must be disclosed: {}",
+            newcomer.name
+        );
+        assert!(newcomer.name.contains("0 sources"), "{}", newcomer.name);
+        // With no contributions the composite degenerates to exactly the
+        // prior: the c5/c6 midpoint on the anchored scale.
+        assert!(
+            (score - 50.0).abs() < 1e-6,
+            "est prior {score} should sit at the c5/c6 midpoint: {}",
+            newcomer.name
+        );
+        let prior_of = |row: &Benchmark| {
+            row.name
+                .split("prior AA ")
+                .nth(1)
+                .and_then(|rest| rest.split('t').next())
+                .and_then(|v| v.parse::<f64>().ok())
+                .unwrap_or(f64::NAN)
+        };
+        let below = prior_of(find("c5"));
+        let above = prior_of(find("c6"));
+        assert!(
+            score > below && score < above,
+            "est prior {score} must sit between its score-neighbors' anchored \
+             percentiles ({below}, {above})"
+        );
+    }
+
+    #[test]
+    fn consensus_grid_covers_snapshot_absent_board_models() {
+        // The grid used to omit every source row for a model outside the AA
+        // snapshot (no anchored percentile -> the lookup dropped the entry);
+        // now the board entry carries the same insertion-ranked ~est standing
+        // the composite priced. The AA source itself has no row for the
+        // model, so it stays absent there.
+        let sets = snapshot_absent_fixture();
+        let quote = test_quote("new-arrival", 1.0, true);
+        let consensus =
+            benchmark_consensus_for_quote(&quote, &sets, ComparisonMode::ModelCapability, "")
+                .unwrap_or_else(|| panic!("no consensus for a snapshot-absent board model"));
+        assert!(
+            !consensus
+                .entries
+                .iter()
+                .any(|e| e.source == BenchmarkSource::ArtificialAnalysisSnapshot),
+            "no AA row exists for the model: {:?}",
+            consensus.entries
+        );
+        let tb4 = consensus
+            .entries
+            .iter()
+            .find(|e| e.source == BenchmarkSource::TerminalBench4)
+            .unwrap_or_else(|| {
+                panic!(
+                    "grid omitted the snapshot-absent model's board row: {:?}",
+                    consensus.entries
+                )
+            });
+        assert!(
+            (tb4.percentile - 50.0).abs() < 1e-6,
+            "grid percentile {:.2} must match the composite's est prior",
+            tb4.percentile
+        );
+    }
+
+    #[test]
+    fn fully_ranked_last_composite_lands_at_zero_not_negative() {
+        // prior 0 + ranked-last posterior - RANK_UNCERTAINTY_PENALTY's
+        // ordinal discount used to slip below the percentile scale.
+        let mk =
+            |name: &str, score: f64| score_benchmark(name, score, None, None, BenchmarkKind::Model);
+        let mut sets = HashMap::new();
+        let mut aa = vec![mk("Bottom", 20.0)];
+        for i in 0..10 {
+            aa.push(mk(&format!("c{i}"), 25.0 + 3.0 * i as f64));
+        }
+        sets.insert(BenchmarkSource::ArtificialAnalysisSnapshot, aa);
+        let mut tb = vec![mk("Bottom", 5.0)];
+        for i in 0..10 {
+            tb.push(mk(&format!("c{i}"), 20.0 + 4.0 * i as f64));
+        }
+        sets.insert(BenchmarkSource::TerminalBench4, tb);
+        let composite = build_agentic_composite(
+            &sets,
+            ComparisonMode::ModelCapability,
+            "",
+            CompositeFlavor::Capability,
+        );
+        let bottom = composite
+            .iter()
+            .find(|b| benchmark_model_key(&b.slug) == "bottom")
+            .unwrap();
+        let score = bottom.agentic_coding.unwrap();
+        assert_eq!(
+            score, 0.0,
+            "a fully ranked-last model must clamp to exactly 0: {}",
+            bottom.name
+        );
+        assert!(bottom.name.contains("prior AA 0th"), "{}", bottom.name);
     }
 
     /// Tuning view for the post-v5 composite rejiggle: prints the capability

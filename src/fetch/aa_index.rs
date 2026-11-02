@@ -12,14 +12,15 @@
 //!   variant's live value, keeping their inheritance disclosure;
 //! - families the payload adds (new models AA now rates) get fresh rows;
 //! - everything else — legacy families, ~proxy rows, AA estimates — keeps
-//!   the bundled value, so a fetch failure degrades to today's behavior:
-//!   the plain bundled snapshot.
+//!   the bundled value; a failed or empty fetch surfaces as an error so the
+//!   app keeps its last good board instead of regressing to the older
+//!   bundled snapshot.
 //!
 //! Variant policy mirrors the snapshot's: prefer the best reasoning effort
 //! the page lists (max > xhigh > high > medium > low), fall back to the bare
 //! entry, and only then to an explicit non-reasoning run.
 
-use anyhow::Result;
+use anyhow::{Result, anyhow};
 use regex::Regex;
 use reqwest::blocking::Client;
 
@@ -30,6 +31,12 @@ use crate::bench::matching::{benchmark_model_key, token_jaccard};
 use crate::types::{Benchmark, BenchmarkKind};
 
 const AA_LEADERBOARD_URL: &str = "https://artificialanalysis.ai/leaderboards/models";
+
+/// An `intelligenceIndex` may sit this far into the escaped record from its
+/// `shortName`; anything farther back belongs to another record (or the i18n
+/// label tables, which carry field-shaped keys with no names around).
+/// Mirrors the standardized-speed parser's window.
+const ATTRIBUTION_WINDOW: usize = 2_500;
 
 /// One live leaderboard entry, after name splitting.
 #[derive(Debug, Clone)]
@@ -53,17 +60,19 @@ impl LiveEntry {
 
 pub(crate) fn fetch_artificial_analysis_index(client: &Client) -> Result<Vec<Benchmark>> {
     let (index, _speed) = fetch_aa_index_and_speed(client);
-    index
+    index.map_err(|e| anyhow!(e))
 }
 
 /// One leaderboard download, two products: the Intelligence Index overlay
-/// (never fails — the bundled snapshot is the offline fallback) and the
-/// standardized-speed table (fails outright when the payload is unusable,
-/// so the UI can say so instead of silently showing nothing).
+/// (fails when the page cannot be fetched or carries no usable entries, so
+/// the UI keeps its last good board instead of silently regressing to the
+/// older bundled snapshot) and the standardized-speed table (fails outright
+/// when the payload is unusable, so the UI can say so instead of silently
+/// showing nothing).
 pub(crate) fn fetch_aa_index_and_speed(
     client: &Client,
 ) -> (
-    Result<Vec<Benchmark>>,
+    Result<Vec<Benchmark>, String>,
     Result<crate::types::AaSpeedSnapshot, String>,
 ) {
     let bundled = artificial_analysis_snapshot();
@@ -73,14 +82,17 @@ pub(crate) fn fetch_aa_index_and_speed(
         "AA Intelligence Index leaderboard",
     ) {
         Ok(html) => html,
-        Err(err) => return (Ok(bundled), Err(format!("{err:#}"))),
+        Err(err) => return (Err(format!("{err:#}")), Err(format!("{err:#}"))),
     };
     let version = parse_index_version(&html);
     let entries = parse_live_entries(&html);
     if entries.is_empty() {
-        return (Ok(bundled), Err("payload carried no model entries".into()));
+        return (
+            Err("payload carried no model entries".into()),
+            Err("payload carried no model entries".into()),
+        );
     }
-    let date = chrono::Local::now().format("%Y-%m-%d").to_string();
+    let date = chrono::Utc::now().format("%Y-%m-%d").to_string();
     let rows = overlay_live_rows(bundled, &entries, version.as_deref(), &date);
     let speed = super::aa_speed::parse_aa_speed_snapshot(&html);
     (Ok(rows), speed)
@@ -128,9 +140,15 @@ pub(crate) fn parse_live_entries(html: &str) -> Vec<LiveEntry> {
             continue;
         }
         let whole = caps.get(0).expect("whole match");
-        let Some((_, short)) = names.iter().rev().find(|(pos, _)| *pos < whole.start()) else {
+        let Some((pos, short)) = names.iter().rev().find(|(pos, _)| *pos < whole.start()) else {
             continue;
         };
+        // Mirror the speed parser's window: a score occurrence far from
+        // every shortName (i18n label tables carry field-shaped keys) must
+        // not be attributed to an unrelated preceding model.
+        if whole.start() - *pos > ATTRIBUTION_WINDOW {
+            continue;
+        }
         let short = short.replace("\\u0026", "&");
         let Some(entry) = classify_short_name(&short, score) else {
             continue;
@@ -380,6 +398,27 @@ mod tests {
         );
         assert!(matches[0].slug.contains("30B"));
         assert!((matches[0].agentic_coding.unwrap() - 12.8).abs() < 1e-9);
+    }
+
+    #[test]
+    fn scores_far_from_any_name_are_not_attributed() {
+        // Mirrors the speed parser's i18n-label guard: a score occurrence
+        // the payload carries far past every shortName must not inherit an
+        // unrelated preceding model's name. Model B's record publishes only
+        // a null (skipped), so without the window the far-away stray score
+        // would fabricate a Model B entry.
+        let mut html = concat!(
+            r#"{"slug":"a","shortName":"Model A","intelligenceIndex":55.0,"intelligenceIndexIsEstimated":false},"#,
+            r#"{"slug":"b","shortName":"Model B","intelligenceIndex":null,"intelligenceIndexIsEstimated":false},"#,
+        )
+        .to_owned();
+        html.push_str(r#""notes":"#);
+        html.push_str(&"x".repeat(3_000));
+        html.push_str(r#"","intelligenceIndex":77.0,"intelligenceIndexIsEstimated":false}"#);
+        let entries = parse_live_entries(&html);
+        assert_eq!(entries.len(), 1);
+        assert!(entries.iter().any(|e| e.name == "Model A"));
+        assert!(!entries.iter().any(|e| e.name == "Model B"));
     }
 
     #[test]

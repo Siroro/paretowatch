@@ -1237,10 +1237,10 @@ impl ParetoWatchApp {
     }
 }
 
-/// Order the table rows by the active sort. Missing cache prices and usage
-/// telemetry sort as the largest key so they sink in the default ascending
-/// order; every key tie-breaks on display name so the order is stable across
-/// polls.
+/// Order the table rows by the active sort. Missing cache prices, discounts,
+/// and usage telemetry sort as the largest key so they sink in the default
+/// ascending order; every key tie-breaks on display name so the order is
+/// stable across polls.
 fn sort_models_rows(rows: &mut [ModelsRow<'_>], sort: ModelsSort, desc: bool) {
     let by_name = |a: &ModelsRow<'_>, b: &ModelsRow<'_>| {
         a.quote
@@ -1249,7 +1249,7 @@ fn sort_models_rows(rows: &mut [ModelsRow<'_>], sort: ModelsSort, desc: bool) {
             .then_with(|| a.quote.model.cmp(&b.quote.model))
     };
     let cache_key = |row: &ModelsRow<'_>| row.cache_read.unwrap_or(f64::INFINITY);
-    let discount_key = |row: &ModelsRow<'_>| row.quote.discount_pct.unwrap_or(f64::NEG_INFINITY);
+    let discount_key = |row: &ModelsRow<'_>| row.quote.discount_pct.unwrap_or(f64::INFINITY);
     let requests_key =
         |row: &ModelsRow<'_>| row.quote.requests_24h.map_or(f64::INFINITY, |r| r as f64);
     let volume_key = |row: &ModelsRow<'_>| row.quote.volume_24h.unwrap_or(f64::INFINITY);
@@ -1616,6 +1616,55 @@ mod tests {
         assert_eq!(
             names(&rows),
             ["unreported-model", "busy-model", "quiet-model"]
+        );
+    }
+
+    #[test]
+    fn discount_sort_sinks_missing_values_in_ascending_order() {
+        let mut deep = test_quote("deep-discount", 1.0, true);
+        deep.discount_pct = Some(40.0);
+        let mut shallow = test_quote("shallow-discount", 1.0, true);
+        shallow.discount_pct = Some(10.0);
+        let mut unreported = test_quote("unreported-model", 1.0, true);
+        unreported.discount_pct = None;
+        let mut rows = vec![
+            ModelsRow {
+                quote: &unreported,
+                blended: 0.0,
+                cache_read: None,
+                aa_speed: None,
+            },
+            ModelsRow {
+                quote: &deep,
+                blended: 0.0,
+                cache_read: None,
+                aa_speed: None,
+            },
+            ModelsRow {
+                quote: &shallow,
+                blended: 0.0,
+                cache_read: None,
+                aa_speed: None,
+            },
+        ];
+        fn names<'a>(rows: &[ModelsRow<'a>]) -> Vec<&'a str> {
+            rows.iter().map(|row| row.quote.model.as_str()).collect()
+        }
+
+        // Ascending (the header's default): discounts by their key, missing
+        // sinking last — the largest-key convention every other optional
+        // column follows.
+        sort_models_rows(&mut rows, ModelsSort::Discount, false);
+        assert_eq!(
+            names(&rows),
+            ["shallow-discount", "deep-discount", "unreported-model"]
+        );
+        // Descending floats the largest key (the missing row) to the top,
+        // like the usage sorts.
+        sort_models_rows(&mut rows, ModelsSort::Discount, true);
+        assert_eq!(
+            names(&rows),
+            ["unreported-model", "deep-discount", "shallow-discount"]
         );
     }
 }

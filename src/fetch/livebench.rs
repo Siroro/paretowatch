@@ -81,9 +81,11 @@ pub(crate) fn quoted_string_array_items(haystack: &str, valid: fn(&str) -> bool)
         };
         let close = open + rel_close;
         // `close` sits on `]`; step back over the closing quote so the last
-        // item does not carry a trailing `"` into the predicate.
+        // item does not carry a trailing `"` into the predicate. Degenerate
+        // runs like `["]` (nothing between the quotes) would slice backwards,
+        // so clamp the step-back to an empty body, skipped below.
         let body_end = if haystack[..close].ends_with('"') {
-            close - 1
+            (close - 1).max(open + 2)
         } else {
             close
         };
@@ -237,6 +239,21 @@ mod tests {
         let bundle = r##"["20261014"],["2026-06-25"],["#fff","#000"],["20261014",42],[{a:1}]"##;
         assert_eq!(
             quoted_string_array_items(bundle, is_release_label),
+            vec!["20261014".to_owned()]
+        );
+    }
+
+    #[test]
+    fn degenerate_bracket_quote_bracket_does_not_panic() {
+        // `["]` sliced backwards (start > end) and panicked before the clamp;
+        // it must be skipped while a valid array next to it still parses.
+        let lenient = |s: &str| !s.is_empty();
+        assert_eq!(
+            quoted_string_array_items(r#"["]["a","b"]"#, lenient),
+            vec!["a".to_owned(), "b".to_owned()]
+        );
+        assert_eq!(
+            quoted_string_array_items(r#"["],["20261014"]"#, is_release_label),
             vec!["20261014".to_owned()]
         );
     }

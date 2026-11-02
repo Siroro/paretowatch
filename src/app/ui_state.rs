@@ -22,8 +22,8 @@ use super::models_tab::{ModelsCacheFilter, ModelsSort, ModelsSource};
 use super::{ActivityTab, NewListingsWindow, ParetoWatchApp, Tab};
 use crate::notifications::NotificationKind;
 use crate::types::{
-    BenchmarkMetric, BenchmarkSource, ComparisonMode, CostBasis, LiquidityFilter, ModalityFilter,
-    PriceMetric, PricingSource, SpeedFilter, UncensoredFilter,
+    AgeFilter, BenchmarkMetric, BenchmarkSource, ComparisonMode, CostBasis, LiquidityFilter,
+    ModalityFilter, PriceMetric, PricingSource, SpeedFilter, UncensoredFilter,
 };
 
 const UI_STATE_VERSION: u32 = 1;
@@ -46,6 +46,7 @@ pub(super) struct UiState {
     liquidity_filter: LiquidityFilter,
     modality_filter: ModalityFilter,
     uncensored_filter: UncensoredFilter,
+    age_filter: AgeFilter,
     /// Pre-three-way field: the old "Hide catalog-only prices" toggle. Read
     /// from existing files to seed `pricing_source`, never written back.
     #[serde(default, skip_serializing)]
@@ -86,6 +87,7 @@ impl Default for UiState {
             liquidity_filter: LiquidityFilter::Any,
             modality_filter: ModalityFilter::All,
             uncensored_filter: UncensoredFilter::All,
+            age_filter: AgeFilter::All,
             hide_catalog_prices: false,
             pricing_source: PricingSource::All,
             log_price_axis: true,
@@ -103,6 +105,18 @@ impl Default for UiState {
             calc_provider: None,
             pinned_models: vec![],
         }
+    }
+}
+
+/// The pin list a snapshot should persist. A restored session's pins sit in
+/// the pending list until the first price snapshot lets the widgets spawn —
+/// until then the widget manager reports none, and persisting that emptiness
+/// would destroy the user's pins if they quit before a successful poll.
+/// While the restore is pending, the pending list is the pin list.
+fn effective_pinned_models(pending: Option<&[String]>, pinned: Vec<String>) -> Vec<String> {
+    match pending {
+        Some(models) => models.to_vec(),
+        None => pinned,
     }
 }
 
@@ -155,6 +169,7 @@ impl ParetoWatchApp {
             liquidity_filter: self.liquidity_filter,
             modality_filter: self.modality_filter,
             uncensored_filter: self.uncensored_filter,
+            age_filter: self.age_filter,
             hide_catalog_prices: false,
             pricing_source: self.pricing_source,
             log_price_axis: self.log_price_axis,
@@ -170,7 +185,13 @@ impl ParetoWatchApp {
             models_sort_desc: self.models_sort_desc,
             calc_model: self.calc_model.clone(),
             calc_provider: self.calc_provider.clone(),
-            pinned_models: self.widgets.pinned_model_ids(),
+            // While restored pins wait for their first price snapshot, the
+            // pending list — not the still-empty widget manager — is what
+            // gets persisted (see `effective_pinned_models`).
+            pinned_models: effective_pinned_models(
+                self.pending_pin_restore.as_deref(),
+                self.widgets.pinned_model_ids(),
+            ),
         }
     }
 
@@ -193,6 +214,7 @@ impl ParetoWatchApp {
         self.liquidity_filter = state.liquidity_filter;
         self.modality_filter = state.modality_filter;
         self.uncensored_filter = state.uncensored_filter;
+        self.age_filter = state.age_filter;
         self.pricing_source = state.pricing_source;
         self.log_price_axis = state.log_price_axis;
         self.hidden_groups = state.hidden_groups.iter().cloned().collect();
@@ -226,6 +248,25 @@ impl ParetoWatchApp {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn snapshot_persists_pending_pin_restore_until_consumed() {
+        // While a restored pin list still waits for its first price snapshot,
+        // the widget manager is empty — the pending list is what must be
+        // persisted, or a quit before a successful poll loses the pins.
+        let pending = vec!["gpt-6-sol".to_owned(), "muse-wonder".to_owned()];
+        assert_eq!(
+            effective_pinned_models(Some(&pending), vec![]),
+            vec!["gpt-6-sol".to_owned(), "muse-wonder".to_owned()]
+        );
+        // Once the restore is consumed, the live widget list stands alone —
+        // empty when nothing is pinned.
+        assert_eq!(effective_pinned_models(None, vec![]), Vec::<String>::new());
+        assert_eq!(
+            effective_pinned_models(None, vec!["kimi-k12".to_owned()]),
+            vec!["kimi-k12".to_owned()]
+        );
+    }
 
     #[test]
     // One test, sequentially: every half shares the real ui_state.json path,

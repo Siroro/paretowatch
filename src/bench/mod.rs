@@ -118,13 +118,18 @@ pub(crate) fn collapse_benchmark_rows(
             best.insert(key, row.clone());
         }
     }
-    let mut out = best.into_values().collect::<Vec<_>>();
-    out.sort_by(|a, b| {
+    // Score-descending with a deterministic tie-break: a plain score sort
+    // keeps the HashMap's iteration order for equal scores, so tied rows
+    // shuffled between launches (the same HashMap-order disease
+    // `calibrated_aa_percentile`'s above-anchor slope fixed — see scoring.rs).
+    let mut out: Vec<(String, Benchmark)> = best.into_iter().collect();
+    out.sort_by(|(key_a, a), (key_b, b)| {
         b.agentic_coding
             .unwrap_or_default()
             .total_cmp(&a.agentic_coding.unwrap_or_default())
+            .then_with(|| key_a.cmp(key_b))
     });
-    out
+    out.into_iter().map(|(_, row)| row).collect()
 }
 
 pub(crate) fn benchmarks_for_source(
@@ -210,5 +215,42 @@ mod tests {
         assert_eq!(rows.len(), 1);
         let q = test_quote("gpt-5.6-sol", 1.0, true);
         assert!(best_benchmark_match(&q, &rows).is_some());
+    }
+
+    #[test]
+    fn collapse_benchmark_rows_orders_score_ties_deterministically() {
+        // Equal-score rows must not depend on the HashMap's iteration order
+        // (which reshuffles between launches): ties break on the canonical
+        // model key ascending.
+        let mk =
+            |name: &str, score: f64| score_benchmark(name, score, None, None, BenchmarkKind::Model);
+        let expected = ["mid", "alpha", "kappa", "zeta"];
+        for rows in [
+            vec![
+                mk("zeta", 50.0),
+                mk("mid", 70.0),
+                mk("alpha", 50.0),
+                mk("kappa", 50.0),
+            ],
+            vec![
+                mk("alpha", 50.0),
+                mk("kappa", 50.0),
+                mk("zeta", 50.0),
+                mk("mid", 70.0),
+            ],
+            vec![
+                mk("kappa", 50.0),
+                mk("mid", 70.0),
+                mk("zeta", 50.0),
+                mk("alpha", 50.0),
+            ],
+        ] {
+            let collapsed = collapse_benchmark_rows(&rows, ComparisonMode::ModelCapability, "");
+            let keys: Vec<String> = collapsed
+                .iter()
+                .map(|b| benchmark_model_key(&b.slug))
+                .collect();
+            assert_eq!(keys, expected, "tied rows must order stably");
+        }
     }
 }

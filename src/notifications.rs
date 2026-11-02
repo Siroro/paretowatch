@@ -135,7 +135,7 @@ impl NotificationLog {
         Self::open_at(notification_log_path(), settings)
     }
 
-    fn open_at(path: PathBuf, settings: &Settings) -> Self {
+    pub(crate) fn open_at(path: PathBuf, settings: &Settings) -> Self {
         let persisted = std::fs::read(&path)
             .ok()
             .and_then(|bytes| serde_json::from_slice::<PersistedLog>(&bytes).ok())
@@ -183,8 +183,14 @@ impl NotificationLog {
         self.persist();
     }
 
-    pub(crate) fn push_price_move(&mut self, move_: PriceMoveRecord) {
-        self.price_moves.push_front(move_);
+    /// Batch insert for feed-wide repricing: every record goes through the
+    /// same newest-first insert and trim/cap, but the log is serialized and
+    /// written once for the whole batch. Records land newest-first — the last
+    /// item ends up at the front of the list.
+    pub(crate) fn push_price_moves(&mut self, moves: impl IntoIterator<Item = PriceMoveRecord>) {
+        for move_ in moves {
+            self.price_moves.push_front(move_);
+        }
         while self.price_moves.len() > MAX_PRICE_MOVES {
             self.price_moves.pop_back();
         }
@@ -202,7 +208,11 @@ impl NotificationLog {
 
     /// For `AfterCooldown` level alerts, avoid evaluating delivery every poll.
     /// A zero-minute cooldown is treated as one minute in this repeat mode so
-    /// enabling it can never produce a notification every 30 seconds.
+    /// enabling it can never produce a notification every 30 seconds. Only
+    /// *delivered* records gate the repeat: a firing suppressed by quiet
+    /// hours or a mute was never seen by the user and must not delay the
+    /// real notification by a full cooldown (matching
+    /// [`Self::delivered_within_cooldown`]).
     pub(crate) fn ready_for_repeat(&self, alert: &AlertRule) -> bool {
         if alert.rearm != AlertRearm::AfterCooldown {
             return false;
@@ -211,7 +221,7 @@ impl NotificationLog {
         let cutoff = Utc::now() - Duration::minutes(minutes);
         self.records
             .iter()
-            .find(|record| record.alert_id == Some(alert.id))
+            .find(|record| record.alert_id == Some(alert.id) && record.delivered)
             .is_none_or(|record| record.at <= cutoff)
     }
 
@@ -292,7 +302,13 @@ impl NotificationLog {
         if let Ok(bytes) = serde_json::to_vec(&persisted) {
             let tmp = self.path.with_extension("json.tmp");
             if std::fs::write(&tmp, bytes).is_ok() && std::fs::rename(&tmp, &self.path).is_err() {
-                let _ = std::fs::remove_file(&self.path);
+                // Windows can refuse rename-over-existing. Never delete the
+                // live log first: move it aside under a timestamped archive
+                // so the old history survives even if the retry below also
+                // fails, then swap the new bytes in.
+                let stamp = chrono::Utc::now().format("%Y%m%dT%H%M%S%.3fZ");
+                let archived = self.path.with_extension(format!("json.old-{stamp}"));
+                let _ = std::fs::rename(&self.path, &archived);
                 let _ = std::fs::rename(&tmp, &self.path);
             }
         }
@@ -382,12 +398,56 @@ pub(crate) fn play_sound(sound: AlertSound) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::types::Settings;
+    use crate::types::{
+        AlertDirection, AlertMode, AlertSound, BenchmarkMetric, BenchmarkSource, ComparisonMode,
+        CostBasis, LiquidityFilter, MoveDirection, PriceMetric, Settings,
+    };
 
     fn temp_log(name: &str) -> PathBuf {
         std::env::temp_dir()
             .join("paretowatch-notification-tests")
             .join(format!("{}-{name}.json", std::process::id()))
+    }
+
+    fn move_record(model: &str) -> PriceMoveRecord {
+        PriceMoveRecord {
+            model: model.into(),
+            display_name: format!("Model {model}"),
+            at: Utc::now(),
+            old_blended: 1.0,
+            new_blended: 0.9,
+            old_input: 1.0,
+            new_input: 0.9,
+            old_output: 2.0,
+            new_output: 1.8,
+            source: "test".into(),
+        }
+    }
+
+    fn cooldown_alert() -> AlertRule {
+        AlertRule {
+            id: 9,
+            model: "model-a".into(),
+            mode: AlertMode::Threshold,
+            metric: PriceMetric::Blended,
+            cost_basis: CostBasis::PerMillion,
+            direction: AlertDirection::BelowOrEqual,
+            threshold: 0.0,
+            enabled: true,
+            benchmark_source: BenchmarkSource::CompositeAgentic,
+            benchmark_metric: BenchmarkMetric::AgenticCoding,
+            comparison_mode: ComparisonMode::BestAvailableAgent,
+            common_scaffold: crate::types::default_common_scaffold(),
+            liquidity_filter: LiquidityFilter::Any,
+            score_threshold: 50.0,
+            min_move_pct: 0.0,
+            move_direction: MoveDirection::Any,
+            discount_threshold_pct: crate::types::default_discount_threshold(),
+            healthy_seller_floor: 0,
+            cooldown_minutes: 60,
+            rearm: AlertRearm::AfterCooldown,
+            sound: AlertSound::Chime,
+        }
     }
 
     #[test]
@@ -420,7 +480,7 @@ mod tests {
         let _ = std::fs::remove_file(&path);
         let settings = Settings::default();
         let mut log = NotificationLog::open_at(path.clone(), &settings);
-        log.push_price_move(PriceMoveRecord {
+        log.push_price_moves(std::iter::once(PriceMoveRecord {
             model: "model-a".into(),
             display_name: "Model A".into(),
             at: Utc::now(),
@@ -431,7 +491,7 @@ mod tests {
             old_output: 2.0,
             new_output: 1.6,
             source: "test".into(),
-        });
+        }));
         drop(log);
 
         let reopened = NotificationLog::open_at(path.clone(), &settings);
@@ -475,5 +535,114 @@ mod tests {
         let log =
             NotificationLog::open_at(std::path::Path::new("unused-test.json").into(), &settings);
         assert!(log.quiet_hours_start > log.quiet_hours_end);
+    }
+
+    #[test]
+    fn batch_price_moves_land_newest_first_and_persist_once() {
+        let path = temp_log("batch");
+        let _ = std::fs::remove_file(&path);
+        let settings = Settings::default();
+        let mut log = NotificationLog::open_at(path.clone(), &settings);
+        let batch: Vec<PriceMoveRecord> =
+            (0..5).map(|i| move_record(&format!("model-{i}"))).collect();
+        log.push_price_moves(batch);
+        // Newest-first, like the single push: the batch's last record leads.
+        let models: Vec<_> = log.price_moves().map(|m| m.model.as_str()).collect();
+        assert_eq!(
+            models,
+            ["model-4", "model-3", "model-2", "model-1", "model-0"]
+        );
+        drop(log);
+        // One persist for the whole batch: the reopened log holds them all.
+        let reopened = NotificationLog::open_at(path.clone(), &settings);
+        assert_eq!(reopened.price_moves().count(), 5);
+        assert_eq!(reopened.price_moves().next().unwrap().model, "model-4");
+        let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
+    fn batch_price_moves_trim_to_the_cap_in_one_pass() {
+        let path = temp_log("batch-cap");
+        let _ = std::fs::remove_file(&path);
+        let settings = Settings::default();
+        let mut log = NotificationLog::open_at(path.clone(), &settings);
+        let batch: Vec<PriceMoveRecord> = (0..MAX_PRICE_MOVES + 5)
+            .map(|i| move_record(&format!("model-{i}")))
+            .collect();
+        log.push_price_moves(batch);
+        assert_eq!(log.price_moves().count(), MAX_PRICE_MOVES);
+        assert_eq!(
+            log.price_moves().next().unwrap().model,
+            format!("model-{}", MAX_PRICE_MOVES + 4)
+        );
+        let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
+    fn ready_for_repeat_gates_only_on_delivered_records() {
+        let settings = Settings::default();
+        let mut log = NotificationLog::open_at(
+            std::path::Path::new("unused-ready-repeat.json").into(),
+            &settings,
+        );
+        let alert = cooldown_alert();
+        // Nothing on record: the repeat is immediately ready.
+        assert!(log.ready_for_repeat(&alert));
+        // A firing suppressed by quiet hours must not reset the repeat clock.
+        log.records.push_front(NotificationRecord {
+            at: Utc::now() - Duration::minutes(5),
+            alert_id: Some(alert.id),
+            delivered: false,
+            ..Default::default()
+        });
+        assert!(log.ready_for_repeat(&alert));
+        // A delivered record inside the cooldown does gate it...
+        log.records.push_front(NotificationRecord {
+            at: Utc::now() - Duration::minutes(5),
+            alert_id: Some(alert.id),
+            delivered: true,
+            ..Default::default()
+        });
+        assert!(!log.ready_for_repeat(&alert));
+        // ...until it ages past the cooldown.
+        log.records[0].at = Utc::now() - Duration::minutes(61);
+        assert!(log.ready_for_repeat(&alert));
+    }
+
+    #[test]
+    fn persist_fallback_archives_instead_of_deleting_first() {
+        // Force the direct tmp→log rename to fail: a directory occupies the
+        // log path, so the rename is refused the same way Windows refuses
+        // rename-over-existing. The fallback must move the live node aside
+        // under a timestamped archive and retry — never remove it first,
+        // which would lose the history if the process died in between.
+        let dir = std::env::temp_dir()
+            .join("paretowatch-notification-tests")
+            .join(format!("{}-swap", std::process::id()));
+        let _ = std::fs::create_dir_all(&dir);
+        let path = dir.join("notifications.json");
+        let _ = std::fs::remove_dir_all(&path);
+        std::fs::create_dir(&path).unwrap();
+        let settings = Settings::default();
+        let mut log = NotificationLog::open_at(path.clone(), &settings);
+        log.push_price_moves(std::iter::once(move_record("model-a")));
+        // The persisted log is in place and the old node was archived aside.
+        assert!(path.is_file());
+        let archived: Vec<PathBuf> = std::fs::read_dir(&dir)
+            .unwrap()
+            .flatten()
+            .map(|entry| entry.path())
+            .filter(|p| {
+                p.file_name()
+                    .and_then(|n| n.to_str())
+                    .is_some_and(|n| n.starts_with("notifications.json.old-"))
+            })
+            .collect();
+        assert_eq!(archived.len(), 1);
+        drop(log);
+        let reopened = NotificationLog::open_at(path.clone(), &settings);
+        assert_eq!(reopened.price_moves().count(), 1);
+        let _ = std::fs::remove_file(&path);
+        let _ = std::fs::remove_dir_all(dir);
     }
 }

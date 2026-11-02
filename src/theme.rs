@@ -167,6 +167,34 @@ pub(crate) fn discount_color(discount: f64) -> egui::Color32 {
     }
 }
 
+/// Freshness color by model age in days. A ripening ramp, not good/bad:
+/// just-launched models glow green, then lime, amber, and orange as the
+/// release recedes, and anything past a year settles into neutral gray.
+/// Bucketed (not continuous) so the chart legend, card chip, and any other
+/// age-colored element agree without sharing state.
+pub(crate) fn age_color(age_days: f64) -> egui::Color32 {
+    match age_days {
+        d if d <= 31.0 => egui::Color32::from_rgb(74, 222, 128),
+        d if d <= 92.0 => egui::Color32::from_rgb(163, 230, 53),
+        d if d <= 183.0 => egui::Color32::from_rgb(234, 179, 8),
+        d if d <= 366.0 => egui::Color32::from_rgb(249, 115, 22),
+        _ => egui::Color32::from_rgb(138, 143, 152),
+    }
+}
+
+/// Human age for a whole-day count: `3d`, `7 wks`, `5 mo`, `1.2 yr`.
+pub(crate) fn age_label(age_days: f64) -> String {
+    if age_days < 14.0 {
+        format!("{}d", age_days.round() as i64)
+    } else if age_days < 60.0 {
+        format!("{:.0} wks", (age_days / 7.0).round())
+    } else if age_days < 366.0 {
+        format!("{:.0} mo", (age_days / 30.44).round())
+    } else {
+        format!("{:.1} yr", age_days / 365.25)
+    }
+}
+
 /// The `*` marking a market that also lists a zero-priced ask. Priced rows
 /// keep their real prices; the tooltip explains what was excluded.
 pub(crate) fn free_offer_badge(ui: &mut egui::Ui) {
@@ -268,5 +296,20 @@ mod tests {
         assert_eq!(discount_color(49.9), discount_color(0.0));
         assert_ne!(discount_color(80.0), discount_color(79.9));
         assert_ne!(discount_color(50.0), discount_color(49.9));
+    }
+
+    #[test]
+    fn age_colors_and_labels_follow_the_documented_buckets() {
+        assert_eq!(age_color(0.0), age_color(31.0));
+        assert_eq!(age_color(31.5), age_color(92.0));
+        assert_ne!(age_color(31.0), age_color(31.5));
+        assert_ne!(age_color(92.5), age_color(92.0));
+        assert_ne!(age_color(183.5), age_color(183.0));
+        assert_eq!(age_color(400.0), age_color(1_000.0));
+        assert_eq!(age_label(0.0), "0d");
+        assert_eq!(age_label(6.0), "6d");
+        assert_eq!(age_label(49.0), "7 wks");
+        assert_eq!(age_label(152.0), "5 mo");
+        assert_eq!(age_label(438.0), "1.2 yr");
     }
 }

@@ -7,6 +7,7 @@ use std::collections::{HashMap, HashSet};
 use chrono::{DateTime, Utc};
 
 use crate::bench::benchmarks_for_source;
+use crate::history::store::quantize_price;
 use crate::notifications::{NotificationKind, SharedNotifications, notify_alert};
 use crate::pareto::{JoinedPoint, filter_frontier_hidden, joined_points, pareto_frontier};
 use crate::types::{
@@ -158,6 +159,7 @@ pub(crate) fn evaluate_alerts(
     settings: &Settings,
     state: &mut HashMap<u64, bool>,
     previous_quotes: &HashMap<String, Quote>,
+    base_source_changed: bool,
     notifications: &SharedNotifications,
 ) {
     for alert in &settings.alerts {
@@ -181,6 +183,13 @@ pub(crate) fn evaluate_alerts(
             // quote and the slower fallback feed. Do not misreport that source
             // transition as a market price move.
             if previous.live_market != quote.live_market {
+                continue;
+            }
+            // A base-feed fallback switch reprices the catalog between sources
+            // (see `detect_delisted`), so non-live quotes from different base
+            // feeds are not comparable. Live-market quotes come from the same
+            // marketplace overlay either way, so those pairs stay comparable.
+            if base_source_changed && !quote.live_market {
                 continue;
             }
             let Some(best) = qualifying_move(previous, quote, alert, settings) else {
@@ -370,9 +379,13 @@ fn should_fire_level(
         .unwrap_or(false)
 }
 
+/// Alert/widget change detection must agree with what the history log
+/// records: the log quantizes prices at `PRICE_QUANT` (0.001 $/M, see
+/// `history::store`) and only writes a frame when the quantized value moves,
+/// so smaller feed jitter must not toast, flash a pinned row, or feed the
+/// recent-moves list either.
 pub(crate) fn prices_differ(a: f64, b: f64) -> bool {
-    let scale = a.abs().max(b.abs()).max(1.0);
-    (a - b).abs() > 1e-10 * scale
+    quantize_price(a) != quantize_price(b)
 }
 
 fn quote_has_price_change(old: &Quote, new: &Quote, settings: &Settings) -> bool {
@@ -543,6 +556,12 @@ pub(crate) fn frontier_changes(
     FrontierDiff { entered, exited }
 }
 
+/// Per-model price moves between two consecutive polls. The base-feed
+/// fallback chain (catalog/matrix) can legitimately change which models a
+/// degraded poll sees and what the catalog prices them at, so non-live
+/// pairs are only comparable when both polls came from the same base
+/// source; live-market pairs come from the same marketplace overlay either
+/// way and stay comparable across a switch.
 pub(crate) fn detect_price_changes(
     previous: &PriceSnapshot,
     current: &PriceSnapshot,
@@ -558,7 +577,15 @@ pub(crate) fn detect_price_changes(
         let Some(old) = old_by_model.get(new.model.as_str()).copied() else {
             continue;
         };
-        if old.live_market != new.live_market || !quote_has_price_change(old, new, settings) {
+        if old.live_market != new.live_market {
+            continue;
+        }
+        // Cross-source catalog prices are a fallback artifact, not a market
+        // move (same rationale as `detect_delisted`).
+        if previous.base_source != current.base_source && !new.live_market {
+            continue;
+        }
+        if !quote_has_price_change(old, new, settings) {
             continue;
         }
         changes.push(PriceChangeEvent {
@@ -600,8 +627,22 @@ pub(crate) fn next_alert_id(alerts: &[AlertRule]) -> u64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::notifications::NotificationLog;
     use crate::testfix::test_quote;
     use crate::types::{ComparisonMode, CostBasis, LiquidityFilter};
+    use std::sync::{Arc, Mutex};
+
+    /// A temp-backed shared notification log for worker-evaluation tests.
+    fn notification_log() -> SharedNotifications {
+        let path = std::env::temp_dir()
+            .join("paretowatch-alert-tests")
+            .join(format!("notifications-{}.json", std::process::id()));
+        let _ = std::fs::remove_file(&path);
+        Arc::new(Mutex::new(NotificationLog::open_at(
+            path,
+            &Settings::default(),
+        )))
+    }
 
     fn move_alert(min_move_pct: f64, move_direction: MoveDirection) -> AlertRule {
         AlertRule {
@@ -662,6 +703,8 @@ mod tests {
             free_offer_listed: false,
             vision: false,
             uncensored: false,
+            released_at: None,
+            listed_at: None,
         }
     }
 
@@ -675,6 +718,88 @@ mod tests {
         assert_eq!(changes[0].model, "model-a");
         let fallback = snapshot(vec![test_quote("model-a", 0.8, false)], "test");
         assert!(detect_price_changes(&changed, &fallback, &settings).is_empty());
+    }
+
+    #[test]
+    fn price_change_detection_requires_same_base_source_unless_live() {
+        let settings = Settings::default();
+        // Same base source: a catalog repricing is a real move.
+        let old = snapshot(vec![test_quote("model-a", 1.0, false)], "catalog+matrix");
+        let changed = snapshot(vec![test_quote("model-a", 0.9, false)], "catalog+matrix");
+        assert_eq!(detect_price_changes(&old, &changed, &settings).len(), 1);
+
+        // The fallback chain switched base feeds: the catalog prices of a
+        // degraded poll are not comparable, so nothing is reported.
+        let degraded = snapshot(vec![test_quote("model-a", 0.8, false)], "text fallback");
+        assert!(detect_price_changes(&changed, &degraded, &settings).is_empty());
+
+        // Live-market pairs come from the same marketplace overlay either
+        // way, so they stay comparable across a base-source switch.
+        let old_live = snapshot(vec![test_quote("model-a", 1.0, true)], "catalog+matrix");
+        let new_live = snapshot(vec![test_quote("model-a", 0.9, true)], "text fallback");
+        assert_eq!(
+            detect_price_changes(&old_live, &new_live, &settings).len(),
+            1
+        );
+    }
+
+    #[test]
+    fn any_change_alerts_respect_base_source_switches() {
+        let settings = Settings {
+            alerts: vec![move_alert(0.0, MoveDirection::Any)],
+            ..Settings::default()
+        };
+        let log = notification_log();
+        // Mute so a firing is recorded without toasting or sounding.
+        log.lock().unwrap().mute_for(chrono::Duration::hours(1));
+        let mut state = HashMap::new();
+        let by_model = |snapshot: &PriceSnapshot| {
+            snapshot
+                .quotes
+                .iter()
+                .cloned()
+                .map(|q| (q.model.clone(), q))
+                .collect::<HashMap<String, Quote>>()
+        };
+
+        // A catalog quote repriced across a base-feed switch: not a move.
+        let previous = snapshot(vec![test_quote("model-a", 1.0, false)], "catalog+matrix");
+        let switched = snapshot(vec![test_quote("model-a", 0.9, false)], "text fallback");
+        evaluate_alerts(
+            &switched,
+            &settings,
+            &mut state,
+            &by_model(&previous),
+            true,
+            &log,
+        );
+        assert!(log.lock().unwrap().records().next().is_none());
+
+        // The same move on a stable base feed: fires (recorded, muted).
+        let same_source = snapshot(vec![test_quote("model-a", 0.9, false)], "catalog+matrix");
+        evaluate_alerts(
+            &same_source,
+            &settings,
+            &mut state,
+            &by_model(&previous),
+            false,
+            &log,
+        );
+        assert_eq!(log.lock().unwrap().records().count(), 1);
+
+        // Live-market pairs share the marketplace overlay regardless of the
+        // base feed, so a switch does not suppress them.
+        let live_previous = snapshot(vec![test_quote("model-a", 1.0, true)], "catalog+matrix");
+        let live_switched = snapshot(vec![test_quote("model-a", 0.9, true)], "text fallback");
+        evaluate_alerts(
+            &live_switched,
+            &settings,
+            &mut state,
+            &by_model(&live_previous),
+            true,
+            &log,
+        );
+        assert_eq!(log.lock().unwrap().records().count(), 2);
     }
 
     #[test]

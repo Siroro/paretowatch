@@ -185,7 +185,7 @@ impl ParetoWatchApp {
                     ui.horizontal_wrapped(|ui| {
                         ui.label("Benchmark:");
                         egui::ComboBox::from_id_salt("alert_benchmark_source")
-                            .selected_text(self.benchmark_source.label())
+                            .selected_text(self.alert_benchmark_source.label())
                             .show_ui(ui, |ui| {
                                 for source in [
                                     BenchmarkSource::CompositeAgentic,
@@ -195,15 +195,15 @@ impl ParetoWatchApp {
                                 .chain(BenchmarkSource::display_sources())
                                 {
                                     ui.selectable_value(
-                                        &mut self.benchmark_source,
+                                        &mut self.alert_benchmark_source,
                                         source,
                                         source.label(),
                                     );
                                 }
                             });
-                        if self.benchmark_source == BenchmarkSource::LiveBench {
+                        if self.alert_benchmark_source == BenchmarkSource::LiveBench {
                             egui::ComboBox::from_id_salt("alert_benchmark_metric")
-                                .selected_text(self.benchmark_metric.label())
+                                .selected_text(self.alert_benchmark_metric.label())
                                 .show_ui(ui, |ui| {
                                     for metric in [
                                         BenchmarkMetric::Overall,
@@ -211,7 +211,7 @@ impl ParetoWatchApp {
                                         BenchmarkMetric::AgenticCoding,
                                     ] {
                                         ui.selectable_value(
-                                            &mut self.benchmark_metric,
+                                            &mut self.alert_benchmark_metric,
                                             metric,
                                             metric.label(),
                                         );
@@ -220,7 +220,7 @@ impl ParetoWatchApp {
                         }
                         ui.separator();
                         egui::ComboBox::from_id_salt("alert_comparison_mode")
-                            .selected_text(self.comparison_mode.label())
+                            .selected_text(self.alert_comparison_mode.label())
                             .show_ui(ui, |ui| {
                                 for mode in [
                                     ComparisonMode::ModelCapability,
@@ -228,20 +228,20 @@ impl ParetoWatchApp {
                                     ComparisonMode::CommonScaffold,
                                 ] {
                                     ui.selectable_value(
-                                        &mut self.comparison_mode,
+                                        &mut self.alert_comparison_mode,
                                         mode,
                                         mode.label(),
                                     );
                                 }
                             });
-                        if self.comparison_mode == ComparisonMode::CommonScaffold {
+                        if self.alert_comparison_mode == ComparisonMode::CommonScaffold {
                             egui::ComboBox::from_id_salt("alert_common_scaffold")
                                 .width(180.0)
-                                .selected_text(&self.common_scaffold)
+                                .selected_text(&self.alert_common_scaffold)
                                 .show_ui(ui, |ui| {
                                     for scaffold in &scaffold_options {
                                         ui.selectable_value(
-                                            &mut self.common_scaffold,
+                                            &mut self.alert_common_scaffold,
                                             scaffold.clone(),
                                             scaffold,
                                         );
@@ -250,7 +250,7 @@ impl ParetoWatchApp {
                         }
                         ui.separator();
                         egui::ComboBox::from_id_salt("alert_liquidity_filter")
-                            .selected_text(self.liquidity_filter.label())
+                            .selected_text(self.alert_liquidity_filter.label())
                             .show_ui(ui, |ui| {
                                 for filter in [
                                     LiquidityFilter::Any,
@@ -259,7 +259,7 @@ impl ParetoWatchApp {
                                     LiquidityFilter::Healthy10,
                                 ] {
                                     ui.selectable_value(
-                                        &mut self.liquidity_filter,
+                                        &mut self.alert_liquidity_filter,
                                         filter,
                                         filter.label(),
                                     );
@@ -544,11 +544,11 @@ impl ParetoWatchApp {
                 direction: self.alert_direction,
                 threshold: self.alert_threshold,
                 enabled,
-                benchmark_source: self.benchmark_source,
-                benchmark_metric: self.benchmark_metric,
-                comparison_mode: self.comparison_mode,
-                common_scaffold: self.common_scaffold.clone(),
-                liquidity_filter: self.liquidity_filter,
+                benchmark_source: self.alert_benchmark_source,
+                benchmark_metric: self.alert_benchmark_metric,
+                comparison_mode: self.alert_comparison_mode,
+                common_scaffold: self.alert_common_scaffold.clone(),
+                liquidity_filter: self.alert_liquidity_filter,
                 score_threshold: self.alert_score_threshold,
                 min_move_pct: self.alert_min_move_pct,
                 move_direction: self.alert_move_direction,
@@ -590,11 +590,13 @@ impl ParetoWatchApp {
         self.alert_cost_basis = alert.cost_basis;
         self.alert_direction = alert.direction;
         self.alert_threshold = alert.threshold;
-        self.benchmark_source = alert.benchmark_source;
-        self.benchmark_metric = alert.benchmark_metric;
-        self.comparison_mode = alert.comparison_mode;
-        self.common_scaffold = alert.common_scaffold.clone();
-        self.liquidity_filter = alert.liquidity_filter;
+        // Alert-form copies only: the Pareto chart's shared benchmark dials
+        // must keep showing whatever the chart itself is set to.
+        self.alert_benchmark_source = alert.benchmark_source;
+        self.alert_benchmark_metric = alert.benchmark_metric;
+        self.alert_comparison_mode = alert.comparison_mode;
+        self.alert_common_scaffold = alert.common_scaffold.clone();
+        self.alert_liquidity_filter = alert.liquidity_filter;
         self.alert_score_threshold = alert.score_threshold;
         self.alert_min_move_pct = alert.min_move_pct;
         self.alert_move_direction = alert.move_direction;

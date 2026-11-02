@@ -1,6 +1,6 @@
 //! One compact always-on-top window for pinned model prices.
 
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, PoisonError};
 use std::time::{Duration, Instant};
 
 use chrono::{DateTime, Utc};
@@ -269,7 +269,7 @@ impl PriceWidgetManager {
                 window.rows.len(),
                 settings.pinned_price_font_size,
             ));
-            let mut shared = window.shared.lock().expect("quote window state");
+            let mut shared = window.shared.lock().unwrap_or_else(PoisonError::into_inner);
             shared.rows.push(feed);
             shared.fetched_at = snapshot.map(|s| s.fetched_at);
         }
@@ -286,7 +286,7 @@ impl PriceWidgetManager {
         let Some(window) = &mut self.window else {
             return false;
         };
-        let mut shared = window.shared.lock().expect("quote window state");
+        let mut shared = window.shared.lock().unwrap_or_else(PoisonError::into_inner);
         let previous = shared.rows.clone();
         let mut rows = Vec::with_capacity(window.rows.len());
 
@@ -380,7 +380,7 @@ impl PriceWidgetManager {
             return;
         };
         let (close, remove, font_size) = {
-            let mut shared = window.shared.lock().expect("quote window state");
+            let mut shared = window.shared.lock().unwrap_or_else(PoisonError::into_inner);
             (
                 shared.close,
                 std::mem::take(&mut shared.remove),
@@ -453,7 +453,7 @@ fn spawn_position(ctx: &egui::Context, near: egui::Pos2, size: egui::Vec2) -> Op
 
 fn render(ui: &mut egui::Ui, class: ViewportClass, shared: &SharedHandle) {
     let (rows, fetched_at, scroll_cap, font_size) = {
-        let state = shared.lock().expect("quote window state");
+        let state = shared.lock().unwrap_or_else(PoisonError::into_inner);
         (
             state.rows.clone(),
             state.fetched_at,
@@ -514,7 +514,10 @@ fn render(ui: &mut egui::Ui, class: ViewportClass, shared: &SharedHandle) {
     // window whenever the setting changes.
     if !rows.is_empty() {
         let per_row = rows_height / rows.len() as f32;
-        shared.lock().expect("quote window state").scroll_cap = per_row * MAX_VISIBLE_ROWS as f32;
+        shared
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .scroll_cap = per_row * MAX_VISIBLE_ROWS as f32;
     }
     if class == ViewportClass::Deferred {
         let needed = egui::vec2(
@@ -539,7 +542,7 @@ fn render(ui: &mut egui::Ui, class: ViewportClass, shared: &SharedHandle) {
     }
 
     if let Some(model_id) = remove {
-        let mut state = shared.lock().expect("quote window state");
+        let mut state = shared.lock().unwrap_or_else(PoisonError::into_inner);
         state.rows.retain(|row| row.model_id != model_id);
         state.remove.push(model_id);
         if state.rows.is_empty() {
@@ -550,7 +553,7 @@ fn render(ui: &mut egui::Ui, class: ViewportClass, shared: &SharedHandle) {
         }
     }
     if close_all || os_close {
-        shared.lock().expect("quote window state").close = true;
+        shared.lock().unwrap_or_else(PoisonError::into_inner).close = true;
         if class == ViewportClass::Deferred {
             ui.ctx().send_viewport_cmd(ViewportCommand::Visible(false));
         }
@@ -562,7 +565,7 @@ fn render(ui: &mut egui::Ui, class: ViewportClass, shared: &SharedHandle) {
     // Re-forcing the raise once per repaint tick keeps the widget on top.
     let now = Instant::now();
     let reassert = {
-        let mut state = shared.lock().expect("quote window state");
+        let mut state = shared.lock().unwrap_or_else(PoisonError::into_inner);
         match state.last_raise {
             Some(at) if now.duration_since(at) < RAISE_INTERVAL => false,
             _ => {

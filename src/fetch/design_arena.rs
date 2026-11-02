@@ -3,7 +3,7 @@
 //! per model; ParetoWatch reads the public "all categories" board so the
 //! score summarizes overall design standing rather than one prompt type.
 
-use anyhow::Result;
+use anyhow::{Result, anyhow};
 use reqwest::blocking::Client;
 use serde_json::{Value, json};
 
@@ -28,7 +28,19 @@ pub(crate) fn fetch_design_arena(client: &Client) -> Result<Vec<Benchmark>> {
         &body,
         "Design Arena leaderboard",
     )?;
-    Ok(parse_design_arena_elo(&value))
+    require_usable_rows(parse_design_arena_elo(&value))
+}
+
+/// An unusable payload (no `data`, or every row battle-filtered) parses to an
+/// empty set; that must surface as an error rather than `Ok(vec![])`, which
+/// the cache would save in place of the previous board.
+fn require_usable_rows(rows: Vec<Benchmark>) -> Result<Vec<Benchmark>> {
+    if rows.is_empty() {
+        return Err(anyhow!(
+            "Design Arena leaderboard contained no usable model scores"
+        ));
+    }
+    Ok(rows)
 }
 
 pub(crate) fn parse_design_arena_elo(root: &Value) -> Vec<Benchmark> {
@@ -101,5 +113,24 @@ mod tests {
         // Arena slugs join Surplus quotes through the canonical-key matcher.
         let q = test_quote("kimi-k3", 1.0, true);
         assert!(best_benchmark_match(&q, &rows).is_some());
+    }
+
+    #[test]
+    fn fetch_path_errors_on_an_empty_parse() {
+        // fetch_design_arena funnels every parse through require_usable_rows:
+        // an unusable payload must surface as Err from the fetch path instead
+        // of Ok(vec![]), which would wipe the cached board.
+        let no_data = serde_json::json!({"success": true});
+        assert!(require_usable_rows(parse_design_arena_elo(&no_data)).is_err());
+        let all_filtered = serde_json::json!({"data": [
+            {"modelId": "brand-new-model", "elo": 1500, "battles": 2}
+        ]});
+        assert!(require_usable_rows(parse_design_arena_elo(&all_filtered)).is_err());
+        let usable = serde_json::json!({"data": [
+            {"modelId": "kimi-k3", "elo": 1404, "battles": 1927}
+        ]});
+        let rows = require_usable_rows(parse_design_arena_elo(&usable)).unwrap();
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].slug, "kimi-k3");
     }
 }

@@ -4,8 +4,9 @@
 
 use crate::bench::{best_benchmark_match, normalize};
 use crate::types::{
-    Benchmark, BenchmarkMetric, BenchmarkSource, ComparisonMode, CostBasis, LiquidityFilter,
-    ModalityFilter, PriceMetric, PricingSource, Quote, UncensoredFilter, is_free_pair,
+    AgeFilter, Benchmark, BenchmarkMetric, BenchmarkSource, ComparisonMode, CostBasis,
+    LiquidityFilter, ModalityFilter, PriceMetric, PricingSource, Quote, UncensoredFilter,
+    is_free_pair,
 };
 
 #[derive(Debug, Clone)]
@@ -26,6 +27,11 @@ pub(crate) struct JoinedPoint {
     pub(crate) free_offer_listed: bool,
     pub(crate) vision: bool,
     pub(crate) uncensored: bool,
+    /// Age provenance copied from the quote: the true release date when the
+    /// bundled table knows one, else the marketplace listing date. The
+    /// detail card colors and labels the age chip from these.
+    pub(crate) released_at: Option<i64>,
+    pub(crate) listed_at: Option<i64>,
 }
 
 /// Inputs that fully determine the derived Pareto view. egui redraws on every
@@ -45,6 +51,10 @@ pub(crate) struct ParetoCacheKey {
     /// Safety-tuning filter (e.g. uncensored-only), applied at the quote
     /// level like the modality filter.
     pub(crate) uncensored_filter: UncensoredFilter,
+    /// Age filter (release/listing recency), applied at the quote level like
+    /// the modality filter; models with no known date pass only the Any
+    /// option.
+    pub(crate) age_filter: AgeFilter,
     /// Pricing-source choice: live-market asks only, all sources, or every
     /// model priced at its published list rates. Changing it refilters and
     /// reprices the chart.
@@ -205,6 +215,8 @@ pub(crate) fn joined_points(
                     free_offer_listed: q.free_offer_listed,
                     vision: q.vision,
                     uncensored: q.uncensored,
+                    released_at: q.released_at,
+                    listed_at: q.listed_at,
                 });
             }
         }
@@ -304,6 +316,8 @@ mod tests {
             free_offer_listed: false,
             vision: true,
             uncensored: false,
+            released_at: None,
+            listed_at: None,
         };
         assert!(pareto_search_matches("opus", &p));
         assert!(pareto_search_matches("CLAUDE OPUS", &p));

@@ -1,10 +1,15 @@
 //! Settings tab: the actual settings, plus a compact feed-status block.
+//!
+//! Controls stage their edits into `settings_draft`; the Save button below
+//! is what applies them to the live settings (and persists/pushes them), so
+//! half-edited values can never leak into the chart or alert evaluation via
+//! an unrelated save.
 
 use eframe::egui;
 
 use crate::settings_store::config_path;
 use crate::theme::{STATUS_BAD, STATUS_OK};
-use crate::types::BenchmarkSource;
+use crate::types::{BenchmarkSource, HistoryWindow};
 use crate::widgets::{PINNED_FONT_MAX, PINNED_FONT_MIN};
 use crate::worker::WorkerCommand;
 
@@ -17,13 +22,13 @@ impl ParetoWatchApp {
             ui.label("Refresh every");
             if ui
                 .add(
-                    egui::DragValue::new(&mut self.settings.poll_seconds)
+                    egui::DragValue::new(&mut self.settings_draft.poll_seconds)
                         .speed(10)
                         .range(30..=3600),
                 )
                 .changed()
             {
-                self.settings_dirty = true;
+                self.draft_dirty = true;
             }
             ui.label("seconds");
         });
@@ -35,14 +40,36 @@ impl ParetoWatchApp {
             if ui
                 .add(
                     egui::Slider::new(
-                        &mut self.settings.pinned_price_font_size,
+                        &mut self.settings_draft.pinned_price_font_size,
                         PINNED_FONT_MIN..=PINNED_FONT_MAX,
                     )
                     .step_by(0.5),
                 )
                 .changed()
             {
-                self.settings_dirty = true;
+                self.draft_dirty = true;
+            }
+        });
+
+        ui.add_space(10.0);
+        ui.heading("Price history");
+        ui.horizontal(|ui| {
+            ui.label("Window").on_hover_text(
+                "How far back the model card's price-history sparkline and plot reach. \
+                 Recording is unaffected \u{2014} 'All' shows everything since first launch.",
+            );
+            let mut changed = false;
+            for option in HistoryWindow::ALL {
+                changed |= ui
+                    .selectable_value(
+                        &mut self.settings_draft.history_window,
+                        option,
+                        option.label(),
+                    )
+                    .changed();
+            }
+            if changed {
+                self.draft_dirty = true;
             }
         });
 
@@ -50,84 +77,84 @@ impl ParetoWatchApp {
         ui.heading("Blended price workload");
         ui.horizontal_wrapped(|ui| {
             if ui.button("Agentic 15/80/5").clicked() {
-                self.settings.input_weight = 15.0;
-                self.settings.cache_read_weight = 80.0;
-                self.settings.output_weight = 5.0;
-                self.settings_dirty = true;
+                self.settings_draft.input_weight = 15.0;
+                self.settings_draft.cache_read_weight = 80.0;
+                self.settings_draft.output_weight = 5.0;
+                self.draft_dirty = true;
             }
             if ui.button("No-cache 95/0/5").clicked() {
-                self.settings.input_weight = 95.0;
-                self.settings.cache_read_weight = 0.0;
-                self.settings.output_weight = 5.0;
-                self.settings_dirty = true;
+                self.settings_draft.input_weight = 95.0;
+                self.settings_draft.cache_read_weight = 0.0;
+                self.settings_draft.output_weight = 5.0;
+                self.draft_dirty = true;
             }
             if ui.button("Balanced 50/0/50").clicked() {
-                self.settings.input_weight = 50.0;
-                self.settings.cache_read_weight = 0.0;
-                self.settings.output_weight = 50.0;
-                self.settings_dirty = true;
+                self.settings_draft.input_weight = 50.0;
+                self.settings_draft.cache_read_weight = 0.0;
+                self.settings_draft.output_weight = 50.0;
+                self.draft_dirty = true;
             }
         });
         ui.horizontal(|ui| {
             ui.label("Fresh input");
             if ui
                 .add(
-                    egui::DragValue::new(&mut self.settings.input_weight)
+                    egui::DragValue::new(&mut self.settings_draft.input_weight)
                         .speed(0.1)
                         .range(0.0..=100.0),
                 )
                 .changed()
             {
-                self.settings_dirty = true;
+                self.draft_dirty = true;
             }
             ui.label("Cache read");
             if ui
                 .add(
-                    egui::DragValue::new(&mut self.settings.cache_read_weight)
+                    egui::DragValue::new(&mut self.settings_draft.cache_read_weight)
                         .speed(0.1)
                         .range(0.0..=100.0),
                 )
                 .changed()
             {
-                self.settings_dirty = true;
+                self.draft_dirty = true;
             }
             ui.label("Output");
             if ui
                 .add(
-                    egui::DragValue::new(&mut self.settings.output_weight)
+                    egui::DragValue::new(&mut self.settings_draft.output_weight)
                         .speed(0.1)
                         .range(0.0..=100.0),
                 )
                 .changed()
             {
-                self.settings_dirty = true;
+                self.draft_dirty = true;
             }
         });
-        let total = self.settings.input_weight.max(0.0)
-            + self.settings.cache_read_weight.max(0.0)
-            + self.settings.output_weight.max(0.0);
+        let total = self.settings_draft.input_weight.max(0.0)
+            + self.settings_draft.cache_read_weight.max(0.0)
+            + self.settings_draft.output_weight.max(0.0);
         if total > f64::EPSILON {
             ui.small(format!(
                 "Current mix: {:.0}% fresh input · {:.0}% cache read · {:.0}% output",
-                self.settings.input_weight.max(0.0) / total * 100.0,
-                self.settings.cache_read_weight.max(0.0) / total * 100.0,
-                self.settings.output_weight.max(0.0) / total * 100.0,
+                self.settings_draft.input_weight.max(0.0) / total * 100.0,
+                self.settings_draft.cache_read_weight.max(0.0) / total * 100.0,
+                self.settings_draft.output_weight.max(0.0) / total * 100.0,
             ));
         }
         if ui
             .checkbox(
-                &mut self.settings.include_cache_read_in_discount,
+                &mut self.settings_draft.include_cache_read_in_discount,
                 "Include cache read in discount (workload-weighted vs list prices)",
             )
             .changed()
         {
-            self.settings_dirty = true;
+            self.draft_dirty = true;
         }
         ui.horizontal(|ui| {
             ui.label("Assumed cache-read price (unpublished)");
             if ui
                 .add(
-                    egui::DragValue::new(&mut self.settings.cache_read_fallback_pct)
+                    egui::DragValue::new(&mut self.settings_draft.cache_read_fallback_pct)
                         .speed(1.0)
                         .range(0.0..=100.0)
                         .suffix("%"),
@@ -140,7 +167,7 @@ impl ParetoWatchApp {
                 )
                 .changed()
             {
-                self.settings_dirty = true;
+                self.draft_dirty = true;
             }
             ui.label("of input");
         });
@@ -154,36 +181,36 @@ impl ParetoWatchApp {
         ui.heading("Alert delivery");
         if ui
             .checkbox(
-                &mut self.settings.quiet_hours_enabled,
+                &mut self.settings_draft.quiet_hours_enabled,
                 "Suppress desktop notifications and audio during quiet hours",
             )
             .changed()
         {
-            self.settings_dirty = true;
+            self.draft_dirty = true;
         }
         ui.horizontal(|ui| {
-            ui.add_enabled_ui(self.settings.quiet_hours_enabled, |ui| {
+            ui.add_enabled_ui(self.settings_draft.quiet_hours_enabled, |ui| {
                 ui.label("Quiet from");
                 if ui
                     .add(
-                        egui::DragValue::new(&mut self.settings.quiet_hours_start)
+                        egui::DragValue::new(&mut self.settings_draft.quiet_hours_start)
                             .range(0..=23u8)
                             .suffix(":00"),
                     )
                     .changed()
                 {
-                    self.settings_dirty = true;
+                    self.draft_dirty = true;
                 }
                 ui.label("until");
                 if ui
                     .add(
-                        egui::DragValue::new(&mut self.settings.quiet_hours_end)
+                        egui::DragValue::new(&mut self.settings_draft.quiet_hours_end)
                             .range(0..=23u8)
                             .suffix(":00"),
                     )
                     .changed()
                 {
-                    self.settings_dirty = true;
+                    self.draft_dirty = true;
                 }
                 ui.label("local time");
             });
@@ -281,9 +308,13 @@ impl ParetoWatchApp {
 
         ui.add_space(10.0);
         if ui
-            .add_enabled(self.settings_dirty, egui::Button::new("Save settings"))
+            .add_enabled(self.draft_dirty, egui::Button::new("Save settings"))
             .clicked()
         {
+            // Stage-then-apply: every control above edits the draft only, so
+            // nothing reaches the chart, alert evaluation, or the worker
+            // until this click commits the whole draft.
+            self.settings = self.settings_draft.clone();
             self.save_and_push_settings();
             let _ = self.worker_tx.send(WorkerCommand::Refresh);
         }

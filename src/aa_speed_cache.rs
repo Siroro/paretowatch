@@ -19,7 +19,7 @@ const CACHE_VERSION: u32 = 1;
 #[derive(Serialize, Deserialize)]
 struct CacheFile {
     version: u32,
-    /// Wall-clock timestamp of the last successful save, for status display.
+    /// UTC timestamp of the last successful save, for status display.
     saved_at: String,
     snapshot: AaSpeedSnapshot,
 }
@@ -52,7 +52,7 @@ pub(crate) fn save_aa_speed_cache(snapshot: &AaSpeedSnapshot) {
     }
     let file = CacheFile {
         version: CACHE_VERSION,
-        saved_at: chrono::Local::now().format("%Y-%m-%d %H:%M").to_string(),
+        saved_at: chrono::Utc::now().format("%Y-%m-%d %H:%M").to_string(),
         snapshot: snapshot.clone(),
     };
     let Ok(bytes) = serde_json::to_vec(&file) else {
@@ -99,6 +99,15 @@ mod tests {
         let (loaded, saved_at) = load_aa_speed_cache().expect("cache loads after save");
         assert_eq!(loaded, snapshot);
         assert!(!saved_at.is_empty());
+        // The stamp is UTC (matching the sibling caches), so it must sit
+        // within a minute of the clock — a local-time stamp would drift by
+        // the timezone offset.
+        let stamped = chrono::NaiveDateTime::parse_from_str(&saved_at, "%Y-%m-%d %H:%M")
+            .expect("saved_at parses as %Y-%m-%d %H:%M");
+        let drift_minutes = (chrono::Utc::now().naive_utc() - stamped)
+            .num_minutes()
+            .abs();
+        assert!(drift_minutes <= 1, "saved_at is not UTC: {saved_at}");
         // A corrupt file is ignored rather than fatal.
         std::fs::write(&path, b"not json at all").unwrap();
         assert!(load_aa_speed_cache().is_none());

@@ -156,7 +156,12 @@ pub(crate) fn parse_terminal_bench_harbor(root: &Value) -> Result<Vec<Benchmark>
                 let total = uncached + cached + output;
                 (total > 0.0).then_some(total)
             });
-        let n_trials = row.get("n_trials").and_then(number_value);
+        // 4.0 publishes n_trials at the row top level and inside metrics;
+        // some rows only carry the metrics copy.
+        let n_trials = row
+            .get("n_trials")
+            .or_else(|| metrics.get("n_trials"))
+            .and_then(number_value);
         if let (Some(total_tokens), Some(n_trials)) = (total_tokens, n_trials)
             && total_tokens.is_finite()
             && total_tokens > 0.0
@@ -216,6 +221,18 @@ mod tests {
         // the tokens-per-task estimate uses it either way.
         let row = rows.first().unwrap();
         assert!((row.tokens_per_task.unwrap() - 6527147637f64 / 330.0).abs() < 1e-6);
+    }
+
+    #[test]
+    fn n_trials_falls_back_to_the_metrics_copy() {
+        // Rows that publish n_trials only inside metrics must still yield a
+        // tokens-per-task estimate.
+        let v = serde_json::json!({"rows": [
+            {"status":"display","metadata":{"model_display":{"label":"GPT-5.6 Sol"},"agent_display":{"label":"[CC]"}},"metrics":{"accuracy":50.0,"total_tokens":1_000_000,"n_trials":100}}
+        ]});
+        let rows = parse_terminal_bench_harbor(&v).unwrap();
+        assert_eq!(rows.len(), 1);
+        assert!((rows[0].tokens_per_task.unwrap() - 10_000.0).abs() < 1e-9);
     }
 
     #[test]
