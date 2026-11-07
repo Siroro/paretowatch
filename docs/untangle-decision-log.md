@@ -265,3 +265,36 @@ save→load→compare-all-fields test so a field missed in snapshot/apply fails 
 `cargo fmt`, `cargo check --locked`, `cargo clippy --all-targets -- -D warnings`,
 `cargo test --locked` (272 tests) must all pass at start and end; RELEASE_NOTES entry added;
 behavior parity argued per fix (file formats byte-identical, policies identical, error strings kept).
+
+## Outcome (2026-11-07, post-implementation)
+
+Implemented and verified (baseline 5a57588 → final in the "Untangle:" series,
+254 tests green, clippy `-D warnings` clean): F1–F12, H1, H2, H3, H4, H5, H6,
+H7, H12, H13 (cross-referenced), H15, H16, H17 (lockstep test), H18, H19,
+N1–N11, S1–S5, S7, SP1, SP3, SP8, SP9, SP10, SP12.
+
+### Accepted as-is (recorded so future sweeps do not relitigate)
+- H9 (three alert-seed menus seed different field subsets): the variation is
+  the point — each surface starts the form from a different context. The
+  shared risk (a new AlertMode field) is a form-defaults question, not a
+  join; not unified.
+- H14 (dagger/tooltip prose ~7×): the per-surface texts differ deliberately;
+  unifying would either over-parametrize a formatter or change hover copy.
+- H20/N14 (quantize/epsilon cross-module links): documented at the call sites;
+  the coupling is the contract.
+- N7 (deepswe → format_compact_number): token_profile is a display-provenance
+  string by design.
+- B6 (two price-move arrow conventions): ▲/▼ on the chart card vs ↓/↑/↔ in
+  the activity feed are per-context display choices sharing theme colors.
+- history/store.rs rewrite_current keeps its own binary-log rewrite policy
+  (archive-on-failure with scale-mixing guard) rather than atomic_write.
+- Sidecar archives (.old-/.bad-) accumulate by design (SP13).
+- types.rs stays one module (2080 lines, "shared data model"); scoring.rs's
+  3431 lines are 2/3 test module; app/mod.rs remains the app shell with its
+  cache keys — no further split at the stated bar.
+
+### Strict behavior deltas (both improvements, disclosed in RELEASE_NOTES)
+- AA_3D_URL was two constants with the live validation reading one and the
+  fetcher using the other (H1) — now one.
+- Terminal-Bench display slug + fetch slug unified (H19); settings saves now
+  archive-aside instead of remove-then-rename (SP1).

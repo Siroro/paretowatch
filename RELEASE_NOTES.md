@@ -1,3 +1,96 @@
+# Unreleased — internal refactor (no behavior change)
+
+A full-codebase untangle pass: every fix is structural, with intended behavior
+identical to 0.34.1 apart from the two strict improvements noted at the end.
+The problem list and per-fix rationale live in `docs/untangle-decision-log.md`.
+
+## Structure
+
+- **Leaf `model_id` module.** Name normalization, canonical model keys, creator
+  canonicalization/inference, and token-similarity math now live in one
+  dependency-free module. This dissolved the production cycle
+  `types <-> bench::matching` (types needed `normalize` for one lookup) and
+  pulled creator identification out of `theme`, which keeps only colors and
+  badges. Data-fetch modules no longer import a UI module for identity logic.
+- **Constructors and curated tables live with their concept.** `score_benchmark`
+  (the Benchmark row constructor every feed shares) moved from the fetch layer
+  into `types`, so the bundled snapshot module no longer depends on fetching;
+  `DISTINCT_BUILD_NON_JOINS` moved from the snapshot data module into
+  `bench::matching` (the matcher owns its guard table); the AA board naming
+  conventions (`NAMED_EFFORTS`, `alias_display_name`, `split_aa_display_name`,
+  `classify_aa_name`) moved to one `fetch::aa_names` module, deleting the
+  duplicated copies in `swebench_pro`/`frontiercode` — the SWE-Bench Scale alias
+  table folded into the shared one.
+- **Explicit import paths.** All `pub(crate) use ...::*` glob re-exports in
+  `bench` and `fetch` are gone; every name is imported from its owning module.
+- **The fetch god-module split.** `fetch/mod.rs` (534 lines: worker loop, HTTP,
+  parse utils, alert-state persistence, dispatch) is now a 59-line dispatch
+  module plus `fetch/http.rs` (capped-body GET/POST) and `fetch/parse.rs`
+  (shared text/JSON utils and the escaped-RSC `shortName` attribution the AA
+  board parsers share, with a single `ATTRIBUTION_WINDOW`). The poll loop moved
+  to `worker.rs` beside the message enums and takes a repaint closure, so the
+  orchestration layer no longer depends on egui.
+- **One persistence kit (`persist.rs`).** App config/data/cache file paths (8
+  copies of the ProjectDirs triplet), one atomic write with an
+  archive-aside-on-Windows policy (7 copies with 4 divergent failure policies —
+  settings saves previously did remove-then-rename), and the versioned JSON
+  cache load/save the three disk caches shared verbatim.
+- **`PricingWeights`.** The four pricing dials (input/cache-read/output weights
+  plus the assumed cache-read share) travel as one typed value instead of
+  positional f64 quartets through ~40 call sites across pricing, filtering,
+  alerts, history, and the UI.
+- **Choice tables with their enums.** `ModalityFilter`/`UncensoredFilter`/
+  `LiquidityFilter`/`ComparisonMode`/`PriceMetric`/`BenchmarkMetric` carry
+  `CHOICES` and the pickers render from them, replacing the two-to-three
+  hand-listed copies per enum across the Pareto, Models, and Alerts tabs;
+  workload presets are one `WORKLOAD_PRESETS` table (the 15/80/5 reset
+  fallback included), and the "current mix" label is one `Settings` method.
+- **Single copies in the app layer.** The source-by-source consensus grid is
+  one shared widget; pinned-price widgets spawn through one `AppState` path
+  (the liquidity-filter coupling is now written where it happens);
+  `BenchmarkMetric::for_source` replaces the three copies of the LiveBench
+  metric rule; `PriceMoveRecord` converts from `PriceChangeEvent` via `From`
+  instead of a ten-field hand copy; `ListingChange` carries the model id, so
+  delistings dedup by id rather than display name.
+- **Cache hygiene.** Frontier-hidden toggles bump a dedicated
+  `frontier_version` that only the caches which actually read it include, so
+  toggling a legend chip no longer discards the scaffold/AA-speed memo caches;
+  a new round-trip test names every persisted UI-state field explicitly, so a
+  field added to the struct must be carried through all six sync points.
+
+## Removed
+
+- `aa_v5_coverage_survey` (270 lines of self-described temporary tooling for
+  the 2026-10-28 investigation) and `live_composite_tuning_view` (a
+  println-only live tuning dump) — both `#[ignore]`d exploratory tests.
+- `NotificationKind::Test` — never produced by anything, so the activity
+  filter offered a kind that could never match.
+- Comments that only restated the code, and three by-construction-true test
+  assertions; the quiet-hours midnight-wrap test now drives the real hour
+  predicate (previously it asserted `22 > 7` on copied fields and could not
+  fail on a wrap bug).
+
+## Strict improvements
+
+- The AA-3D board URL existed in `types` and `aa_evals`, and the live
+  validation suite read one while the fetcher used the other — they could
+  silently diverge so validation validated the wrong page. One constant now.
+- The Terminal-Bench display URL's `leaderboard=4-0-0` slug and the fetcher's
+  POST body slug were separate literals; both now share
+  `types::TERMINAL_BENCH_4_LEADERBOARD`, and a lockstep test pins
+  `remote_sources()` against `consensus_sources()` so a board added to one
+  but not the other fails for review.
+
+## Validation
+
+Formatting, locked check, locked Clippy with warnings denied
+(`--all-targets`), and locked test all pass (254 tests — net +1 from the
+rewrite, minus the two deleted exploratory tools). The live validation suite
+is unchanged and untouched. Deliberate label changes: the alert form's
+market-quality dropdown now shows the chart's short labels ("3+ healthy")
+instead of the longer prose labels; error paths that used to delete a config
+file before renaming now archive it aside first.
+
 # ParetoWatch v0.34.1
 
 ## Fixed
