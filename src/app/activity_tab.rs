@@ -7,7 +7,6 @@ use std::collections::HashMap;
 
 use crate::bench::benchmarks_for_source;
 use crate::bench::matching::best_benchmark_match;
-use crate::bench::scoring::format_percentile;
 use crate::format::{format_compact_number, format_compact_usd, format_price_tick};
 use crate::history::track::{blended_series, historical_low, step_points};
 use crate::history::ui::{HistoryMetric, HistoryRange};
@@ -647,24 +646,11 @@ impl ParetoWatchApp {
                 .max_height(200.0)
                 .auto_shrink([false, false])
                 .show(ui, |ui| {
-                    egui::Grid::new("listing_consensus_grid")
-                        .striped(true)
-                        .show(ui, |ui| {
-                            ui.strong("Benchmark");
-                            ui.strong("Percentile");
-                            ui.strong("Rank");
-                            ui.strong("Score");
-                            ui.strong("Matched row");
-                            ui.end_row();
-                            for entry in &consensus.entries {
-                                ui.label(entry.source.short_label());
-                                ui.label(format_percentile(entry.percentile));
-                                ui.label(format!("#{}/{}", entry.rank, entry.total));
-                                ui.label(format!("{:.1}", entry.score));
-                                ui.label(&entry.benchmark_name);
-                                ui.end_row();
-                            }
-                        });
+                    crate::widgets::consensus_grid(
+                        ui,
+                        "listing_consensus_grid",
+                        &consensus.entries,
+                    );
                 });
         } else {
             ui.add_space(6.0);

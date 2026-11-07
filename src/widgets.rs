@@ -21,6 +21,32 @@ fn effective_quote(
     liquidity.apply(quote, settings.pricing_weights())
 }
 
+/// The source-by-source benchmark consensus table: one row per board with
+/// its anchored percentile, rank, raw score, and the exact row the model
+/// matched. Shared by the Pareto detail card and the New listings cards.
+pub(crate) fn consensus_grid(
+    ui: &mut egui::Ui,
+    id_salt: &str,
+    entries: &[crate::bench::scoring::ConsensusEntry],
+) {
+    egui::Grid::new(id_salt).striped(true).show(ui, |ui| {
+        ui.strong("Benchmark");
+        ui.strong("Percentile");
+        ui.strong("Rank");
+        ui.strong("Score");
+        ui.strong("Matched row");
+        ui.end_row();
+        for entry in entries {
+            ui.label(entry.source.short_label());
+            ui.label(crate::bench::scoring::format_percentile(entry.percentile));
+            ui.label(format!("#{}/{}", entry.rank, entry.total));
+            ui.label(format!("{:.1}", entry.score));
+            ui.label(&entry.benchmark_name);
+            ui.end_row();
+        }
+    });
+}
+
 /// Base pinned-price text size the layout constants were measured at. The
 /// user-facing setting scales every text size (and the window width) from
 /// here; 10.0 reproduces the original hard-coded look.
