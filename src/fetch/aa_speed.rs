@@ -115,7 +115,7 @@ fn string_for_anchor(
 /// (Claude Opus 5.5 measures 9 s at low effort and 706 s at max on the same
 /// board), so the calmest variant is the cleaner generation-speed read:
 /// bare entry first, then efforts low→max, explicit non-reasoning last.
-fn speed_variant_rank(effort: Option<&str>, non_reasoning: bool) -> usize {
+pub(crate) fn speed_variant_rank(effort: Option<&str>, non_reasoning: bool) -> usize {
     if non_reasoning {
         return 0;
     }

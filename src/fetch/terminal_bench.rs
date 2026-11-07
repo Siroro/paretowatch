@@ -181,7 +181,7 @@ pub(crate) fn leaderboard_display_label(value: &Value) -> Option<String> {
         .map(str::to_owned)
 }
 
-pub(crate) fn strip_provider_prefix(model: &str) -> String {
+fn strip_provider_prefix(model: &str) -> String {
     model
         .rsplit_once('/')
         .map(|(_, tail)| tail)

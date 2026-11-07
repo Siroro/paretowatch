@@ -778,7 +778,6 @@ fn age_string(secs: f64) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::history::track::carry_forward;
 
     #[test]
     fn window_keeps_pre_window_anchor() {
@@ -853,14 +852,6 @@ mod tests {
             !month.contains(':'),
             "month-level labels for long spans: {month}"
         );
-    }
-
-    #[test]
-    fn carry_forward_matches_lookup() {
-        let pts = vec![(0.0, 1.0), (10.0, 2.0)];
-        assert_eq!(carry_forward(&pts, 5.0), Some(1.0));
-        assert_eq!(carry_forward(&pts, 10.0), Some(2.0));
-        assert_eq!(carry_forward(&pts, -1.0), None);
     }
 
     #[test]

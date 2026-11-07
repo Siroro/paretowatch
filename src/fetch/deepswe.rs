@@ -12,7 +12,7 @@ use crate::format::format_compact_number;
 use crate::model_id::{model_core, normalize};
 use crate::types::{Benchmark, BenchmarkKind, score_benchmark};
 
-pub(crate) const DEEPSWE_LEADERBOARD_URL: &str =
+const DEEPSWE_LEADERBOARD_URL: &str =
     "https://deepswe.datacurve.ai/artifacts/v1.1/leaderboard-live.json";
 
 pub(crate) fn fetch_deepswe(client: &Client) -> Result<Vec<Benchmark>> {
@@ -129,7 +129,7 @@ fn raw_score(row: &Value) -> Option<f64> {
         .or_else(|| row.get("pass_rate").and_then(number_value))
 }
 
-pub(crate) fn reasoning_effort_rank(effort: &str) -> i32 {
+fn reasoning_effort_rank(effort: &str) -> i32 {
     match normalize(effort).as_str() {
         "max" => 60,
         "xhigh" | "extra high" => 50,

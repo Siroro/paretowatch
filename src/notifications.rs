@@ -29,18 +29,16 @@ pub(crate) enum NotificationKind {
     Listing,
     #[default]
     Other,
-    Test,
 }
 
 impl NotificationKind {
-    pub(crate) const ALL: [Self; 7] = [
+    pub(crate) const ALL: [Self; 6] = [
         Self::Price,
         Self::Discount,
         Self::SellerHealth,
         Self::Frontier,
         Self::Listing,
         Self::Other,
-        Self::Test,
     ];
 
     pub(crate) fn label(self) -> &'static str {
@@ -51,7 +49,6 @@ impl NotificationKind {
             Self::Frontier => "Frontier / benchmark",
             Self::Listing => "Listings",
             Self::Other => "Other",
-            Self::Test => "Tests",
         }
     }
 }

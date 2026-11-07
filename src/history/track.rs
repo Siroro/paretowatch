@@ -335,7 +335,7 @@ pub(crate) fn blended_series(series: &ModelSeries, weights: PricingWeights) -> V
 }
 
 /// Last value at or before `ts` (series are chronological change points).
-pub(crate) fn carry_forward(series: &[(f64, f64)], ts: f64) -> Option<f64> {
+fn carry_forward(series: &[(f64, f64)], ts: f64) -> Option<f64> {
     match series.partition_point(|(t, _)| *t <= ts) {
         0 => None,
         i => Some(series[i - 1].1),
@@ -422,6 +422,14 @@ pub(crate) fn step_points(series: &[(f64, f64)], until: f64) -> Vec<[f64; 2]> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn carry_forward_matches_lookup() {
+        let pts = vec![(0.0, 1.0), (10.0, 2.0)];
+        assert_eq!(carry_forward(&pts, 5.0), Some(1.0));
+        assert_eq!(carry_forward(&pts, 10.0), Some(2.0));
+        assert_eq!(carry_forward(&pts, -1.0), None);
+    }
     use std::fs;
 
     #[test]

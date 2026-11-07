@@ -205,7 +205,7 @@ pub(crate) fn livebench_category_average(
     mean(&scores)
 }
 
-pub(crate) fn mean(values: &[f64]) -> Option<f64> {
+fn mean(values: &[f64]) -> Option<f64> {
     if values.is_empty() {
         None
     } else {
