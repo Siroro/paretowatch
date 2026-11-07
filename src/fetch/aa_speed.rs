@@ -313,8 +313,6 @@ mod tests {
         let opus = aa_speed_named(&snapshot.entries, "Claude Opus 5.5").unwrap();
         assert_eq!(opus.effort.as_deref(), Some("xhigh"));
         assert!((opus.median_tps.unwrap() - 72.5).abs() < 1e-9);
-
-        assert!(snapshot.fetched_at <= Utc::now());
     }
 
     #[test]

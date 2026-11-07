@@ -126,6 +126,19 @@ pub(crate) struct NotificationLog {
     path: PathBuf,
 }
 
+/// Whether local hour `hour` falls in the quiet-hours window. A start
+/// greater than the end wraps midnight (22..07 = quiet overnight).
+fn quiet_at(enabled: bool, start: u8, end: u8, hour: u8) -> bool {
+    if !enabled || start == end {
+        return false;
+    }
+    if start < end {
+        hour >= start && hour < end
+    } else {
+        hour >= start || hour < end
+    }
+}
+
 impl NotificationLog {
     pub(crate) fn open(settings: &Settings) -> Self {
         Self::open_at(notification_log_path(), settings)
@@ -232,15 +245,12 @@ impl NotificationLog {
     }
 
     fn quiet_now(&self) -> bool {
-        if !self.quiet_hours_enabled || self.quiet_hours_start == self.quiet_hours_end {
-            return false;
-        }
-        let hour = Local::now().hour() as u8;
-        if self.quiet_hours_start < self.quiet_hours_end {
-            hour >= self.quiet_hours_start && hour < self.quiet_hours_end
-        } else {
-            hour >= self.quiet_hours_start || hour < self.quiet_hours_end
-        }
+        quiet_at(
+            self.quiet_hours_enabled,
+            self.quiet_hours_start,
+            self.quiet_hours_end,
+            Local::now().hour() as u8,
+        )
     }
 
     fn record(
@@ -505,15 +515,27 @@ mod tests {
 
     #[test]
     fn overnight_quiet_hours_wrap_midnight() {
-        let settings = Settings {
-            quiet_hours_enabled: true,
-            quiet_hours_start: 22,
-            quiet_hours_end: 7,
-            ..Settings::default()
-        };
-        let log =
-            NotificationLog::open_at(std::path::Path::new("unused-test.json").into(), &settings);
-        assert!(log.quiet_hours_start > log.quiet_hours_end);
+        // 22..07 wraps midnight: quiet late at night and early morning,
+        // awake all day. The non-wrap window and the disabled/equal cases
+        // must stay quiet-hour-free at the same hours.
+        for hour in [22u8, 23, 0, 3, 6] {
+            assert!(quiet_at(true, 22, 7, hour), "hour {hour}");
+        }
+        for hour in [7u8, 12, 21] {
+            assert!(!quiet_at(true, 22, 7, hour), "hour {hour}");
+        }
+        for hour in [7u8, 12, 21] {
+            assert!(!quiet_at(false, 22, 7, hour), "hour {hour}");
+            assert!(!quiet_at(true, 7, 7, hour), "hour {hour}");
+        }
+        // A non-wrap window covers exactly its hours: 9..17 is quiet from
+        // 9:00 through 16:59 and never outside.
+        for hour in [9u8, 12, 16] {
+            assert!(quiet_at(true, 9, 17, hour), "hour {hour}");
+        }
+        for hour in [0u8, 8, 17, 23] {
+            assert!(!quiet_at(true, 9, 17, hour), "hour {hour}");
+        }
     }
 
     #[test]

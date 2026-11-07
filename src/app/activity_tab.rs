@@ -559,7 +559,6 @@ impl ParetoWatchApp {
             });
         let consensus = self.cached_consensus(&row.quote);
 
-        // --- Blended price since listing ---------------------------------
         ui.horizontal(|ui| {
             ui.strong("Blended price since listing");
             if let Some((low, low_ts)) = low {
@@ -602,7 +601,6 @@ impl ParetoWatchApp {
             }
         }
 
-        // --- Daily telemetry ---------------------------------------------
         if let Some((volume, requests)) = telemetry {
             ui.add_space(6.0);
             let volume_steps = step_points(&volume, now_ts);
@@ -634,7 +632,6 @@ impl ParetoWatchApp {
             });
         }
 
-        // --- Benchmarks ----------------------------------------------------
         if let Some(consensus) = &consensus {
             ui.add_space(6.0);
             ui.strong(format!(
@@ -663,7 +660,6 @@ impl ParetoWatchApp {
             );
         }
 
-        // --- Market --------------------------------------------------------
         ui.add_space(4.0);
         ui.horizontal(|ui| {
             if row.benchmark_sources > 0
@@ -949,7 +945,6 @@ mod tests {
         assert!(y0 < 0.35 && y1 > 0.35 && (y1 - y0) >= 0.14);
         // A meaningful span keeps proportionate padding.
         let (_, _, y0, y1) = padded_plot_bounds(&[[0.0, 1.0], [10.0, 20.0]]).expect("bounds");
-        assert!((y1 - y1) < (y1 - y0)); // non-degenerate
         assert!(y0 < 1.0 && y1 > 20.0);
         assert!(padded_plot_bounds(&[]).is_none());
     }

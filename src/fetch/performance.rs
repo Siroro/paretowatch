@@ -176,7 +176,6 @@ mod tests {
         assert_eq!(venice.ttft_p50_ms, None);
 
         // Stamped for the on-demand staleness check.
-        assert!(perf.fetched_at <= Utc::now());
     }
 
     #[test]

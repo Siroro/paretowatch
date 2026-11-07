@@ -189,8 +189,9 @@ mod tests {
         assert_eq!(creator_color("Anthropic"), creator_color("anthropic"));
         assert_ne!(creator_color("Anthropic"), creator_color("OpenAI"));
         assert_ne!(creator_color("Anthropic"), creator_color(""));
-        // Unknown creators hash deterministically.
-        assert_eq!(creator_color("Some New Lab"), creator_color("Some New Lab"));
+        // Unknown creators hash deterministically (distinguishable from the
+        // empty group's fixed gray).
+        assert_eq!(creator_color("Some New Lab"), creator_color("some new lab"));
     }
 
     #[test]

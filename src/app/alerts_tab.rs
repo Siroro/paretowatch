@@ -334,8 +334,6 @@ impl ParetoWatchApp {
             });
 
             ui.add_space(10.0);
-            // Copy these before mutably iterating `settings.alerts`; this keeps the
-            // UI borrow simple and makes the alert row rendering compiler-friendly.
             let weights = self.settings.pricing_weights();
             egui::Grid::new("alerts_grid").striped(true).show(ui, |ui| {
                 ui.strong("On");
