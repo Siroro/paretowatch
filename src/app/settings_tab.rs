@@ -9,7 +9,7 @@ use eframe::egui;
 
 use crate::settings_store::config_path;
 use crate::theme::{STATUS_BAD, STATUS_OK};
-use crate::types::{BenchmarkSource, HistoryWindow};
+use crate::types::{BenchmarkSource, HistoryWindow, WORKLOAD_PRESETS};
 use crate::widgets::{PINNED_FONT_MAX, PINNED_FONT_MIN};
 use crate::worker::WorkerCommand;
 
@@ -76,23 +76,13 @@ impl ParetoWatchApp {
         ui.add_space(10.0);
         ui.heading("Blended price workload");
         ui.horizontal_wrapped(|ui| {
-            if ui.button("Agentic 15/80/5").clicked() {
-                self.settings_draft.input_weight = 15.0;
-                self.settings_draft.cache_read_weight = 80.0;
-                self.settings_draft.output_weight = 5.0;
-                self.draft_dirty = true;
-            }
-            if ui.button("No-cache 95/0/5").clicked() {
-                self.settings_draft.input_weight = 95.0;
-                self.settings_draft.cache_read_weight = 0.0;
-                self.settings_draft.output_weight = 5.0;
-                self.draft_dirty = true;
-            }
-            if ui.button("Balanced 50/0/50").clicked() {
-                self.settings_draft.input_weight = 50.0;
-                self.settings_draft.cache_read_weight = 0.0;
-                self.settings_draft.output_weight = 50.0;
-                self.draft_dirty = true;
+            for (label, (input, cache_read, output)) in WORKLOAD_PRESETS {
+                if ui.button(*label).clicked() {
+                    self.settings_draft.input_weight = *input;
+                    self.settings_draft.cache_read_weight = *cache_read;
+                    self.settings_draft.output_weight = *output;
+                    self.draft_dirty = true;
+                }
             }
         });
         ui.horizontal(|ui| {
@@ -130,16 +120,8 @@ impl ParetoWatchApp {
                 self.draft_dirty = true;
             }
         });
-        let total = self.settings_draft.input_weight.max(0.0)
-            + self.settings_draft.cache_read_weight.max(0.0)
-            + self.settings_draft.output_weight.max(0.0);
-        if total > f64::EPSILON {
-            ui.small(format!(
-                "Current mix: {:.0}% fresh input · {:.0}% cache read · {:.0}% output",
-                self.settings_draft.input_weight.max(0.0) / total * 100.0,
-                self.settings_draft.cache_read_weight.max(0.0) / total * 100.0,
-                self.settings_draft.output_weight.max(0.0) / total * 100.0,
-            ));
+        if let Some(mix) = self.settings_draft.workload_mix_label() {
+            ui.small(mix);
         }
         if ui
             .checkbox(

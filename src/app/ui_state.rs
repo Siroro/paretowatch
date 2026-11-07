@@ -263,17 +263,42 @@ mod tests {
     // One test, sequentially: every half shares the real ui_state.json path,
     // and separate #[test]s would race on that file under the parallel runner.
     fn ui_state_round_trips_and_tolerates_bad_files() {
+        // Every field is named explicitly and set to a NON-default value,
+        // so a field added to the struct fails to compile here until it is
+        // also carried through Default, snapshot_ui_state, apply_ui_state,
+        // and the app constructor — the six-way sync this file owns.
         let state = UiState {
             version: UI_STATE_VERSION,
             tab: Tab::Models,
+            activity_tab: ActivityTab::NewListings,
+            activity_kind_filter: Some(NotificationKind::Frontier),
+            new_listings_window: NewListingsWindow::Day30,
+            price_metric: PriceMetric::Input,
+            cost_basis: CostBasis::EstimatedPerTask,
             benchmark_source: BenchmarkSource::TerminalBench4,
+            benchmark_metric: BenchmarkMetric::Coding,
+            comparison_mode: ComparisonMode::CommonScaffold,
+            common_scaffold: "claude code".into(),
+            liquidity_filter: LiquidityFilter::Trusted,
+            modality_filter: ModalityFilter::Vision,
+            uncensored_filter: UncensoredFilter::Uncensored,
+            age_filter: AgeFilter::Month1,
+            hide_catalog_prices: false,
+            pricing_source: PricingSource::Catalog,
             log_price_axis: false,
             hidden_groups: vec!["xAI".into()],
             selected_pareto_model: Some("claude-opus-5.5".into()),
+            models_creator: Some("OpenAI".into()),
+            models_source: ModelsSource::LiveMarket,
+            models_modality: ModalityFilter::TextOnly,
+            models_uncensored: UncensoredFilter::SafetyTuned,
+            models_cache: ModelsCacheFilter::Priced,
+            models_speed: SpeedFilter::T50,
             models_sort: ModelsSort::Blended,
             models_sort_desc: true,
+            calc_model: Some("glm-5.3".into()),
+            calc_provider: Some("zai".into()),
             pinned_models: vec!["gpt-6-sol".into(), "muse-wonder".into()],
-            ..UiState::default()
         };
         let path = ui_state_path();
         save_ui_state(&state);

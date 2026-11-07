@@ -33,9 +33,7 @@ use crate::fetch::performance::{
 };
 use crate::history;
 use crate::history::track::blended_series;
-use crate::notifications::{
-    NotificationKind, NotificationLog, PriceMoveRecord, SharedNotifications, notify_alert,
-};
+use crate::notifications::{NotificationKind, NotificationLog, SharedNotifications, notify_alert};
 use crate::pareto::{
     ParetoCache, ParetoCacheKey, filter_frontier_hidden, filter_hidden_groups, joined_points,
     pareto_frontier, pricing_source_allows,
@@ -50,7 +48,7 @@ use crate::types::{
     AlertRule, AlertSound, Benchmark, BenchmarkMetric, BenchmarkSource, ComparisonMode, CostBasis,
     LiquidityFilter, ModalityFilter, MoveDirection, PerformanceSnapshot, PriceMetric,
     PriceSnapshot, PricingSource, PricingWeights, Quote, Settings, UncensoredFilter,
-    default_common_scaffold,
+    WORKLOAD_PRESETS, default_common_scaffold,
 };
 use crate::widgets;
 use crate::worker::start_worker;
@@ -278,11 +276,16 @@ pub(crate) struct ParetoWatchApp {
     /// appends here so the Alerts tab can replay what was fired.
     notifications: SharedNotifications,
     data_version: u64,
+    /// Bumped when the frontier-hidden set changes — an input only the
+    /// pareto cache (whose key already names the hidden models) and the
+    /// alert-status cache care about, so it must not invalidate the
+    /// data-derived memo caches too.
+    frontier_version: u64,
     scaffold_cache: Option<(u64, Vec<String>)>,
     pareto_cache: Option<Arc<ParetoCache>>,
-    /// Status text per alert id for the Alerts tab, keyed to the data version,
-    /// workload weights, and assumed cache-read share it was computed at.
-    alert_status_cache: HashMap<u64, (u64, PricingWeights, String)>,
+    /// Status text per alert id for the Alerts tab, keyed to the data and
+    /// frontier versions plus the workload weights it was computed at.
+    alert_status_cache: HashMap<u64, (u64, u64, PricingWeights, String)>,
     consensus_cache: Option<(
         u64,
         ComparisonMode,
@@ -324,13 +327,12 @@ fn collapse_consecutive_toggles(commands: Vec<UiCommand>) -> Vec<UiCommand> {
 }
 
 /// Merge one poll's delistings into the batch awaiting the post-drain
-/// listing-alert evaluation, deduped by display name (the feed's canonical
-/// model label; `ListingChange` carries no id).
+/// listing-alert evaluation, deduped by model id.
 fn merge_delisted(delisted: &mut Vec<ListingChange>, changes: Vec<ListingChange>) {
     for change in changes {
         if !delisted
             .iter()
-            .any(|existing| existing.display_name == change.display_name)
+            .any(|existing| existing.model_id == change.model_id)
         {
             delisted.push(change);
         }
@@ -537,6 +539,7 @@ impl ParetoWatchApp {
             semantic_leader_state: HashMap::new(),
             notifications,
             data_version: 0,
+            frontier_version: 0,
             scaffold_cache: None,
             pareto_cache: None,
             alert_status_cache: HashMap::new(),
@@ -690,20 +693,11 @@ impl ParetoWatchApp {
                         if let Ok(mut log) = self.notifications.lock() {
                             // One persist for the whole poll: per-record pushes
                             // re-serialize the entire log for every price move.
-                            log.push_price_moves(changes.into_iter().map(|change| {
-                                PriceMoveRecord {
-                                    model: change.model,
-                                    display_name: change.display_name,
-                                    at: change.at,
-                                    old_blended: change.old_blended,
-                                    new_blended: change.new_blended,
-                                    old_input: change.old_input,
-                                    new_input: change.new_input,
-                                    old_output: change.old_output,
-                                    new_output: change.new_output,
-                                    source: change.source.to_owned(),
-                                }
-                            }));
+                            log.push_price_moves(
+                                changes
+                                    .iter()
+                                    .map(crate::notifications::PriceMoveRecord::from),
+                            );
                         }
                         // Delistings accumulate across coalesced polls: this
                         // message only diffs against its own predecessor, so
@@ -1072,11 +1066,10 @@ impl ParetoWatchApp {
             price_metric: self.price_metric,
             cost_basis: self.cost_basis,
             benchmark_source: self.benchmark_source,
-            benchmark_metric: if self.benchmark_source == BenchmarkSource::LiveBench {
-                self.benchmark_metric
-            } else {
-                BenchmarkMetric::AgenticCoding
-            },
+            benchmark_metric: BenchmarkMetric::for_source(
+                self.benchmark_source,
+                self.benchmark_metric,
+            ),
             comparison_mode: self.comparison_mode,
             common_scaffold: self.common_scaffold.clone(),
             liquidity_filter: self.liquidity_filter,
@@ -1202,7 +1195,7 @@ impl ParetoWatchApp {
     /// change; threshold/discount/seller rows are a cheap quote lookup and
     /// are formatted fresh each call.
     fn cached_alert_statuses(&mut self) -> Vec<String> {
-        let data_version = self.data_version;
+        let (data_version, frontier_version) = (self.data_version, self.frontier_version);
         let weights = self.settings.pricing_weights();
         let quotes: &[Quote] = self
             .price_snapshot
@@ -1216,10 +1209,12 @@ impl ParetoWatchApp {
                 let cached = self
                     .alert_status_cache
                     .get(&alert.id)
-                    .filter(|(version, cached_weights, _)| {
-                        *version == data_version && *cached_weights == weights
+                    .filter(|(version, fversion, cached_weights, _)| {
+                        *version == data_version
+                            && *fversion == frontier_version
+                            && *cached_weights == weights
                     })
-                    .map(|(_, _, text)| text.clone());
+                    .map(|(_, _, _, text)| text.clone());
                 match cached {
                     Some(text) => text,
                     None => {
@@ -1233,8 +1228,10 @@ impl ParetoWatchApp {
                                 &self.settings,
                             )
                         };
-                        self.alert_status_cache
-                            .insert(alert.id, (data_version, weights, text.clone()));
+                        self.alert_status_cache.insert(
+                            alert.id,
+                            (data_version, frontier_version, weights, text.clone()),
+                        );
                         text
                     }
                 }
@@ -1316,11 +1313,8 @@ impl ParetoWatchApp {
             if benchmarks.is_empty() {
                 continue;
             }
-            let benchmark_metric = if alert.benchmark_source == BenchmarkSource::LiveBench {
-                alert.benchmark_metric
-            } else {
-                BenchmarkMetric::AgenticCoding
-            };
+            let benchmark_metric =
+                BenchmarkMetric::for_source(alert.benchmark_source, alert.benchmark_metric);
             let quotes = snapshot
                 .quotes
                 .iter()
@@ -1636,7 +1630,7 @@ impl ParetoWatchApp {
         }
         // Frontier shape changed: rebuild every derived view (pareto cache,
         // alert-status texts) instead of waiting for new data.
-        self.data_version += 1;
+        self.frontier_version += 1;
         self.save_and_push_settings();
     }
 
@@ -1646,7 +1640,7 @@ impl ParetoWatchApp {
             return;
         }
         self.settings.hidden_frontier_models.clear();
-        self.data_version += 1;
+        self.frontier_version += 1;
         self.save_and_push_settings();
     }
 
@@ -1687,9 +1681,10 @@ impl ParetoWatchApp {
             + self.settings.output_weight.max(0.0)
             <= f64::EPSILON
         {
-            self.settings.input_weight = 15.0;
-            self.settings.cache_read_weight = 80.0;
-            self.settings.output_weight = 5.0;
+            let (_, (input, cache_read, output)) = WORKLOAD_PRESETS[0];
+            self.settings.input_weight = input;
+            self.settings.cache_read_weight = cache_read;
+            self.settings.output_weight = output;
         }
         if let Err(err) = save_settings(&self.settings) {
             self.status = format!("Could not save settings: {err}");
@@ -1944,20 +1939,27 @@ mod tests {
 
     #[test]
     fn delistings_accumulate_across_coalesced_polls_without_duplicates() {
-        let change = |name: &str, blend: f64| ListingChange {
+        let change = |id: &str, name: &str, blend: f64| ListingChange {
+            model_id: id.to_owned(),
             display_name: name.to_owned(),
             last_blended: blend,
         };
         let mut delisted = Vec::new();
         merge_delisted(
             &mut delisted,
-            vec![change("Model A", 1.0), change("Model B", 2.0)],
+            vec![
+                change("model-a", "Model A", 1.0),
+                change("model-b", "Model B", 2.0),
+            ],
         );
         // A queued second poll still sees A gone and adds C: the batch must
         // grow, not reset, and A must not appear twice.
         merge_delisted(
             &mut delisted,
-            vec![change("Model A", 1.0), change("Model C", 3.0)],
+            vec![
+                change("model-a", "Model A", 1.0),
+                change("model-c", "Model C", 3.0),
+            ],
         );
         let names: Vec<&str> = delisted.iter().map(|d| d.display_name.as_str()).collect();
         assert_eq!(names, ["Model A", "Model B", "Model C"]);

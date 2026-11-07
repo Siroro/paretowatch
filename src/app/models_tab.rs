@@ -397,26 +397,10 @@ impl ParetoWatchApp {
                             );
                             ui.end_row();
                             ui.label("Modality");
-                            option_row(
-                                ui,
-                                &mut self.models_modality,
-                                &[
-                                    (ModalityFilter::All, "All"),
-                                    (ModalityFilter::Vision, "Vision"),
-                                    (ModalityFilter::TextOnly, "Text-only"),
-                                ],
-                            );
+                            option_row(ui, &mut self.models_modality, &ModalityFilter::CHOICES);
                             ui.end_row();
                             ui.label("Safety");
-                            option_row(
-                                ui,
-                                &mut self.models_uncensored,
-                                &[
-                                    (UncensoredFilter::All, "All"),
-                                    (UncensoredFilter::Uncensored, "Uncensored"),
-                                    (UncensoredFilter::SafetyTuned, "Safety-tuned"),
-                                ],
-                            );
+                            option_row(ui, &mut self.models_uncensored, &UncensoredFilter::CHOICES);
                             ui.end_row();
                             ui.label("Cache pricing").on_hover_text(
                                 "Has any published cache-read rate (provider ask or catalogue \

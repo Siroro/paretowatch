@@ -104,15 +104,8 @@ impl ParetoWatchApp {
                         egui::ComboBox::from_id_salt("alert_metric")
                             .selected_text(self.alert_metric.label())
                             .show_ui(ui, |ui| {
-                                for metric in [
-                                    PriceMetric::Blended,
-                                    PriceMetric::Input,
-                                    PriceMetric::Output,
-                                ] {
-                                    ui.selectable_value(
-                                        &mut self.alert_metric,
-                                        metric,
-                                        metric.label(),
+                                for (metric, label) in PriceMetric::CHOICES {
+                                    ui.selectable_value(&mut self.alert_metric, metric, label,
                                     );
                                 }
                             });
@@ -187,13 +180,7 @@ impl ParetoWatchApp {
                         egui::ComboBox::from_id_salt("alert_benchmark_source")
                             .selected_text(self.alert_benchmark_source.label())
                             .show_ui(ui, |ui| {
-                                for source in [
-                                    BenchmarkSource::CompositeAgentic,
-                                    BenchmarkSource::CompositeDeployment,
-                                ]
-                                .into_iter()
-                                .chain(BenchmarkSource::display_sources())
-                                {
+                                for source in BenchmarkSource::selectable_sources() {
                                     ui.selectable_value(
                                         &mut self.alert_benchmark_source,
                                         source,
@@ -205,15 +192,11 @@ impl ParetoWatchApp {
                             egui::ComboBox::from_id_salt("alert_benchmark_metric")
                                 .selected_text(self.alert_benchmark_metric.label())
                                 .show_ui(ui, |ui| {
-                                    for metric in [
-                                        BenchmarkMetric::Overall,
-                                        BenchmarkMetric::Coding,
-                                        BenchmarkMetric::AgenticCoding,
-                                    ] {
+                                    for (metric, label) in BenchmarkMetric::CHOICES {
                                         ui.selectable_value(
                                             &mut self.alert_benchmark_metric,
                                             metric,
-                                            metric.label(),
+                                            label,
                                         );
                                     }
                                 });
@@ -222,16 +205,8 @@ impl ParetoWatchApp {
                         egui::ComboBox::from_id_salt("alert_comparison_mode")
                             .selected_text(self.alert_comparison_mode.label())
                             .show_ui(ui, |ui| {
-                                for mode in [
-                                    ComparisonMode::ModelCapability,
-                                    ComparisonMode::BestAvailableAgent,
-                                    ComparisonMode::CommonScaffold,
-                                ] {
-                                    ui.selectable_value(
-                                        &mut self.alert_comparison_mode,
-                                        mode,
-                                        mode.label(),
-                                    );
+                                for (mode, label) in ComparisonMode::CHOICES {
+                                    ui.selectable_value(&mut self.alert_comparison_mode, mode, label);
                                 }
                             });
                         if self.alert_comparison_mode == ComparisonMode::CommonScaffold {
@@ -252,16 +227,11 @@ impl ParetoWatchApp {
                         egui::ComboBox::from_id_salt("alert_liquidity_filter")
                             .selected_text(self.alert_liquidity_filter.label())
                             .show_ui(ui, |ui| {
-                                for filter in [
-                                    LiquidityFilter::Any,
-                                    LiquidityFilter::Trusted,
-                                    LiquidityFilter::Healthy3,
-                                    LiquidityFilter::Healthy10,
-                                ] {
+                                for (filter, label) in LiquidityFilter::CHOICES {
                                     ui.selectable_value(
                                         &mut self.alert_liquidity_filter,
                                         filter,
-                                        filter.label(),
+                                        label,
                                     );
                                 }
                             });
@@ -270,17 +240,9 @@ impl ParetoWatchApp {
                         egui::ComboBox::from_id_salt("semantic_alert_price_metric")
                             .selected_text(self.alert_metric.label())
                             .show_ui(ui, |ui| {
-                                for metric in [
-                                    PriceMetric::Blended,
-                                    PriceMetric::Input,
-                                    PriceMetric::Output,
-                                ] {
+                                for (metric, label) in PriceMetric::CHOICES {
                                     if ui
-                                        .selectable_value(
-                                            &mut self.alert_metric,
-                                            metric,
-                                            metric.label(),
-                                        )
+                                        .selectable_value(&mut self.alert_metric, metric, label)
                                         .changed()
                                         && self.alert_metric != PriceMetric::Blended
                                     {

@@ -29,6 +29,23 @@ pub(crate) struct PriceChangeEvent {
     pub(crate) source: &'static str,
 }
 
+impl From<&PriceChangeEvent> for crate::notifications::PriceMoveRecord {
+    fn from(change: &PriceChangeEvent) -> Self {
+        Self {
+            model: change.model.clone(),
+            display_name: change.display_name.clone(),
+            at: change.at,
+            old_blended: change.old_blended,
+            new_blended: change.new_blended,
+            old_input: change.old_input,
+            new_input: change.new_input,
+            old_output: change.old_output,
+            new_output: change.new_output,
+            source: change.source.to_owned(),
+        }
+    }
+}
+
 impl PriceChangeEvent {
     pub(crate) fn delta(&self) -> f64 {
         self.new_blended - self.old_blended
@@ -433,6 +450,7 @@ pub(crate) fn qualifying_move(
 /// A model that vanished from the price feed between two consecutive polls.
 #[derive(Debug, Clone)]
 pub(crate) struct ListingChange {
+    pub(crate) model_id: String,
     pub(crate) display_name: String,
     pub(crate) last_blended: f64,
 }
@@ -456,6 +474,7 @@ pub(crate) fn detect_delisted(
         .iter()
         .filter(|q| !current_ids.contains(q.model.as_str()))
         .map(|q| ListingChange {
+            model_id: q.model.clone(),
             display_name: q.display_name.clone(),
             last_blended: q.price(PriceMetric::Blended, weights),
         })

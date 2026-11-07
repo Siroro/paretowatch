@@ -26,7 +26,7 @@ use crate::theme::{
 use crate::types::{
     ANY_MODEL, AgeFilter, AlertMode, BenchmarkMetric, BenchmarkSource, ComparisonMode, CostBasis,
     LiquidityFilter, ModalityFilter, PriceMetric, PricingSource, PricingWeights, Quote,
-    UncensoredFilter, blended_price,
+    UncensoredFilter, WORKLOAD_PRESETS, blended_price,
 };
 use crate::worker::WorkerCommand;
 
@@ -72,13 +72,7 @@ impl ParetoWatchApp {
             let combo = egui::ComboBox::from_id_salt("benchmark_source")
                 .selected_text(self.benchmark_source.label())
                 .show_ui(ui, |ui| {
-                    for source in [
-                        BenchmarkSource::CompositeAgentic,
-                        BenchmarkSource::CompositeDeployment,
-                    ]
-                    .into_iter()
-                    .chain(BenchmarkSource::display_sources())
-                    {
+                    for source in BenchmarkSource::selectable_sources() {
                         if ui
                             .selectable_value(&mut self.benchmark_source, source, source.label())
                             .changed()
@@ -101,17 +95,9 @@ impl ParetoWatchApp {
                 egui::ComboBox::from_id_salt("benchmark_metric")
                     .selected_text(self.benchmark_metric.label())
                     .show_ui(ui, |ui| {
-                        for metric in [
-                            BenchmarkMetric::Overall,
-                            BenchmarkMetric::Coding,
-                            BenchmarkMetric::AgenticCoding,
-                        ] {
+                        for (metric, label) in BenchmarkMetric::CHOICES {
                             if ui
-                                .selectable_value(
-                                    &mut self.benchmark_metric,
-                                    metric,
-                                    metric.label(),
-                                )
+                                .selectable_value(&mut self.benchmark_metric, metric, label)
                                 .changed()
                             {
                                 chart_axes_changed = true;
@@ -162,15 +148,7 @@ impl ParetoWatchApp {
                                  own capability row, its best row under any agent harness, or one \
                                  fixed scaffold every model must use.",
                             );
-                            if option_row(
-                                ui,
-                                &mut self.comparison_mode,
-                                &[
-                                    (ComparisonMode::ModelCapability, "Model capability"),
-                                    (ComparisonMode::BestAvailableAgent, "Best available agent"),
-                                    (ComparisonMode::CommonScaffold, "Same/common scaffold"),
-                                ],
-                            ) {
+                            if option_row(ui, &mut self.comparison_mode, &ComparisonMode::CHOICES) {
                                 chart_axes_changed = true;
                                 reset_zoom = true;
                                 self.selected_pareto_model = None;
@@ -181,16 +159,7 @@ impl ParetoWatchApp {
                                 "Keep only models whose market clears a liquidity bar — a \
                                  trusted provider, or a floor on healthy sellers.",
                             );
-                            if option_row(
-                                ui,
-                                &mut self.liquidity_filter,
-                                &[
-                                    (LiquidityFilter::Any, "Any"),
-                                    (LiquidityFilter::Trusted, "Trusted"),
-                                    (LiquidityFilter::Healthy3, "3+ healthy"),
-                                    (LiquidityFilter::Healthy10, "10+ healthy"),
-                                ],
-                            ) {
+                            if option_row(ui, &mut self.liquidity_filter, &LiquidityFilter::CHOICES) {
                                 chart_axes_changed = true;
                                 self.selected_pareto_model = None;
                             }
@@ -220,15 +189,7 @@ impl ParetoWatchApp {
                             ui.end_row();
 
                             ui.label("Modality");
-                            if option_row(
-                                ui,
-                                &mut self.modality_filter,
-                                &[
-                                    (ModalityFilter::All, "All"),
-                                    (ModalityFilter::Vision, "Vision"),
-                                    (ModalityFilter::TextOnly, "Text-only"),
-                                ],
-                            ) {
+                            if option_row(ui, &mut self.modality_filter, &ModalityFilter::CHOICES) {
                                 chart_axes_changed = true;
                                 reset_zoom = true;
                                 self.selected_pareto_model = None;
@@ -236,15 +197,7 @@ impl ParetoWatchApp {
                             ui.end_row();
 
                             ui.label("Safety");
-                            if option_row(
-                                ui,
-                                &mut self.uncensored_filter,
-                                &[
-                                    (UncensoredFilter::All, "All"),
-                                    (UncensoredFilter::Uncensored, "Uncensored"),
-                                    (UncensoredFilter::SafetyTuned, "Safety-tuned"),
-                                ],
-                            ) {
+                            if option_row(ui, &mut self.uncensored_filter, &UncensoredFilter::CHOICES) {
                                 chart_axes_changed = true;
                                 reset_zoom = true;
                                 self.selected_pareto_model = None;
@@ -317,29 +270,17 @@ impl ParetoWatchApp {
                              refreshes prices, and re-renders every view.",
                         );
                         ui.horizontal(|ui| {
-                            for (label, mix) in [
-                                ("Agentic 15/80/5", (15.0, 80.0, 5.0)),
-                                ("No-cache 95/0/5", (95.0, 0.0, 5.0)),
-                                ("Balanced 50/0/50", (50.0, 0.0, 50.0)),
-                            ] {
-                                if ui.small_button(label).clicked() {
-                                    self.settings.input_weight = mix.0;
-                                    self.settings.cache_read_weight = mix.1;
-                                    self.settings.output_weight = mix.2;
+                            for (label, (input, cache_read, output)) in WORKLOAD_PRESETS {
+                                if ui.small_button(*label).clicked() {
+                                    self.settings.input_weight = *input;
+                                    self.settings.cache_read_weight = *cache_read;
+                                    self.settings.output_weight = *output;
                                     self.settings_dirty = true;
                                 }
                             }
                         });
-                        let total = self.settings.input_weight.max(0.0)
-                            + self.settings.cache_read_weight.max(0.0)
-                            + self.settings.output_weight.max(0.0);
-                        if total > f64::EPSILON {
-                            ui.small(format!(
-                                "Current mix: {:.0}% fresh input · {:.0}% cache read · {:.0}% output",
-                                self.settings.input_weight.max(0.0) / total * 100.0,
-                                self.settings.cache_read_weight.max(0.0) / total * 100.0,
-                                self.settings.output_weight.max(0.0) / total * 100.0,
-                            ));
+                        if let Some(mix) = self.settings.workload_mix_label() {
+                            ui.small(mix);
                         }
                         egui::Grid::new("pareto_weights_grid")
                             .num_columns(2)

@@ -16,6 +16,14 @@ pub(crate) const ARTIFICIAL_ANALYSIS_URL: &str =
     "https://artificialanalysis.ai/leaderboards/models";
 pub(crate) const AA_3D_URL: &str = "https://artificialanalysis.ai/evaluations/aa-3d";
 
+/// Named workload mixes the Settings editor and the chart sidebar offer.
+/// The first entry is also the reset fallback in the app shell.
+pub(crate) const WORKLOAD_PRESETS: &[(&str, (f64, f64, f64))] = &[
+    ("Agentic 15/80/5", (15.0, 80.0, 5.0)),
+    ("No-cache 95/0/5", (95.0, 0.0, 5.0)),
+    ("Balanced 50/0/50", (50.0, 0.0, 50.0)),
+];
+
 /// The four pricing dials every cost calculation shares: the (input,
 /// cache-read, output) workload weights plus the assumed cache-read share of
 /// the input price for models with no published cache rate. One type, so the
@@ -29,6 +37,23 @@ pub(crate) struct PricingWeights {
 }
 
 impl Settings {
+    /// "Current mix: 15% fresh input · 80% cache read · 5% output", for the
+    /// two editors that expose the dials. `None` when the weights sum to
+    /// zero (the blend's own equal-split fallback applies).
+    pub(crate) fn workload_mix_label(&self) -> Option<String> {
+        let total = self.input_weight.max(0.0)
+            + self.cache_read_weight.max(0.0)
+            + self.output_weight.max(0.0);
+        (total > f64::EPSILON).then(|| {
+            format!(
+                "Current mix: {:.0}% fresh input · {:.0}% cache read · {:.0}% output",
+                self.input_weight.max(0.0) / total * 100.0,
+                self.cache_read_weight.max(0.0) / total * 100.0,
+                self.output_weight.max(0.0) / total * 100.0,
+            )
+        })
+    }
+
     /// The pricing dials as currently configured.
     pub(crate) fn pricing_weights(&self) -> PricingWeights {
         PricingWeights {
@@ -48,6 +73,13 @@ pub(crate) enum PriceMetric {
 }
 
 impl PriceMetric {
+    /// Price-axis choices, shared by the alert form and the chart legend.
+    pub(crate) const CHOICES: [(Self, &str); 3] = [
+        (Self::Blended, "Blended"),
+        (Self::Input, "Input"),
+        (Self::Output, "Output"),
+    ];
+
     pub(crate) fn label(self) -> &'static str {
         match self {
             Self::Blended => "Blended",
@@ -371,6 +403,15 @@ impl BenchmarkSource {
         ]
     }
 
+    /// The sources the benchmark pickers offer: the two derived composites
+    /// first, then every displayable board in order.
+    pub(crate) fn selectable_sources() -> Vec<Self> {
+        [Self::CompositeAgentic, Self::CompositeDeployment]
+            .into_iter()
+            .chain(Self::display_sources())
+            .collect()
+    }
+
     pub(crate) fn display_sources() -> [Self; 12] {
         Self::consensus_sources()
     }
@@ -406,11 +447,30 @@ pub(crate) enum BenchmarkMetric {
 }
 
 impl BenchmarkMetric {
+    /// Metric choices for the one board that publishes more than one
+    /// (LiveBench); shared by the chart and the alert form.
+    pub(crate) const CHOICES: [(Self, &str); 3] = [
+        (Self::Overall, "Overall"),
+        (Self::Coding, "Coding"),
+        (Self::AgenticCoding, "Agentic coding"),
+    ];
+
     pub(crate) fn label(self) -> &'static str {
         match self {
             Self::Overall => "Overall",
             Self::Coding => "Coding",
             Self::AgenticCoding => "Agentic coding",
+        }
+    }
+
+    /// The metric a source's rows are read under. LiveBench publishes all
+    /// three; every other board reports one fixed metric (agentic coding),
+    /// which the selector must not pretend to vary.
+    pub(crate) fn for_source(source: BenchmarkSource, chosen: Self) -> Self {
+        if source == BenchmarkSource::LiveBench {
+            chosen
+        } else {
+            Self::AgenticCoding
         }
     }
 
@@ -432,6 +492,14 @@ pub(crate) enum ComparisonMode {
 }
 
 impl ComparisonMode {
+    /// How leaderboard rows are matched to priced models; shared by the
+    /// chart and the alert form.
+    pub(crate) const CHOICES: [(Self, &str); 3] = [
+        (Self::ModelCapability, "Model capability"),
+        (Self::BestAvailableAgent, "Best available agent"),
+        (Self::CommonScaffold, "Same/common scaffold"),
+    ];
+
     pub(crate) fn label(self) -> &'static str {
         match self {
             Self::ModelCapability => "Model capability",
@@ -483,6 +551,13 @@ pub(crate) enum ModalityFilter {
 }
 
 impl ModalityFilter {
+    /// Chart-side choices, shared by every tab that filters on modality.
+    pub(crate) const CHOICES: [(Self, &str); 3] = [
+        (Self::All, "All"),
+        (Self::Vision, "Vision"),
+        (Self::TextOnly, "Text-only"),
+    ];
+
     pub(crate) fn label(self) -> &'static str {
         match self {
             Self::All => "All models",
@@ -665,6 +740,13 @@ pub(crate) enum UncensoredFilter {
 }
 
 impl UncensoredFilter {
+    /// Chart-side choices, shared by every tab that filters on safety tuning.
+    pub(crate) const CHOICES: [(Self, &str); 3] = [
+        (Self::All, "All"),
+        (Self::Uncensored, "Uncensored"),
+        (Self::SafetyTuned, "Safety-tuned"),
+    ];
+
     pub(crate) fn label(self) -> &'static str {
         match self {
             Self::All => "All models",
@@ -704,6 +786,15 @@ pub(crate) fn is_uncensored_model(id: &str, name: &str, creator: &str) -> bool {
 }
 
 impl LiquidityFilter {
+    /// Market-quality choices, shared by the chart, the Models table, and
+    /// the alert form.
+    pub(crate) const CHOICES: [(Self, &str); 4] = [
+        (Self::Any, "Any"),
+        (Self::Trusted, "Trusted"),
+        (Self::Healthy3, "3+ healthy"),
+        (Self::Healthy10, "10+ healthy"),
+    ];
+
     pub(crate) fn label(self) -> &'static str {
         match self {
             Self::Any => "Any pricing",
