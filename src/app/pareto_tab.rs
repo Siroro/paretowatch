@@ -542,7 +542,10 @@ impl ParetoWatchApp {
         if joined.is_empty() {
             if self.cost_basis == CostBasis::EstimatedPerTask && benchmarks_present {
                 ui.label(format!(
-                    "{} has no matched rows with usable tokens-per-task telemetry for this comparison mode. Switch to $/1M or choose DeepSWE, Terminal-Bench, or a composite model with one of those profiles.",
+                    "{} has no matched rows with usable tokens-per-task telemetry for this comparison mode. Switch to $/1M or choose {}, {}, or a composite model with one of those profiles.",
+                    // The two boards whose rows carry observed token volumes.
+                    BenchmarkSource::DeepSWE11.short_label(),
+                    BenchmarkSource::TerminalBench4.short_label(),
                     self.benchmark_source.label()
                 ));
                 return;
@@ -883,14 +886,7 @@ impl ParetoWatchApp {
             self.selected_pareto_model = Some(model_id);
         }
         if let Some((model_id, at)) = right_clicked_model {
-            self.widgets.spawn(
-                ui.ctx(),
-                self.price_snapshot.as_ref(),
-                &self.settings,
-                self.liquidity_filter,
-                &model_id,
-                at,
-            );
+            self.spawn_pinned_widget(ui.ctx(), &model_id, at);
         }
 
         let selected_id = self.selected_pareto_model.clone();

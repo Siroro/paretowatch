@@ -691,14 +691,7 @@ impl ParetoWatchApp {
                     .input(|i| i.viewport().outer_rect)
                     .map(|root| root.left_top() + egui::vec2(24.0, 24.0))
                     .unwrap_or_else(|| egui::Pos2::new(60.0, 60.0));
-                self.widgets.spawn(
-                    ui.ctx(),
-                    self.price_snapshot.as_ref(),
-                    &self.settings,
-                    self.liquidity_filter,
-                    &row.slug,
-                    near,
-                );
+                self.spawn_pinned_widget(ui.ctx(), &row.slug, near);
             }
             ui.menu_button(egui::RichText::new("🔔 Alarm…").size(13.0), |ui| {
                 if ui.button("Price threshold").clicked() {

@@ -340,6 +340,21 @@ fn merge_delisted(delisted: &mut Vec<ListingChange>, changes: Vec<ListingChange>
 }
 
 impl ParetoWatchApp {
+    /// Pin a model as a floating price widget. The one spawn path: widgets
+    /// bill the quote the CHART's liquidity filter selects, so a pinned row
+    /// always agrees with the chart's market-quality dial (see
+    /// widgets::PriceWidgetManager::spawn).
+    fn spawn_pinned_widget(&mut self, ctx: &egui::Context, model_id: &str, near: egui::Pos2) {
+        self.widgets.spawn(
+            ctx,
+            self.price_snapshot.as_ref(),
+            &self.settings,
+            self.liquidity_filter,
+            model_id,
+            near,
+        );
+    }
+
     pub(crate) fn new(cc: &eframe::CreationContext<'_>) -> Self {
         // egui's default Proportional chain (Ubuntu-Light + emoji fonts) has no
         // arrows or geometric shapes — those glyphs only exist in Hack, which is
@@ -1651,7 +1666,9 @@ impl ParetoWatchApp {
         let Some(models) = self.pending_pin_restore.take() else {
             return;
         };
-        let Some(snapshot) = self.price_snapshot.as_ref() else {
+        // The gate is "a snapshot exists" — spawn_pinned_widget re-resolves
+        // the quote from the same snapshot.
+        if self.price_snapshot.is_none() {
             self.pending_pin_restore = Some(models);
             return;
         };
@@ -1663,14 +1680,7 @@ impl ParetoWatchApp {
                 .input(|i| i.viewport().outer_rect)
                 .map(|root| root.left_top() + egui::vec2(24.0, 24.0))
                 .unwrap_or_else(|| egui::Pos2::new(60.0, 60.0));
-            self.widgets.spawn(
-                ctx,
-                Some(snapshot),
-                &self.settings,
-                self.liquidity_filter,
-                model_id,
-                near,
-            );
+            self.spawn_pinned_widget(ctx, model_id, near);
         }
     }
 
@@ -1750,9 +1760,7 @@ impl ParetoWatchApp {
         });
         ui.separator();
     }
-}
 
-impl ParetoWatchApp {
     fn history_tab(&mut self, ui: &mut egui::Ui) {
         history::ui::show(
             ui,

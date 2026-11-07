@@ -115,6 +115,11 @@ struct CalcLegs {
 /// the market-wide best ask, else the model's catalogue list price — and
 /// only falls to the assumed input share when nothing is published. An
 /// explicit provider never borrows another provider's cache ask.
+// The calculator bills legs like [`crate::types::Quote::effective_cache_read`]
+// resolves the blended cache leg (published rates first, then the assumed
+// share) but also reports WHICH source each leg came from — provenance the
+// Quote methods don't model. Keep the two policies in sync when either
+// changes.
 fn resolve_calc_legs(quote: &Quote, provider: Option<&str>) -> CalcLegs {
     let from_rate = |rate: Option<f64>| match rate {
         Some(_) => CacheRateSource::ProviderAsk,
@@ -741,14 +746,7 @@ impl ParetoWatchApp {
             .small_button("✚")
             .on_hover_text("Add to pinned price window");
         if pin.clicked() {
-            self.widgets.spawn(
-                ui.ctx(),
-                self.price_snapshot.as_ref(),
-                &self.settings,
-                self.liquidity_filter,
-                &quote.model,
-                pin.rect.center(),
-            );
+            self.spawn_pinned_widget(ui.ctx(), &quote.model, pin.rect.center());
         }
         ui.end_row();
     }
@@ -1177,14 +1175,7 @@ impl ParetoWatchApp {
                     .clicked()
                 {
                     let at = ui.cursor().center();
-                    self.widgets.spawn(
-                        ui.ctx(),
-                        self.price_snapshot.as_ref(),
-                        &self.settings,
-                        self.liquidity_filter,
-                        &quote.model,
-                        at,
-                    );
+                    self.spawn_pinned_widget(ui.ctx(), &quote.model, at);
                 }
                 if ui
                     .button("→ Pareto")

@@ -1122,7 +1122,9 @@ impl Quote {
         best.is_finite().then_some(best)
     }
 
-    /// The cache-read rate blended pricing should bill: published numbers
+    /// The cache-read rate blended pricing should bill (the Models-tab
+    /// calculator mirrors this policy but discloses each leg's source — see
+    /// models_tab::resolve_calc_legs): published numbers
     /// first — the selected provider's ask, else the market-wide best ask,
     /// else the model's catalogue list price — and only when nothing is
     /// published an assumed share of the fresh-input price. Always resolves
