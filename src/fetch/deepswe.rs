@@ -114,11 +114,7 @@ pub(crate) fn parse_deepswe_json(root: &Value) -> Result<Vec<Benchmark>> {
         }
     }
     let mut out = best.into_values().map(|(_, b)| b).collect::<Vec<_>>();
-    out.sort_by(|a, b| {
-        b.agentic_coding
-            .unwrap_or_default()
-            .total_cmp(&a.agentic_coding.unwrap_or_default())
-    });
+    super::parse::sort_rows_by_score_desc(&mut out);
     Ok(out)
 }
 

@@ -40,11 +40,10 @@ use super::parse::{
     strip_html_tags,
 };
 use crate::model_id::benchmark_model_key;
-use crate::types::{Benchmark, BenchmarkKind, score_benchmark};
+use crate::types::{AA_3D_URL, Benchmark, BenchmarkKind, score_benchmark};
 
 const AA_BRIEFCASE_URL: &str = "https://artificialanalysis.ai/evaluations/aa-briefcase";
 const AUTOMATIONBENCH_URL: &str = "https://artificialanalysis.ai/evaluations/automationbench-aa";
-const AA_3D_URL: &str = "https://artificialanalysis.ai/evaluations/aa-3d";
 
 fn build_row(raw_name: &str, score: f64, url_note: &str) -> Option<Benchmark> {
     let (base, effort) = split_aa_display_name(raw_name);

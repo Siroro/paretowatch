@@ -28,11 +28,9 @@ use super::livebench::fetch_livebench;
 use super::parse::{collapse_whitespace, strip_html_tags};
 use super::prices::fetch_prices;
 use super::swebench_pro::fetch_swebench_pro;
-use super::terminal_bench::{
-    TERMINAL_BENCH_4_LEADERBOARD, fetch_terminal_bench_version, parse_terminal_bench_harbor,
-};
+use super::terminal_bench::{fetch_terminal_bench_version, parse_terminal_bench_harbor};
 use super::vals_sre::fetch_vals_sre_bench;
-use crate::types::Benchmark;
+use crate::types::{Benchmark, TERMINAL_BENCH_4_LEADERBOARD};
 
 /// Same client shape the worker uses, with a little more headroom for slow
 /// board pages under a test run.

@@ -15,6 +15,9 @@ pub(crate) const FRONTIERCODE_URL: &str = "https://cognition.com/frontiercode";
 pub(crate) const ARTIFICIAL_ANALYSIS_URL: &str =
     "https://artificialanalysis.ai/leaderboards/models";
 pub(crate) const AA_3D_URL: &str = "https://artificialanalysis.ai/evaluations/aa-3d";
+/// The Harbor leaderboard name Terminal-Bench is read from — shared by the
+/// fetcher's POST body and the display URL's `leaderboard=` parameter.
+pub(crate) const TERMINAL_BENCH_4_LEADERBOARD: &str = "4-0-0";
 
 /// Named workload mixes the Settings editor and the chart sidebar offer.
 /// The first entry is also the reset fallback in the app shell.
@@ -1531,6 +1534,33 @@ pub(crate) fn score_benchmark(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn every_remote_source_is_dispatched_by_the_worker() {
+        // The worker polls exactly `remote_sources()` and routes each through
+        // `fetch_benchmark_source`, whose match is compiler-exhaustive. The
+        // silent break is the reverse: a board added to the dispatch but not
+        // to this list never gets polled. remote_sources and
+        // consensus_sources must therefore stay the same set — a variant
+        // added to one and not the other fails here for review.
+        assert_eq!(
+            BenchmarkSource::remote_sources().len(),
+            BenchmarkSource::consensus_sources().len()
+        );
+        for source in BenchmarkSource::remote_sources() {
+            assert!(
+                BenchmarkSource::consensus_sources().contains(&source),
+                "{source:?} is polled but not displayed"
+            );
+            assert!(!source.is_composite());
+        }
+        for source in BenchmarkSource::consensus_sources() {
+            assert!(
+                BenchmarkSource::remote_sources().contains(&source),
+                "{source:?} is displayed but never polled"
+            );
+        }
+    }
     use crate::testfix::{test_quote, test_weights};
 
     fn test_provider_performance() -> ProviderPerformance {

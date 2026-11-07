@@ -107,11 +107,7 @@ pub(crate) fn parse_swebench_pro(html: &str) -> Vec<Benchmark> {
         }
         rows.push(row);
     }
-    rows.sort_by(|a, b| {
-        b.agentic_coding
-            .unwrap_or_default()
-            .total_cmp(&a.agentic_coding.unwrap_or_default())
-    });
+    super::parse::sort_rows_by_score_desc(&mut rows);
     rows
 }
 

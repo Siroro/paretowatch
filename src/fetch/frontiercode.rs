@@ -171,11 +171,7 @@ fn parse_frontiercode_board(board: &Value) -> Vec<Benchmark> {
             .map(|_| "FrontierCode avg tokens/task (main subset)".to_owned());
         out.push(b);
     }
-    out.sort_by(|a, b| {
-        b.agentic_coding
-            .unwrap_or_default()
-            .total_cmp(&a.agentic_coding.unwrap_or_default())
-    });
+    super::parse::sort_rows_by_score_desc(&mut out);
     out
 }
 

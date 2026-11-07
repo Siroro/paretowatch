@@ -101,11 +101,7 @@ pub(crate) fn parse_vals_sre_bench(root: &Value) -> Vec<Benchmark> {
         row.name = format!("{model} [SRE Bench binary RE accuracy]");
         rows.push(row);
     }
-    rows.sort_by(|a, b| {
-        b.agentic_coding
-            .unwrap_or_default()
-            .total_cmp(&a.agentic_coding.unwrap_or_default())
-    });
+    super::parse::sort_rows_by_score_desc(&mut rows);
     rows
 }
 

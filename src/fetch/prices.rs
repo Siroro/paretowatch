@@ -12,7 +12,10 @@ use super::http::fetch_json;
 use super::parse::{first_number_path, first_string_path, json_shape, string_at};
 use crate::model_id::infer_creator;
 use crate::model_id::normalize;
-use crate::types::*;
+use crate::types::{
+    PriceSnapshot, ProviderMarketQuote, Quote, Settings, blended_price, is_free_pair,
+    is_uncensored_model, workload_discount_pct,
+};
 
 pub(crate) const SURPLUS_MARKETS_URL: &str = "https://api.surplusintelligence.ai/api/markets";
 pub(crate) const SURPLUS_PRICES_URL: &str = "https://api.surplusintelligence.ai/v1/prices";
@@ -919,7 +922,7 @@ pub(crate) fn find_market_entries(root: &Value) -> Vec<&Value> {
 mod tests {
     use super::*;
     use crate::testfix::{test_quote, test_weights};
-    use crate::types::PricingSource;
+    use crate::types::{LiquidityFilter, PriceMetric, PricingSource};
 
     #[test]
     fn parses_current_surplus_live_market_shape_and_metadata() {

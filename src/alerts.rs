@@ -65,11 +65,8 @@ pub(crate) fn semantic_alert_status(
         alert.comparison_mode,
         &alert.common_scaffold,
     );
-    let benchmark_metric = if alert.benchmark_source == BenchmarkSource::LiveBench {
-        alert.benchmark_metric
-    } else {
-        BenchmarkMetric::AgenticCoding
-    };
+    let benchmark_metric =
+        BenchmarkMetric::for_source(alert.benchmark_source, alert.benchmark_metric);
     let filtered = quotes
         .iter()
         .filter_map(|quote| alert.liquidity_filter.apply(quote, weights))

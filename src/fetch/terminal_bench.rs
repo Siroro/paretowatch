@@ -11,12 +11,11 @@ use serde_json::Value;
 use super::http::fetch_json_post;
 use super::parse::{json_shape, number_value};
 use crate::model_id::normalize;
-use crate::types::{Benchmark, BenchmarkKind, score_benchmark};
+use crate::types::{Benchmark, BenchmarkKind, TERMINAL_BENCH_4_LEADERBOARD, score_benchmark};
 
 pub(crate) const TERMINAL_BENCH_HARBOR_URL: &str =
     "https://ofhuhcpkvzjlejydnvyd.supabase.co/functions/v1/leaderboard-read";
 pub(crate) const TERMINAL_BENCH_PACKAGE: &str = "terminal-bench/terminal-bench";
-pub(crate) const TERMINAL_BENCH_4_LEADERBOARD: &str = "4-0-0";
 
 /// Terminal-Bench 4.0: live Harbor leaderboard only. Unlike 3.0 there is no
 /// published GitHub snapshot to fall back to, so failures surface as errors
@@ -162,11 +161,7 @@ pub(crate) fn parse_terminal_bench_harbor(root: &Value) -> Result<Vec<Benchmark>
         }
         out.push(b);
     }
-    out.sort_by(|a, b| {
-        b.agentic_coding
-            .unwrap_or_default()
-            .total_cmp(&a.agentic_coding.unwrap_or_default())
-    });
+    super::parse::sort_rows_by_score_desc(&mut out);
     Ok(out)
 }
 
