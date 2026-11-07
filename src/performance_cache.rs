@@ -10,11 +10,11 @@
 //! next to a dead app.
 
 use std::collections::HashMap;
-use std::{fs, path::PathBuf};
+use std::path::PathBuf;
 
-use directories::ProjectDirs;
 use serde::{Deserialize, Serialize};
 
+use crate::persist::{cache_file, load_versioned, save_versioned};
 use crate::types::ModelPerformance;
 
 const CACHE_VERSION: u32 = 1;
@@ -36,22 +36,15 @@ struct CacheFile {
 }
 
 pub(crate) fn cache_path() -> PathBuf {
-    if let Some(project) = ProjectDirs::from("ai", "ParetoWatch", "ParetoWatch") {
-        project.cache_dir().join("performance.json")
-    } else {
-        PathBuf::from("paretowatch-performance.json")
-    }
+    cache_file("performance.json")
 }
 
 /// Load the cached route analytics. Returns the per-model rows plus the save
 /// timestamp; `None` on any problem so callers fall back to fresh fetches.
 pub(crate) fn load_performance_cache() -> Option<(HashMap<String, ModelPerformance>, String)> {
-    let path = cache_path();
-    let bytes = fs::read(&path).ok()?;
-    let file: CacheFile = serde_json::from_slice(&bytes).ok()?;
-    if file.version != CACHE_VERSION || file.rows.is_empty() {
-        return None;
-    }
+    let file: CacheFile = load_versioned(&cache_path(), |f: &CacheFile| {
+        f.version == CACHE_VERSION && !f.rows.is_empty()
+    })?;
     Some((file.rows, file.saved_at))
 }
 
@@ -77,22 +70,11 @@ fn prune_lru(rows: &mut HashMap<String, ModelPerformance>) {
 /// crash mid-write can never leave a truncated cache behind.
 pub(crate) fn save_performance_cache(rows: &mut HashMap<String, ModelPerformance>) {
     prune_lru(rows);
-    let path = cache_path();
-    if let Some(parent) = path.parent() {
-        let _ = fs::create_dir_all(parent);
-    }
-    let file = CacheFile {
+    save_versioned(&cache_path(), |saved_at| CacheFile {
         version: CACHE_VERSION,
-        saved_at: chrono::Utc::now().format("%Y-%m-%d %H:%M").to_string(),
+        saved_at,
         rows: rows.clone(),
-    };
-    let Ok(bytes) = serde_json::to_vec(&file) else {
-        return;
-    };
-    let tmp = path.with_extension("json.tmp");
-    if fs::write(&tmp, bytes).is_ok() && fs::rename(&tmp, &path).is_err() {
-        let _ = fs::remove_file(&tmp);
-    }
+    });
 }
 
 #[cfg(test)]
@@ -151,15 +133,6 @@ mod tests {
         assert_eq!(row.provider("openai").unwrap().tps_p50, Some(73.3));
         assert_eq!(row.provider("openai").unwrap().uptime_pct, Some(99.2));
         assert!(!saved_at.is_empty());
-        // The stamp is UTC (matching the sibling caches), so it must sit
-        // within a minute of the clock — a local-time stamp would drift by
-        // the timezone offset.
-        let stamped = chrono::NaiveDateTime::parse_from_str(&saved_at, "%Y-%m-%d %H:%M")
-            .expect("saved_at parses as %Y-%m-%d %H:%M");
-        let drift_minutes = (chrono::Utc::now().naive_utc() - stamped)
-            .num_minutes()
-            .abs();
-        assert!(drift_minutes <= 1, "saved_at is not UTC: {saved_at}");
         // A corrupt file is ignored rather than fatal.
         std::fs::write(&path, b"not json at all").unwrap();
         assert!(load_performance_cache().is_none());

@@ -11,7 +11,6 @@ use std::sync::mpsc::{self, Receiver, Sender};
 use std::thread;
 use std::time::{Duration, Instant};
 
-use directories::ProjectDirs;
 use reqwest::blocking::Client;
 
 use crate::alerts::evaluate_alerts;
@@ -192,11 +191,7 @@ pub(crate) fn start_worker(
 /// alongside the other config files: an unparseable or missing file starts
 /// from the empty state (the pre-persistence behavior), never a panic.
 fn alert_state_path() -> PathBuf {
-    if let Some(project) = ProjectDirs::from("ai", "ParetoWatch", "ParetoWatch") {
-        project.config_dir().join("alert_state.json")
-    } else {
-        PathBuf::from("paretowatch-alert-state.json")
-    }
+    crate::persist::config_file("alert_state.json")
 }
 
 fn load_alert_state_from(path: &Path) -> HashMap<u64, bool> {
@@ -213,17 +208,10 @@ fn load_alert_state() -> HashMap<u64, bool> {
 /// Atomic write (temp + rename, the notification log's pattern). Best
 /// effort: a failed save only costs a re-fire on the next app start.
 fn save_alert_state_to(path: &Path, state: &HashMap<u64, bool>) {
-    if let Some(parent) = path.parent() {
-        let _ = std::fs::create_dir_all(parent);
-    }
     // Sorted keys keep the file bytes stable for identical state.
     let ordered: BTreeMap<u64, bool> = state.iter().map(|(k, v)| (*k, *v)).collect();
     if let Ok(bytes) = serde_json::to_vec(&ordered) {
-        let tmp = path.with_extension("json.tmp");
-        if std::fs::write(&tmp, bytes).is_ok() && std::fs::rename(&tmp, path).is_err() {
-            let _ = std::fs::remove_file(path);
-            let _ = std::fs::rename(&tmp, path);
-        }
+        let _ = crate::persist::atomic_write(path, &bytes);
     }
 }
 

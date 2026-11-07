@@ -9,11 +9,12 @@
 //! fresh fetches — and any write error is swallowed the same way, because the
 //! cost of a stale chart is zero next to the cost of a dead app.
 
-use std::{collections::HashMap, fs, path::PathBuf};
+use std::collections::HashMap;
+use std::path::PathBuf;
 
-use directories::ProjectDirs;
 use serde::{Deserialize, Serialize};
 
+use crate::persist::{cache_file, load_versioned, save_versioned};
 use crate::types::{Benchmark, BenchmarkSource};
 
 // Bumped to 2 in 0.32.0 when Terminal-Bench 3.0, SWE-rebench, and Revelo
@@ -31,44 +32,25 @@ struct CacheFile {
 }
 
 pub(crate) fn cache_path() -> PathBuf {
-    if let Some(project) = ProjectDirs::from("ai", "ParetoWatch", "ParetoWatch") {
-        project.cache_dir().join("benchmarks.json")
-    } else {
-        PathBuf::from("paretowatch-benchmarks.json")
-    }
+    cache_file("benchmarks.json")
 }
 
 /// Load the cached boards. Returns the per-source sets plus the save
 /// timestamp; `None` on any problem so callers fall back to a fresh fetch.
 pub(crate) fn load_benchmark_cache() -> Option<(HashMap<BenchmarkSource, Vec<Benchmark>>, String)> {
-    let path = cache_path();
-    let bytes = fs::read(&path).ok()?;
-    let file: CacheFile = serde_json::from_slice(&bytes).ok()?;
-    if file.version != CACHE_VERSION || file.sources.is_empty() {
-        return None;
-    }
+    let file: CacheFile = load_versioned(&cache_path(), |f: &CacheFile| {
+        f.version == CACHE_VERSION && !f.sources.is_empty()
+    })?;
     Some((file.sources, file.saved_at))
 }
 
-/// Persist the current boards. Atomic (temp file + rename) so a crash mid-write
-/// can never leave a truncated cache behind.
+/// Persist the current boards.
 pub(crate) fn save_benchmark_cache(sets: &HashMap<BenchmarkSource, Vec<Benchmark>>) {
-    let path = cache_path();
-    if let Some(parent) = path.parent() {
-        let _ = fs::create_dir_all(parent);
-    }
-    let file = CacheFile {
+    save_versioned(&cache_path(), |saved_at| CacheFile {
         version: CACHE_VERSION,
-        saved_at: chrono::Utc::now().format("%Y-%m-%d %H:%M").to_string(),
+        saved_at,
         sources: sets.clone(),
-    };
-    let Ok(bytes) = serde_json::to_vec(&file) else {
-        return;
-    };
-    let tmp = path.with_extension("json.tmp");
-    if fs::write(&tmp, bytes).is_ok() && fs::rename(&tmp, &path).is_err() {
-        let _ = fs::remove_file(&tmp);
-    }
+    });
 }
 
 #[cfg(test)]
@@ -107,15 +89,6 @@ mod tests {
             Some(1)
         );
         assert!(!saved_at.is_empty());
-        // The stamp is UTC (matching the sibling caches), so it must sit
-        // within a minute of the clock — a local-time stamp would drift by
-        // the timezone offset.
-        let stamped = chrono::NaiveDateTime::parse_from_str(&saved_at, "%Y-%m-%d %H:%M")
-            .expect("saved_at parses as %Y-%m-%d %H:%M");
-        let drift_minutes = (chrono::Utc::now().naive_utc() - stamped)
-            .num_minutes()
-            .abs();
-        assert!(drift_minutes <= 1, "saved_at is not UTC: {saved_at}");
         // A corrupt file is ignored rather than fatal.
         std::fs::write(&path, b"not json at all").unwrap();
         assert!(load_benchmark_cache().is_none());

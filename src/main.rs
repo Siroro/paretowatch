@@ -13,6 +13,7 @@ mod model_id;
 mod notifications;
 mod pareto;
 mod performance_cache;
+mod persist;
 mod release_dates;
 mod settings_store;
 #[cfg(test)]

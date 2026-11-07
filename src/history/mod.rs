@@ -18,18 +18,14 @@ pub(crate) fn history_log_path() -> std::path::PathBuf {
 }
 
 /// Best-effort persistence for History tab view state (selected comparison
-/// models), so a restart reopens the same overlay.
-pub(crate) fn ui_state_path() -> std::path::PathBuf {
+/// models), so a restart reopens the same overlay. (Named for what it holds
+/// — not the same file as the app UI state's `ui_state.json`.)
+pub(crate) fn history_selection_path() -> std::path::PathBuf {
     data_dir().join("history-ui.json")
 }
 
 fn data_dir() -> std::path::PathBuf {
-    use directories::ProjectDirs;
-    if let Some(project) = ProjectDirs::from("ai", "ParetoWatch", "ParetoWatch") {
-        let dir = project.data_dir();
-        let _ = std::fs::create_dir_all(dir);
-        dir.to_path_buf()
-    } else {
-        std::path::PathBuf::from(".")
-    }
+    let dir = crate::persist::data_dir().unwrap_or_else(|| std::path::PathBuf::from("."));
+    let _ = std::fs::create_dir_all(&dir);
+    dir
 }

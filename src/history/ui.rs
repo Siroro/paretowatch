@@ -144,7 +144,7 @@ pub(crate) fn show(
     // consulted: the log replays every model ever seen at startup, so saved
     // slugs survive the catalog prune below even before feeds deliver.
     if !state.restored {
-        let saved = load_selection_from(&super::ui_state_path());
+        let saved = load_selection_from(&super::history_selection_path());
         if !saved.is_empty() {
             state.selected = saved;
         }
@@ -187,7 +187,7 @@ pub(crate) fn show(
     let selected_before_controls = state.selected.clone();
     controls(ui, &models, state);
     if state.selected != selected_before_controls {
-        save_selection_to(&super::ui_state_path(), &state.selected);
+        save_selection_to(&super::history_selection_path(), &state.selected);
     }
     ui.add_space(6.0);
 
@@ -711,11 +711,8 @@ fn load_selection_from(path: &std::path::Path) -> Vec<String> {
 }
 
 fn save_selection_to(path: &std::path::Path, selected: &[String]) {
-    if let Some(parent) = path.parent() {
-        let _ = std::fs::create_dir_all(parent);
-    }
     if let Ok(json) = serde_json::to_string(selected) {
-        let _ = std::fs::write(path, json);
+        let _ = crate::persist::atomic_write(path, json.as_bytes());
     }
 }
 

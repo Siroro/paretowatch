@@ -12,7 +12,6 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration as StdDuration;
 
 use chrono::{DateTime, Duration, Local, Timelike, Utc};
-use directories::ProjectDirs;
 use notify_rust::Notification;
 use serde::{Deserialize, Serialize};
 
@@ -291,26 +290,13 @@ impl NotificationLog {
     }
 
     fn persist(&self) {
-        if let Some(parent) = self.path.parent() {
-            let _ = std::fs::create_dir_all(parent);
-        }
         let persisted = PersistedLog {
             records: self.records.clone(),
             price_moves: self.price_moves.clone(),
             muted_until: self.muted_until,
         };
         if let Ok(bytes) = serde_json::to_vec(&persisted) {
-            let tmp = self.path.with_extension("json.tmp");
-            if std::fs::write(&tmp, bytes).is_ok() && std::fs::rename(&tmp, &self.path).is_err() {
-                // Windows can refuse rename-over-existing. Never delete the
-                // live log first: move it aside under a timestamped archive
-                // so the old history survives even if the retry below also
-                // fails, then swap the new bytes in.
-                let stamp = chrono::Utc::now().format("%Y%m%dT%H%M%S%.3fZ");
-                let archived = self.path.with_extension(format!("json.old-{stamp}"));
-                let _ = std::fs::rename(&self.path, &archived);
-                let _ = std::fs::rename(&tmp, &self.path);
-            }
+            let _ = crate::persist::atomic_write(&self.path, &bytes);
         }
     }
 }
@@ -320,11 +306,7 @@ impl NotificationLog {
 pub(crate) type SharedNotifications = Arc<Mutex<NotificationLog>>;
 
 pub(crate) fn notification_log_path() -> PathBuf {
-    if let Some(project) = ProjectDirs::from("ai", "ParetoWatch", "ParetoWatch") {
-        project.data_dir().join("notifications.json")
-    } else {
-        PathBuf::from("paretowatch-notifications.json")
-    }
+    crate::persist::data_file("notifications.json")
 }
 
 pub(crate) fn notify_alert(

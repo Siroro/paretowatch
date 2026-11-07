@@ -15,7 +15,6 @@
 
 use std::{fs, path::PathBuf};
 
-use directories::ProjectDirs;
 use serde::{Deserialize, Serialize};
 
 use super::models_tab::{ModelsCacheFilter, ModelsSort, ModelsSource};
@@ -121,11 +120,7 @@ fn effective_pinned_models(pending: Option<&[String]>, pinned: Vec<String>) -> V
 }
 
 pub(super) fn ui_state_path() -> PathBuf {
-    if let Some(project) = ProjectDirs::from("ai", "ParetoWatch", "ParetoWatch") {
-        project.config_dir().join("ui_state.json")
-    } else {
-        PathBuf::from("paretowatch-ui-state.json")
-    }
+    crate::persist::config_file("ui_state.json")
 }
 
 pub(super) fn load_ui_state() -> Option<UiState> {
@@ -142,12 +137,8 @@ pub(super) fn load_ui_state() -> Option<UiState> {
 }
 
 pub(super) fn save_ui_state(state: &UiState) {
-    let path = ui_state_path();
-    if let Some(parent) = path.parent() {
-        let _ = fs::create_dir_all(parent);
-    }
     if let Ok(bytes) = serde_json::to_vec_pretty(state) {
-        let _ = fs::write(path, bytes);
+        let _ = crate::persist::atomic_write(&ui_state_path(), &bytes);
     }
 }
 

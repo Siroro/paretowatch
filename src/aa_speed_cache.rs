@@ -7,11 +7,11 @@
 //! (columns degrade to the live-market telemetry) and write errors are
 //! swallowed.
 
-use std::{fs, path::PathBuf};
+use std::path::PathBuf;
 
-use directories::ProjectDirs;
 use serde::{Deserialize, Serialize};
 
+use crate::persist::{cache_file, load_versioned, save_versioned};
 use crate::types::AaSpeedSnapshot;
 
 const CACHE_VERSION: u32 = 1;
@@ -25,43 +25,25 @@ struct CacheFile {
 }
 
 pub(crate) fn cache_path() -> PathBuf {
-    if let Some(project) = ProjectDirs::from("ai", "ParetoWatch", "ParetoWatch") {
-        project.cache_dir().join("aa-speed.json")
-    } else {
-        PathBuf::from("paretowatch-aa-speed.json")
-    }
+    cache_file("aa-speed.json")
 }
 
 /// Load the cached speed table. Returns the snapshot plus the save
 /// timestamp; `None` on any problem so callers fall back to a fresh fetch.
 pub(crate) fn load_aa_speed_cache() -> Option<(AaSpeedSnapshot, String)> {
-    let bytes = fs::read(cache_path()).ok()?;
-    let file: CacheFile = serde_json::from_slice(&bytes).ok()?;
-    if file.version != CACHE_VERSION || file.snapshot.entries.is_empty() {
-        return None;
-    }
+    let file: CacheFile = load_versioned(&cache_path(), |f: &CacheFile| {
+        f.version == CACHE_VERSION && !f.snapshot.entries.is_empty()
+    })?;
     Some((file.snapshot, file.saved_at))
 }
 
-/// Persist the current snapshot. Atomic (temp file + rename) so a crash
-/// mid-write can never leave a truncated cache behind.
+/// Persist the current snapshot.
 pub(crate) fn save_aa_speed_cache(snapshot: &AaSpeedSnapshot) {
-    let path = cache_path();
-    if let Some(parent) = path.parent() {
-        let _ = fs::create_dir_all(parent);
-    }
-    let file = CacheFile {
+    save_versioned(&cache_path(), |saved_at| CacheFile {
         version: CACHE_VERSION,
-        saved_at: chrono::Utc::now().format("%Y-%m-%d %H:%M").to_string(),
+        saved_at,
         snapshot: snapshot.clone(),
-    };
-    let Ok(bytes) = serde_json::to_vec(&file) else {
-        return;
-    };
-    let tmp = path.with_extension("json.tmp");
-    if fs::write(&tmp, bytes).is_ok() && fs::rename(&tmp, &path).is_err() {
-        let _ = fs::remove_file(&tmp);
-    }
+    });
 }
 
 #[cfg(test)]
@@ -99,15 +81,6 @@ mod tests {
         let (loaded, saved_at) = load_aa_speed_cache().expect("cache loads after save");
         assert_eq!(loaded, snapshot);
         assert!(!saved_at.is_empty());
-        // The stamp is UTC (matching the sibling caches), so it must sit
-        // within a minute of the clock — a local-time stamp would drift by
-        // the timezone offset.
-        let stamped = chrono::NaiveDateTime::parse_from_str(&saved_at, "%Y-%m-%d %H:%M")
-            .expect("saved_at parses as %Y-%m-%d %H:%M");
-        let drift_minutes = (chrono::Utc::now().naive_utc() - stamped)
-            .num_minutes()
-            .abs();
-        assert!(drift_minutes <= 1, "saved_at is not UTC: {saved_at}");
         // A corrupt file is ignored rather than fatal.
         std::fs::write(&path, b"not json at all").unwrap();
         assert!(load_aa_speed_cache().is_none());

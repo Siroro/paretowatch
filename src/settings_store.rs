@@ -7,17 +7,13 @@ use std::{
 };
 
 use anyhow::{Context, Result};
-use directories::ProjectDirs;
 use serde_json::Value;
 
+use crate::persist::{atomic_write, config_file};
 use crate::types::Settings;
 
 pub(crate) fn config_path() -> PathBuf {
-    if let Some(project) = ProjectDirs::from("ai", "ParetoWatch", "ParetoWatch") {
-        project.config_dir().join("config.json")
-    } else {
-        PathBuf::from("paretowatch-config.json")
-    }
+    config_file("config.json")
 }
 
 pub(crate) fn load_settings() -> Result<Settings> {
@@ -88,21 +84,8 @@ pub(crate) fn save_settings(settings: &Settings) -> Result<()> {
 }
 
 fn save_settings_at(settings: &Settings, path: &Path) -> Result<()> {
-    if let Some(parent) = path.parent() {
-        fs::create_dir_all(parent)?;
-    }
     let bytes = serde_json::to_vec_pretty(settings)?;
-    // Atomic temp-file + rename (the notification-log pattern) so a crash
-    // mid-write cannot leave a truncated config. Some Windows filesystems
-    // refuse rename-over-existing, so remove the old file only as a last
-    // resort — and only after the new bytes are safely on disk.
-    let tmp = path.with_extension("json.tmp");
-    fs::write(&tmp, bytes).with_context(|| format!("write {}", tmp.display()))?;
-    if fs::rename(&tmp, path).is_err() {
-        fs::remove_file(path).with_context(|| format!("remove {}", path.display()))?;
-        fs::rename(&tmp, path).with_context(|| format!("replace {}", path.display()))?;
-    }
-    Ok(())
+    atomic_write(path, &bytes).with_context(|| format!("write {}", path.display()))
 }
 
 #[cfg(test)]
@@ -147,7 +130,7 @@ mod tests {
         save_settings_at(&settings, &path).expect("first save");
         save_settings_at(&settings, &path).expect("overwrite save");
         assert!(
-            !path.with_extension("json.tmp").exists(),
+            !path.with_extension("tmp").exists(),
             "temp file must not survive the save"
         );
         settings.poll_seconds = 120;
