@@ -6,8 +6,8 @@ use crate::bench::matching::best_benchmark_match;
 use crate::model_id::normalize;
 use crate::types::{
     AgeFilter, Benchmark, BenchmarkMetric, BenchmarkSource, ComparisonMode, CostBasis,
-    LiquidityFilter, ModalityFilter, PriceMetric, PricingSource, Quote, UncensoredFilter,
-    is_free_pair,
+    LiquidityFilter, ModalityFilter, PriceMetric, PricingSource, PricingWeights, Quote,
+    UncensoredFilter, is_free_pair,
 };
 
 #[derive(Debug, Clone)]
@@ -154,25 +154,15 @@ pub(crate) fn joined_points(
     price_metric: PriceMetric,
     cost_basis: CostBasis,
     benchmark_metric: BenchmarkMetric,
-    // (input, cache-read, output) workload weights, then the assumed
-    // cache-read share of the input price for models with no published ask.
-    weights: (f64, f64, f64, f64),
+    weights: PricingWeights,
     pricing_source: PricingSource,
 ) -> Vec<JoinedPoint> {
-    let (input_weight, cache_read_weight, output_weight, cache_fallback_pct) = weights;
     let mut out = vec![];
     for q in quotes {
         if let Some(b) = best_benchmark_match(q, benchmarks)
             && let Some(score) = benchmark_metric.value(b)
         {
-            let per_million = q.price_for(
-                pricing_source,
-                price_metric,
-                input_weight,
-                cache_read_weight,
-                output_weight,
-                cache_fallback_pct,
-            );
+            let per_million = q.price_for(pricing_source, price_metric, weights);
             let cost = match cost_basis {
                 CostBasis::PerMillion => per_million,
                 CostBasis::EstimatedPerTask => {
@@ -195,7 +185,8 @@ pub(crate) fn joined_points(
                 // The displayed legs are exactly what the blended rate bills
                 // under the chosen pricing source, so the chart tooltips stay
                 // auditable in every mode.
-                let (input, cache_read, output) = q.price_legs(pricing_source, cache_fallback_pct);
+                let (input, cache_read, output) =
+                    q.price_legs(pricing_source, weights.fallback_pct);
                 out.push(JoinedPoint {
                     model_id: q.model.clone(),
                     model: q.display_name.clone(),
@@ -258,7 +249,7 @@ pub(crate) fn pareto_search_matches(query: &str, p: &JoinedPoint) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::testfix::test_quote;
+    use crate::testfix::{test_quote, test_weights};
     use crate::types::BenchmarkKind;
     use crate::types::score_benchmark;
 
@@ -289,7 +280,7 @@ mod tests {
             PriceMetric::Blended,
             CostBasis::EstimatedPerTask,
             BenchmarkMetric::AgenticCoding,
-            (15.0, 80.0, 5.0, 10.0),
+            test_weights(15.0, 80.0, 5.0, 10.0),
             PricingSource::All,
         );
         assert_eq!(points.len(), 1);
@@ -390,10 +381,7 @@ mod tests {
         let blended = live.price_for(
             PricingSource::Catalog,
             PriceMetric::Blended,
-            15.0,
-            80.0,
-            5.0,
-            10.0,
+            test_weights(15.0, 80.0, 5.0, 10.0),
         );
         assert_eq!(blended, (3.0 * 15.0 + 0.5 * 80.0 + 9.0 * 5.0) / 100.0);
         // Market modes keep billing the live asks.
@@ -401,10 +389,7 @@ mod tests {
             live.price_for(
                 PricingSource::All,
                 PriceMetric::Input,
-                15.0,
-                80.0,
-                5.0,
-                10.0
+                test_weights(15.0, 80.0, 5.0, 10.0)
             ),
             2.0
         );
@@ -435,7 +420,7 @@ mod tests {
             PriceMetric::Blended,
             CostBasis::EstimatedPerTask,
             BenchmarkMetric::AgenticCoding,
-            (15.0, 80.0, 5.0, 10.0),
+            test_weights(15.0, 80.0, 5.0, 10.0),
             PricingSource::Catalog,
         );
         assert_eq!(points.len(), 1);
@@ -451,7 +436,7 @@ mod tests {
             PriceMetric::Blended,
             CostBasis::EstimatedPerTask,
             BenchmarkMetric::AgenticCoding,
-            (15.0, 80.0, 5.0, 10.0),
+            test_weights(15.0, 80.0, 5.0, 10.0),
             PricingSource::All,
         );
         assert!((points[0].cost - 0.66).abs() < 1e-12);

@@ -49,7 +49,8 @@ use crate::types::{
     ANY_MODEL, AaSpeedEntry, AaSpeedSnapshot, AgeFilter, AlertDirection, AlertMode, AlertRearm,
     AlertRule, AlertSound, Benchmark, BenchmarkMetric, BenchmarkSource, ComparisonMode, CostBasis,
     LiquidityFilter, ModalityFilter, MoveDirection, PerformanceSnapshot, PriceMetric,
-    PriceSnapshot, PricingSource, Quote, Settings, UncensoredFilter, default_common_scaffold,
+    PriceSnapshot, PricingSource, PricingWeights, Quote, Settings, UncensoredFilter,
+    default_common_scaffold,
 };
 use crate::widgets;
 use crate::worker::start_worker;
@@ -281,7 +282,7 @@ pub(crate) struct ParetoWatchApp {
     pareto_cache: Option<Arc<ParetoCache>>,
     /// Status text per alert id for the Alerts tab, keyed to the data version,
     /// workload weights, and assumed cache-read share it was computed at.
-    alert_status_cache: HashMap<u64, (u64, f64, f64, f64, f64, String)>,
+    alert_status_cache: HashMap<u64, (u64, PricingWeights, String)>,
     consensus_cache: Option<(
         u64,
         ComparisonMode,
@@ -840,26 +841,16 @@ impl ParetoWatchApp {
             let Some(series) = self.history.series(&alert.model) else {
                 continue;
             };
-            let current = quote.price(
-                PriceMetric::Blended,
-                self.settings.input_weight,
-                self.settings.cache_read_weight,
-                self.settings.output_weight,
-                self.settings.cache_read_fallback_pct,
-            );
-            let Some(previous_low) = blended_series(
-                series,
-                self.settings.input_weight,
-                self.settings.cache_read_weight,
-                self.settings.output_weight,
-                self.settings.cache_read_fallback_pct,
-            )
-            .into_iter()
-            .map(|(_, value)| value)
-            .fold(None, |acc: Option<f64>, value| match acc {
-                Some(min) if min <= value => Some(min),
-                _ => Some(value),
-            }) else {
+            let weights = self.settings.pricing_weights();
+            let current = quote.price(PriceMetric::Blended, weights);
+            let Some(previous_low) = blended_series(series, weights)
+                .into_iter()
+                .map(|(_, value)| value)
+                .fold(None, |acc: Option<f64>, value| match acc {
+                    Some(min) if min <= value => Some(min),
+                    _ => Some(value),
+                })
+            else {
                 continue;
             };
             const FLOOR_MARGIN: f64 = 0.001; // one history quantization step, $/M
@@ -931,13 +922,7 @@ impl ParetoWatchApp {
                         source,
                         quote.input,
                         quote.output,
-                        quote.price(
-                            PriceMetric::Blended,
-                            self.settings.input_weight,
-                            self.settings.cache_read_weight,
-                            self.settings.output_weight,
-                            self.settings.cache_read_fallback_pct,
-                        ),
+                        quote.price(PriceMetric::Blended, self.settings.pricing_weights()),
                     )
                 });
                 (format!("✚ New model listed: {display}"), detail)
@@ -946,13 +931,7 @@ impl ParetoWatchApp {
                     .iter()
                     .map(|(slug, display)| {
                         let blend = lookup(slug).map_or(f64::NAN, |quote| {
-                            quote.price(
-                                PriceMetric::Blended,
-                                self.settings.input_weight,
-                                self.settings.cache_read_weight,
-                                self.settings.output_weight,
-                                self.settings.cache_read_fallback_pct,
-                            )
+                            quote.price(PriceMetric::Blended, self.settings.pricing_weights())
                         });
                         format!("{display} · blend ${blend:.4}/1M")
                     })
@@ -1068,13 +1047,7 @@ impl ParetoWatchApp {
                     display: series.display.clone(),
                     creator: series.creator.clone(),
                     added_ts: series.added_ts,
-                    blended: quote.price(
-                        PriceMetric::Blended,
-                        self.settings.input_weight,
-                        self.settings.cache_read_weight,
-                        self.settings.output_weight,
-                        self.settings.cache_read_fallback_pct,
-                    ),
+                    blended: quote.price(PriceMetric::Blended, self.settings.pricing_weights()),
                     quote: quote.clone(),
                     benchmark_sources: 0,
                 });
@@ -1135,12 +1108,7 @@ impl ParetoWatchApp {
             return Some(Arc::clone(cache));
         }
         let snapshot = self.price_snapshot.as_ref()?;
-        let weights = (
-            self.settings.input_weight,
-            self.settings.cache_read_weight,
-            self.settings.output_weight,
-            self.settings.cache_read_fallback_pct,
-        );
+        let weights = self.settings.pricing_weights();
         // Day-granularity age clock: bucket boundaries are days, so a stale
         // "now" within one refresh cycle cannot change what passes.
         let now = chrono::Utc::now().timestamp();
@@ -1151,10 +1119,7 @@ impl ParetoWatchApp {
             .filter(|quote| self.uncensored_filter.allows(quote.uncensored))
             .filter(|quote| self.age_filter.allows(quote.age_days(now)))
             .filter(|quote| pricing_source_allows(self.pricing_source, quote))
-            .filter_map(|quote| {
-                self.liquidity_filter
-                    .apply(quote, weights.0, weights.1, weights.2, weights.3)
-            })
+            .filter_map(|quote| self.liquidity_filter.apply(quote, weights))
             .collect::<Vec<_>>();
         let active_benchmarks = benchmarks_for_source(
             self.benchmark_source,
@@ -1238,12 +1203,7 @@ impl ParetoWatchApp {
     /// are formatted fresh each call.
     fn cached_alert_statuses(&mut self) -> Vec<String> {
         let data_version = self.data_version;
-        let (input_weight, cache_read_weight, output_weight, cache_fallback_pct) = (
-            self.settings.input_weight,
-            self.settings.cache_read_weight,
-            self.settings.output_weight,
-            self.settings.cache_read_fallback_pct,
-        );
+        let weights = self.settings.pricing_weights();
         let quotes: &[Quote] = self
             .price_snapshot
             .as_ref()
@@ -1256,17 +1216,10 @@ impl ParetoWatchApp {
                 let cached = self
                     .alert_status_cache
                     .get(&alert.id)
-                    .filter(|(version, iw, cw, ow, pct, _)| {
-                        *version == data_version
-                            && (*iw, *cw, *ow, *pct)
-                                == (
-                                    input_weight,
-                                    cache_read_weight,
-                                    output_weight,
-                                    cache_fallback_pct,
-                                )
+                    .filter(|(version, cached_weights, _)| {
+                        *version == data_version && *cached_weights == weights
                     })
-                    .map(|(_, _, _, _, _, text)| text.clone());
+                    .map(|(_, _, text)| text.clone());
                 match cached {
                     Some(text) => text,
                     None => {
@@ -1280,17 +1233,8 @@ impl ParetoWatchApp {
                                 &self.settings,
                             )
                         };
-                        self.alert_status_cache.insert(
-                            alert.id,
-                            (
-                                data_version,
-                                input_weight,
-                                cache_read_weight,
-                                output_weight,
-                                cache_fallback_pct,
-                                text.clone(),
-                            ),
-                        );
+                        self.alert_status_cache
+                            .insert(alert.id, (data_version, weights, text.clone()));
                         text
                     }
                 }
@@ -1314,18 +1258,7 @@ impl ParetoWatchApp {
                 quotes
                     .iter()
                     .find(|q| q.model == alert.model)
-                    .map(|q| {
-                        format!(
-                            "${:.4}",
-                            q.price(
-                                alert.metric,
-                                input_weight,
-                                cache_read_weight,
-                                output_weight,
-                                cache_fallback_pct,
-                            )
-                        )
-                    })
+                    .map(|q| format!("${:.4}", q.price(alert.metric, weights)))
                     .unwrap_or_else(|| "—".into())
             };
             statuses.push(status);
@@ -1336,35 +1269,18 @@ impl ParetoWatchApp {
     /// Status text for an all-time-low rule: current blended price beside
     /// the lowest value the history log has ever recorded for the model.
     fn floor_alert_status(&self, alert: &AlertRule, quotes: &[Quote]) -> String {
-        let (input_weight, cache_read_weight, output_weight, cache_fallback_pct) = (
-            self.settings.input_weight,
-            self.settings.cache_read_weight,
-            self.settings.output_weight,
-            self.settings.cache_read_fallback_pct,
-        );
+        let weights = self.settings.pricing_weights();
         let Some(quote) = quotes.iter().find(|q| q.model == alert.model) else {
             return "—".into();
         };
-        let current = quote.price(
-            PriceMetric::Blended,
-            input_weight,
-            cache_read_weight,
-            output_weight,
-            cache_fallback_pct,
-        );
+        let current = quote.price(PriceMetric::Blended, weights);
         let Some(series) = self.history.series(&alert.model) else {
             return format!("${current:.4} · no history yet");
         };
-        let low = blended_series(
-            series,
-            input_weight,
-            cache_read_weight,
-            output_weight,
-            cache_fallback_pct,
-        )
-        .into_iter()
-        .map(|(_, value)| value)
-        .fold(f64::INFINITY, f64::min);
+        let low = blended_series(series, weights)
+            .into_iter()
+            .map(|(_, value)| value)
+            .fold(f64::INFINITY, f64::min);
         if low.is_finite() {
             format!("${current:.4} · low ${low:.4}")
         } else {
@@ -1409,13 +1325,9 @@ impl ParetoWatchApp {
                 .quotes
                 .iter()
                 .filter_map(|quote| {
-                    alert.liquidity_filter.apply(
-                        quote,
-                        self.settings.input_weight,
-                        self.settings.cache_read_weight,
-                        self.settings.output_weight,
-                        self.settings.cache_read_fallback_pct,
-                    )
+                    alert
+                        .liquidity_filter
+                        .apply(quote, self.settings.pricing_weights())
                 })
                 .collect::<Vec<_>>();
             let joined = joined_points(
@@ -1424,12 +1336,7 @@ impl ParetoWatchApp {
                 alert.metric,
                 alert.cost_basis,
                 benchmark_metric,
-                (
-                    self.settings.input_weight,
-                    self.settings.cache_read_weight,
-                    self.settings.output_weight,
-                    self.settings.cache_read_fallback_pct,
-                ),
+                self.settings.pricing_weights(),
                 // Alert evaluation bills live asks with the published
                 // fallbacks regardless of the chart's pricing-source dial.
                 PricingSource::All,

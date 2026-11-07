@@ -19,8 +19,8 @@ use crate::model_id::group_label;
 use crate::model_id::normalize;
 use crate::theme::{PRICE_DOWN, copyable_slug, creator_color, discount_color, free_offer_badge};
 use crate::types::{
-    AlertMode, CostBasis, ModalityFilter, PriceMetric, Quote, SpeedFilter, UncensoredFilter,
-    assumed_cache_price, token_workload_cost,
+    AlertMode, CostBasis, ModalityFilter, PriceMetric, PricingWeights, Quote, SpeedFilter,
+    UncensoredFilter, assumed_cache_price, token_workload_cost,
 };
 
 use super::controls::{option_row, popover_button, radio_list};
@@ -272,12 +272,7 @@ impl ParetoWatchApp {
         let cache_filter = self.models_cache;
         let speed_filter = self.models_speed;
         let aa_speed = self.aa_speed_lookup();
-        let weights = (
-            self.settings.input_weight,
-            self.settings.cache_read_weight,
-            self.settings.output_weight,
-            self.settings.cache_read_fallback_pct,
-        );
+        let weights = self.settings.pricing_weights();
         let mut rows: Vec<ModelsRow<'_>> = quotes
             .iter()
             .filter(|quote| models_search_matches(&query, quote))
@@ -296,13 +291,7 @@ impl ParetoWatchApp {
                     .and_then(|join| join.get(&quote.model))
                     .cloned(),
                 quote,
-                blended: quote.price(
-                    PriceMetric::Blended,
-                    weights.0,
-                    weights.1,
-                    weights.2,
-                    weights.3,
-                ),
+                blended: quote.price(PriceMetric::Blended, weights),
                 cache_read: quote.best_available_cache_read(),
             })
             // Speed filters test the resolved figure: AA's standardized
@@ -476,12 +465,7 @@ impl ParetoWatchApp {
         });
     }
 
-    fn models_table(
-        &mut self,
-        ui: &mut egui::Ui,
-        rows: &[ModelsRow<'_>],
-        weights: (f64, f64, f64, f64),
-    ) {
+    fn models_table(&mut self, ui: &mut egui::Ui, rows: &[ModelsRow<'_>], weights: PricingWeights) {
         let mut sort_clicked: Option<ModelsSort> = None;
         {
             let active_sort = self.models_sort;
@@ -544,7 +528,7 @@ impl ParetoWatchApp {
         &mut self,
         ui: &mut egui::Ui,
         row: &ModelsRow<'_>,
-        weights: (f64, f64, f64, f64),
+        weights: PricingWeights,
     ) {
         let quote = row.quote;
         let is_selected = self.calc_model.as_deref() == Some(quote.model.as_str());
@@ -609,7 +593,7 @@ impl ParetoWatchApp {
         ui.label(format_price_tick(quote.output));
         ui.label(format_price_tick(row.blended)).on_hover_text(format!(
             "Blended at your workload weights ({:.0}/{:.0}/{:.0} fresh/cache/output). Cache rate falls back provider ask \u{2192} market best \u{2192} catalogue list \u{2192} assumed {:.0}% of input when nothing is published.",
-            weights.0, weights.1, weights.2, weights.3,
+            weights.input, weights.cache_read, weights.output, weights.fallback_pct,
         ));
         let provider_label = ui.small(if quote.live_market {
             quote.provider.clone()
@@ -1199,13 +1183,8 @@ impl ParetoWatchApp {
                     self.alert_mode = AlertMode::Threshold;
                     self.alert_metric = PriceMetric::Blended;
                     self.alert_cost_basis = CostBasis::PerMillion;
-                    self.alert_threshold = quote.price(
-                        PriceMetric::Blended,
-                        self.settings.input_weight,
-                        self.settings.cache_read_weight,
-                        self.settings.output_weight,
-                        self.settings.cache_read_fallback_pct,
-                    );
+                    self.alert_threshold =
+                        quote.price(PriceMetric::Blended, self.settings.pricing_weights());
                     self.tab = Tab::Alerts;
                 }
                 if ui

@@ -69,3 +69,19 @@ pub(crate) fn test_joined_point() -> JoinedPoint {
         listed_at: None,
     }
 }
+
+/// The four pricing dials as one value, for tests that exercise blended
+/// pricing or the liquidity filter.
+pub(crate) fn test_weights(
+    input: f64,
+    cache_read: f64,
+    output: f64,
+    fallback_pct: f64,
+) -> crate::types::PricingWeights {
+    crate::types::PricingWeights {
+        input,
+        cache_read,
+        output,
+        fallback_pct,
+    }
+}

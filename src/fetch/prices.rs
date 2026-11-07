@@ -246,12 +246,7 @@ fn market_discount_pct(
             market.output,
         ),
         (list_input, catalog_cache_read, list_output),
-        (
-            settings.input_weight,
-            settings.cache_read_weight,
-            settings.output_weight,
-        ),
-        settings.cache_read_fallback_pct,
+        settings.pricing_weights(),
     )
     .or(market.discount_pct)
 }
@@ -265,6 +260,7 @@ pub(crate) fn parse_price_matrix(value: &Value, settings: &Settings) -> Result<V
         ));
     }
     let mut quotes = Vec::new();
+    let w = settings.pricing_weights();
 
     for model in models {
         let Some(model_id) = string_at(model, &["model", "id", "model_id", "modelId"]) else {
@@ -286,10 +282,10 @@ pub(crate) fn parse_price_matrix(value: &Value, settings: &Settings) -> Result<V
                     input,
                     cache_read,
                     output,
-                    settings.input_weight,
-                    settings.cache_read_weight,
-                    settings.output_weight,
-                    settings.cache_read_fallback_pct,
+                    w.input,
+                    w.cache_read,
+                    w.output,
+                    w.fallback_pct,
                 );
                 if best
                     .as_ref()
@@ -311,10 +307,10 @@ pub(crate) fn parse_price_matrix(value: &Value, settings: &Settings) -> Result<V
                 input,
                 cache_read,
                 output,
-                settings.input_weight,
-                settings.cache_read_weight,
-                settings.output_weight,
-                settings.cache_read_fallback_pct,
+                w.input,
+                w.cache_read,
+                w.output,
+                w.fallback_pct,
             );
             best = Some((provider, input, output, cache_read, weighted));
         }
@@ -326,10 +322,10 @@ pub(crate) fn parse_price_matrix(value: &Value, settings: &Settings) -> Result<V
                 input,
                 cache_read,
                 output,
-                settings.input_weight,
-                settings.cache_read_weight,
-                settings.output_weight,
-                settings.cache_read_fallback_pct,
+                w.input,
+                w.cache_read,
+                w.output,
+                w.fallback_pct,
             );
             best = Some(("comparison".into(), input, output, cache_read, weighted));
         }
@@ -784,19 +780,10 @@ pub(crate) fn parse_market_overlay(root: &Value, settings: &Settings) -> Vec<Mar
         // 100%-off offer. It stays visible in provider_options but must not own
         // the headline price while any priced provider exists; only an entirely
         // free market keeps it.
+        let weights = settings.pricing_weights();
         let by_workload = |a: &&ProviderMarketQuote, b: &&ProviderMarketQuote| {
-            a.workload_price(
-                settings.input_weight,
-                settings.cache_read_weight,
-                settings.output_weight,
-                settings.cache_read_fallback_pct,
-            )
-            .total_cmp(&b.workload_price(
-                settings.input_weight,
-                settings.cache_read_weight,
-                settings.output_weight,
-                settings.cache_read_fallback_pct,
-            ))
+            a.workload_price(weights)
+                .total_cmp(&b.workload_price(weights))
         };
         let priced_options = provider_options
             .iter()
@@ -931,7 +918,7 @@ pub(crate) fn find_market_entries(root: &Value) -> Vec<&Value> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::testfix::test_quote;
+    use crate::testfix::{test_quote, test_weights};
     use crate::types::PricingSource;
 
     #[test]
@@ -1079,19 +1066,13 @@ mod tests {
         let list_price = q.price_for(
             PricingSource::Catalog,
             PriceMetric::Blended,
-            15.0,
-            80.0,
-            5.0,
-            10.0,
+            test_weights(15.0, 80.0, 5.0, 10.0),
         );
         assert!((list_price - (12.0 * 15.0 + 1.2 * 80.0 + 60.0 * 5.0) / 100.0).abs() < 1e-12);
         let market_price = q.price_for(
             PricingSource::All,
             PriceMetric::Blended,
-            15.0,
-            80.0,
-            5.0,
-            10.0,
+            test_weights(15.0, 80.0, 5.0, 10.0),
         );
         assert!((market_price - (1.2 * 15.0 + 0.12 * 80.0 + 6.0 * 5.0) / 100.0).abs() < 1e-12);
 
@@ -1331,7 +1312,7 @@ mod tests {
             },
         ];
         let selected = LiquidityFilter::Trusted
-            .apply(&q, 15.0, 80.0, 5.0, 10.0)
+            .apply(&q, test_weights(15.0, 80.0, 5.0, 10.0))
             .unwrap();
         assert_eq!(selected.provider, "trusted-provider");
         assert_eq!(selected.provider_trusted, Some(true));

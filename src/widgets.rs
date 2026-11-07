@@ -18,13 +18,7 @@ fn effective_quote(
     liquidity: LiquidityFilter,
     settings: &Settings,
 ) -> Option<Quote> {
-    liquidity.apply(
-        quote,
-        settings.input_weight,
-        settings.cache_read_weight,
-        settings.output_weight,
-        settings.cache_read_fallback_pct,
-    )
+    liquidity.apply(quote, settings.pricing_weights())
 }
 
 /// Base pinned-price text size the layout constants were measured at. The
@@ -147,13 +141,7 @@ fn observe(quote: &crate::types::Quote, settings: &Settings) -> ObservedPrices {
         // chain (provider ask, market best, catalogue list) before the
         // assumed share, so the pinned blended price never bills cache at
         // the full input rate just because an ask is unpublished.
-        blended: quote.price(
-            PriceMetric::Blended,
-            settings.input_weight,
-            settings.cache_read_weight,
-            settings.output_weight,
-            settings.cache_read_fallback_pct,
-        ),
+        blended: quote.price(PriceMetric::Blended, settings.pricing_weights()),
         discount_pct: quote.discount_pct,
     }
 }

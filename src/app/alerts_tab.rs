@@ -374,10 +374,7 @@ impl ParetoWatchApp {
             ui.add_space(10.0);
             // Copy these before mutably iterating `settings.alerts`; this keeps the
             // UI borrow simple and makes the alert row rendering compiler-friendly.
-            let input_weight = self.settings.input_weight;
-            let cache_read_weight = self.settings.cache_read_weight;
-            let output_weight = self.settings.output_weight;
-            let cache_fallback_pct = self.settings.cache_read_fallback_pct;
+            let weights = self.settings.pricing_weights();
             egui::Grid::new("alerts_grid").striped(true).show(ui, |ui| {
                 ui.strong("On");
                 ui.strong("Model");
@@ -473,16 +470,7 @@ impl ParetoWatchApp {
                             .iter()
                             .find(|q| q.model == alert.model)
                             .map(|q| {
-                                format!(
-                                    "${:.4} blend",
-                                    q.price(
-                                        PriceMetric::Blended,
-                                        input_weight,
-                                        cache_read_weight,
-                                        output_weight,
-                                        cache_fallback_pct,
-                                    )
-                                )
+                                format!("${:.4} blend", q.price(PriceMetric::Blended, weights))
                             })
                             .unwrap_or_else(|| "—".into())
                     } else {

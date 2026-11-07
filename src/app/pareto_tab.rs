@@ -25,8 +25,8 @@ use crate::theme::{
 };
 use crate::types::{
     ANY_MODEL, AgeFilter, AlertMode, BenchmarkMetric, BenchmarkSource, ComparisonMode, CostBasis,
-    LiquidityFilter, ModalityFilter, PriceMetric, PricingSource, Quote, UncensoredFilter,
-    blended_price,
+    LiquidityFilter, ModalityFilter, PriceMetric, PricingSource, PricingWeights, Quote,
+    UncensoredFilter, blended_price,
 };
 use crate::worker::WorkerCommand;
 
@@ -691,12 +691,7 @@ impl ParetoWatchApp {
         let log_price_axis = self.log_price_axis;
         let cost_basis = self.cost_basis;
         let pricing_source = self.pricing_source;
-        let weights = (
-            self.settings.input_weight,
-            self.settings.cache_read_weight,
-            self.settings.output_weight,
-            self.settings.cache_read_fallback_pct,
-        );
+        let weights = self.settings.pricing_weights();
         // Every orb is hoverable, so the tooltip formatter must be able to
         // resolve any series name back to its model: plain orbs are named
         // after their model id (unique even when two slugs share a display
@@ -1069,10 +1064,7 @@ impl ParetoWatchApp {
             let per_million = quote.price_for(
                 PricingSource::Catalog,
                 self.price_metric,
-                self.settings.input_weight,
-                self.settings.cache_read_weight,
-                self.settings.output_weight,
-                self.settings.cache_read_fallback_pct,
+                self.settings.pricing_weights(),
             );
             let list_cost = match self.cost_basis {
                 CostBasis::PerMillion => per_million,
@@ -1556,16 +1548,10 @@ impl ParetoWatchApp {
                 // configured window (24h by default, change it in Settings),
                 // as a small always-on sparkline that expands to a full
                 // log-scale plot.
-                let weights = (
-                    self.settings.input_weight,
-                    self.settings.cache_read_weight,
-                    self.settings.output_weight,
-                    self.settings.cache_read_fallback_pct,
-                );
+                let weights = self.settings.pricing_weights();
                 let history_window = self.settings.history_window;
                 if let Some(series) = self.history.series(&p.model_id) {
-                    let all_points =
-                        blended_series(series, weights.0, weights.1, weights.2, weights.3);
+                    let all_points = blended_series(series, weights);
                     let now_ts = chrono::Utc::now().timestamp() as f64;
                     let cutoff = history_window.secs().map(|s| now_ts - s);
                     let points = clip_series_to_window(&all_points, cutoff);
@@ -1865,12 +1851,7 @@ impl ParetoWatchApp {
                         ui.label(format!("${:.4}", option.output));
                         ui.label(format!(
                             "${:.4}",
-                            option.workload_price(
-                                self.settings.input_weight,
-                                self.settings.cache_read_weight,
-                                self.settings.output_weight,
-                                self.settings.cache_read_fallback_pct,
-                            )
+                            option.workload_price(self.settings.pricing_weights())
                         ));
                         ui.label(match option.trusted {
                             Some(true) => "trusted",
@@ -2095,7 +2076,7 @@ struct HoverContext<'a> {
     history: Option<&'a ModelSeries>,
     low_metric: PriceMetric,
     cost_basis: CostBasis,
-    weights: (f64, f64, f64, f64),
+    weights: PricingWeights,
     score_source: String,
     pricing_source: PricingSource,
 }
@@ -2148,14 +2129,7 @@ fn pareto_hover_label(p: &JoinedPoint, ctx: &HoverContext<'_>, score: f64) -> St
     // comparing them against a list price would overstate "% above low".
     if ctx.pricing_source != PricingSource::Catalog
         && let Some(series) = ctx.history
-        && let Some((low, low_ts)) = historical_low(
-            series,
-            ctx.low_metric,
-            ctx.weights.0,
-            ctx.weights.1,
-            ctx.weights.2,
-            ctx.weights.3,
-        )
+        && let Some((low, low_ts)) = historical_low(series, ctx.low_metric, ctx.weights)
     {
         let current = match ctx.low_metric {
             PriceMetric::Input => p.input,
@@ -2164,10 +2138,10 @@ fn pareto_hover_label(p: &JoinedPoint, ctx: &HoverContext<'_>, score: f64) -> St
                 p.input,
                 p.cache_read,
                 p.output,
-                ctx.weights.0,
-                ctx.weights.1,
-                ctx.weights.2,
-                ctx.weights.3,
+                ctx.weights.input,
+                ctx.weights.cache_read,
+                ctx.weights.output,
+                ctx.weights.fallback_pct,
             ),
         };
         let pct = if low > 0.0 {

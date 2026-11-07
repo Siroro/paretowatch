@@ -16,6 +16,30 @@ pub(crate) const ARTIFICIAL_ANALYSIS_URL: &str =
     "https://artificialanalysis.ai/leaderboards/models";
 pub(crate) const AA_3D_URL: &str = "https://artificialanalysis.ai/evaluations/aa-3d";
 
+/// The four pricing dials every cost calculation shares: the (input,
+/// cache-read, output) workload weights plus the assumed cache-read share of
+/// the input price for models with no published cache rate. One type, so the
+/// four values travel together instead of as positional f64 quartets.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub(crate) struct PricingWeights {
+    pub(crate) input: f64,
+    pub(crate) cache_read: f64,
+    pub(crate) output: f64,
+    pub(crate) fallback_pct: f64,
+}
+
+impl Settings {
+    /// The pricing dials as currently configured.
+    pub(crate) fn pricing_weights(&self) -> PricingWeights {
+        PricingWeights {
+            input: self.input_weight,
+            cache_read: self.cache_read_weight,
+            output: self.output_weight,
+            fallback_pct: self.cache_read_fallback_pct,
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 pub(crate) enum PriceMetric {
     Blended,
@@ -689,14 +713,7 @@ impl LiquidityFilter {
         }
     }
 
-    pub(crate) fn apply(
-        self,
-        quote: &Quote,
-        input_weight: f64,
-        cache_read_weight: f64,
-        output_weight: f64,
-        cache_fallback_pct: f64,
-    ) -> Option<Quote> {
+    pub(crate) fn apply(self, quote: &Quote, weights: PricingWeights) -> Option<Quote> {
         if self == Self::Any {
             return Some(quote.clone());
         }
@@ -716,18 +733,8 @@ impl LiquidityFilter {
             Self::Healthy10 => option.healthy_seller_count.unwrap_or(0) >= 10,
         };
         let by_workload = |a: &&ProviderMarketQuote, b: &&ProviderMarketQuote| {
-            a.workload_price(
-                input_weight,
-                cache_read_weight,
-                output_weight,
-                cache_fallback_pct,
-            )
-            .total_cmp(&b.workload_price(
-                input_weight,
-                cache_read_weight,
-                output_weight,
-                cache_fallback_pct,
-            ))
+            a.workload_price(weights)
+                .total_cmp(&b.workload_price(weights))
         };
         let qualifying: Vec<&ProviderMarketQuote> = quote
             .market_options
@@ -900,21 +907,15 @@ pub(crate) struct ProviderMarketQuote {
 }
 
 impl ProviderMarketQuote {
-    pub(crate) fn workload_price(
-        &self,
-        input_weight: f64,
-        cache_read_weight: f64,
-        output_weight: f64,
-        cache_fallback_pct: f64,
-    ) -> f64 {
+    pub(crate) fn workload_price(&self, weights: PricingWeights) -> f64 {
         blended_price(
             self.input,
             self.cache_read,
             self.output,
-            input_weight,
-            cache_read_weight,
-            output_weight,
-            cache_fallback_pct,
+            weights.input,
+            weights.cache_read,
+            weights.output,
+            weights.fallback_pct,
         )
     }
 }
@@ -1096,21 +1097,12 @@ impl Quote {
         &self,
         source: PricingSource,
         metric: PriceMetric,
-        input_weight: f64,
-        cache_read_weight: f64,
-        output_weight: f64,
-        cache_fallback_pct: f64,
+        weights: PricingWeights,
     ) -> f64 {
         match source {
-            PricingSource::All | PricingSource::LiveMarket => self.price(
-                metric,
-                input_weight,
-                cache_read_weight,
-                output_weight,
-                cache_fallback_pct,
-            ),
+            PricingSource::All | PricingSource::LiveMarket => self.price(metric, weights),
             PricingSource::Catalog => {
-                let (input, cache_read, output) = self.price_legs(source, cache_fallback_pct);
+                let (input, cache_read, output) = self.price_legs(source, weights.fallback_pct);
                 match metric {
                     PriceMetric::Input => input,
                     PriceMetric::Output => output,
@@ -1118,35 +1110,28 @@ impl Quote {
                         input,
                         cache_read,
                         output,
-                        input_weight,
-                        cache_read_weight,
-                        output_weight,
-                        cache_fallback_pct,
+                        weights.input,
+                        weights.cache_read,
+                        weights.output,
+                        weights.fallback_pct,
                     ),
                 }
             }
         }
     }
 
-    pub(crate) fn price(
-        &self,
-        metric: PriceMetric,
-        input_weight: f64,
-        cache_read_weight: f64,
-        output_weight: f64,
-        cache_fallback_pct: f64,
-    ) -> f64 {
+    pub(crate) fn price(&self, metric: PriceMetric, weights: PricingWeights) -> f64 {
         match metric {
             PriceMetric::Input => self.input,
             PriceMetric::Output => self.output,
             PriceMetric::Blended => blended_price(
                 self.input,
-                self.effective_cache_read(cache_fallback_pct),
+                self.effective_cache_read(weights.fallback_pct),
                 self.output,
-                input_weight,
-                cache_read_weight,
-                output_weight,
-                cache_fallback_pct,
+                weights.input,
+                weights.cache_read,
+                weights.output,
+                weights.fallback_pct,
             ),
         }
     }
@@ -1244,20 +1229,18 @@ pub(crate) fn token_workload_cost(
 pub(crate) fn workload_discount_pct(
     market: (f64, Option<f64>, f64),
     list: (f64, Option<f64>, f64),
-    weights: (f64, f64, f64),
-    cache_fallback_pct: f64,
+    weights: PricingWeights,
 ) -> Option<f64> {
     let (market_input, market_cache_read, market_output) = market;
     let (list_input, list_cache_read, list_output) = list;
-    let (input_weight, cache_read_weight, output_weight) = weights;
     let list_blended = blended_price(
         list_input,
         list_cache_read,
         list_output,
-        input_weight,
-        cache_read_weight,
-        output_weight,
-        cache_fallback_pct,
+        weights.input,
+        weights.cache_read,
+        weights.output,
+        weights.fallback_pct,
     );
     if list_blended.partial_cmp(&f64::EPSILON) != Some(std::cmp::Ordering::Greater) {
         return None;
@@ -1266,10 +1249,10 @@ pub(crate) fn workload_discount_pct(
         market_input,
         market_cache_read,
         market_output,
-        input_weight,
-        cache_read_weight,
-        output_weight,
-        cache_fallback_pct,
+        weights.input,
+        weights.cache_read,
+        weights.output,
+        weights.fallback_pct,
     );
     let discount = (1.0 - market_blended / list_blended) * 100.0;
     discount.is_finite().then_some(discount)
@@ -1455,7 +1438,7 @@ pub(crate) fn score_benchmark(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::testfix::test_quote;
+    use crate::testfix::{test_quote, test_weights};
 
     fn test_provider_performance() -> ProviderPerformance {
         ProviderPerformance {
@@ -1635,7 +1618,7 @@ mod tests {
         assert!((q.effective_cache_read(25.0).unwrap() - 0.50).abs() < 1e-12);
 
         // And blended pricing bills that resolved rate, not the input price.
-        let blended = q.price(PriceMetric::Blended, 15.0, 80.0, 5.0, 10.0);
+        let blended = q.price(PriceMetric::Blended, test_weights(15.0, 80.0, 5.0, 10.0));
         let expected = (2.0 * 15.0 + 0.20 * 80.0 + 4.0 * 5.0) / 100.0;
         assert!((blended - expected).abs() < 1e-12);
     }
@@ -1646,8 +1629,7 @@ mod tests {
         let pct = workload_discount_pct(
             (1.0, Some(0.1), 5.0),
             (2.0, Some(0.2), 10.0),
-            (15.0, 80.0, 5.0),
-            10.0,
+            test_weights(15.0, 80.0, 5.0, 10.0),
         )
         .unwrap();
         assert!((pct - 50.0).abs() < 1e-9);
@@ -1657,15 +1639,13 @@ mod tests {
         let cache_heavy = workload_discount_pct(
             (2.0, Some(0.02), 10.0),
             (2.0, Some(0.2), 10.0),
-            (15.0, 80.0, 5.0),
-            10.0,
+            test_weights(15.0, 80.0, 5.0, 10.0),
         )
         .unwrap();
         let no_cache = workload_discount_pct(
             (2.0, Some(0.02), 10.0),
             (2.0, Some(0.2), 10.0),
-            (50.0, 0.0, 50.0),
-            10.0,
+            test_weights(50.0, 0.0, 50.0, 10.0),
         )
         .unwrap();
         assert!(cache_heavy > 10.0);
@@ -1681,8 +1661,7 @@ mod tests {
             let pct = workload_discount_pct(
                 (1.0, None, 5.0),
                 (2.0, None, 10.0),
-                (15.0, 80.0, 5.0),
-                share,
+                test_weights(15.0, 80.0, 5.0, share),
             )
             .unwrap();
             assert!((pct - 50.0).abs() < 1e-9);
@@ -1693,8 +1672,7 @@ mod tests {
         let pct = workload_discount_pct(
             (1.0, None, 10.0),
             (2.0, Some(0.2), 10.0),
-            (0.0, 100.0, 0.0),
-            100.0,
+            test_weights(0.0, 100.0, 0.0, 100.0),
         )
         .unwrap();
         assert!((pct - (1.0 - 1.0 / 0.2) * 100.0).abs() < 1e-9);
@@ -1706,8 +1684,7 @@ mod tests {
             workload_discount_pct(
                 (1.0, Some(0.1), 5.0),
                 (0.0, Some(0.0), 0.0),
-                (15.0, 80.0, 5.0),
-                10.0,
+                test_weights(15.0, 80.0, 5.0, 10.0),
             )
             .is_none()
         );
@@ -1718,23 +1695,23 @@ mod tests {
         let q = test_quote("model-a", 1.0, true);
         assert!(
             LiquidityFilter::Trusted
-                .apply(&q, 15.0, 80.0, 5.0, 10.0)
+                .apply(&q, test_weights(15.0, 80.0, 5.0, 10.0))
                 .is_some()
         );
         assert!(
             LiquidityFilter::Healthy3
-                .apply(&q, 15.0, 80.0, 5.0, 10.0)
+                .apply(&q, test_weights(15.0, 80.0, 5.0, 10.0))
                 .is_some()
         );
         assert!(
             LiquidityFilter::Healthy10
-                .apply(&q, 15.0, 80.0, 5.0, 10.0)
+                .apply(&q, test_weights(15.0, 80.0, 5.0, 10.0))
                 .is_none()
         );
         let fallback = test_quote("model-a", 1.0, false);
         assert!(
             LiquidityFilter::Trusted
-                .apply(&fallback, 15.0, 80.0, 5.0, 10.0)
+                .apply(&fallback, test_weights(15.0, 80.0, 5.0, 10.0))
                 .is_none()
         );
     }
@@ -1761,7 +1738,9 @@ mod tests {
             },
         ];
         for filter in [LiquidityFilter::Trusted, LiquidityFilter::Healthy3] {
-            let selected = filter.apply(&q, 15.0, 80.0, 5.0, 10.0).unwrap();
+            let selected = filter
+                .apply(&q, test_weights(15.0, 80.0, 5.0, 10.0))
+                .unwrap();
             assert_eq!(
                 selected.provider, "priced",
                 "{filter:?} picked the free ask"
@@ -1782,7 +1761,7 @@ mod tests {
             healthy_seller_count: Some(4),
         }];
         let selected = LiquidityFilter::Healthy3
-            .apply(&q, 15.0, 80.0, 5.0, 10.0)
+            .apply(&q, test_weights(15.0, 80.0, 5.0, 10.0))
             .unwrap();
         assert_eq!(selected.provider, "only-free");
     }

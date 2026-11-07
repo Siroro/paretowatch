@@ -375,13 +375,7 @@ fn windowed_metric_series(
         HistoryMetric::Output => &series.output,
         HistoryMetric::CacheRead => &series.cache_read,
         HistoryMetric::Blended => {
-            derived = blended_series(
-                series,
-                settings.input_weight,
-                settings.cache_read_weight,
-                settings.output_weight,
-                settings.cache_read_fallback_pct,
-            );
+            derived = blended_series(series, settings.pricing_weights());
             &derived
         }
         HistoryMetric::VolumeDaily => {

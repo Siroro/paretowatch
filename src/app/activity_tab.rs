@@ -535,28 +535,13 @@ impl ParetoWatchApp {
     /// source-by-source benchmark grid, and the market's provider asks.
     fn new_listing_details(&mut self, ui: &mut egui::Ui, row: &NewListing) {
         let now_ts = Utc::now().timestamp() as f64;
-        let weights = (
-            self.settings.input_weight,
-            self.settings.cache_read_weight,
-            self.settings.output_weight,
-            self.settings.cache_read_fallback_pct,
-        );
+        let weights = self.settings.pricing_weights();
 
         // Owned history extracts: nothing borrowed from self survives into
         // the render closures below.
         let series = self.history.series(&row.slug);
-        let blended =
-            series.map(|series| blended_series(series, weights.0, weights.1, weights.2, weights.3));
-        let low = series.and_then(|series| {
-            historical_low(
-                series,
-                PriceMetric::Blended,
-                weights.0,
-                weights.1,
-                weights.2,
-                weights.3,
-            )
-        });
+        let blended = series.map(|series| blended_series(series, weights));
+        let low = series.and_then(|series| historical_low(series, PriceMetric::Blended, weights));
         let telemetry = series
             .filter(|series| series.telemetry.len() >= 2)
             .map(|series| {

@@ -40,12 +40,7 @@ pub(crate) fn semantic_alert_status(
     sets: &HashMap<BenchmarkSource, Vec<Benchmark>>,
     settings: &Settings,
 ) -> String {
-    let (input_weight, cache_read_weight, output_weight, cache_fallback_pct) = (
-        settings.input_weight,
-        settings.cache_read_weight,
-        settings.output_weight,
-        settings.cache_read_fallback_pct,
-    );
+    let weights = settings.pricing_weights();
     let hidden_frontier = settings.hidden_frontier_set();
     let benchmarks = benchmarks_for_source(
         alert.benchmark_source,
@@ -60,15 +55,7 @@ pub(crate) fn semantic_alert_status(
     };
     let filtered = quotes
         .iter()
-        .filter_map(|quote| {
-            alert.liquidity_filter.apply(
-                quote,
-                input_weight,
-                cache_read_weight,
-                output_weight,
-                cache_fallback_pct,
-            )
-        })
+        .filter_map(|quote| alert.liquidity_filter.apply(quote, weights))
         .collect::<Vec<_>>();
     let joined = joined_points(
         &filtered,
@@ -76,12 +63,7 @@ pub(crate) fn semantic_alert_status(
         alert.metric,
         alert.cost_basis,
         benchmark_metric,
-        (
-            input_weight,
-            cache_read_weight,
-            output_weight,
-            cache_fallback_pct,
-        ),
+        weights,
         // Alerts bill live asks with the published fallbacks regardless of
         // how the chart's pricing-source dial is set.
         crate::types::PricingSource::All,
@@ -162,6 +144,7 @@ pub(crate) fn evaluate_alerts(
     base_source_changed: bool,
     notifications: &SharedNotifications,
 ) {
+    let weights = settings.pricing_weights();
     for alert in &settings.alerts {
         if !alert.enabled {
             state.insert(alert.id, false);
@@ -196,20 +179,8 @@ pub(crate) fn evaluate_alerts(
                 continue;
             };
 
-            let old_blended = previous.price(
-                PriceMetric::Blended,
-                settings.input_weight,
-                settings.cache_read_weight,
-                settings.output_weight,
-                settings.cache_read_fallback_pct,
-            );
-            let new_blended = quote.price(
-                PriceMetric::Blended,
-                settings.input_weight,
-                settings.cache_read_weight,
-                settings.output_weight,
-                settings.cache_read_fallback_pct,
-            );
+            let old_blended = previous.price(PriceMetric::Blended, weights);
+            let new_blended = quote.price(PriceMetric::Blended, weights);
             let (arrow, direction) = if best.new < best.old {
                 ("↓", "down")
             } else {
@@ -319,13 +290,7 @@ pub(crate) fn evaluate_alerts(
             continue;
         }
 
-        let price = quote.price(
-            alert.metric,
-            settings.input_weight,
-            settings.cache_read_weight,
-            settings.output_weight,
-            settings.cache_read_fallback_pct,
-        );
+        let price = quote.price(alert.metric, weights);
         let condition = match alert.direction {
             AlertDirection::BelowOrEqual => price <= alert.threshold,
             AlertDirection::AboveOrEqual => price >= alert.threshold,
@@ -389,20 +354,9 @@ pub(crate) fn prices_differ(a: f64, b: f64) -> bool {
 }
 
 fn quote_has_price_change(old: &Quote, new: &Quote, settings: &Settings) -> bool {
-    let old_blended = old.price(
-        PriceMetric::Blended,
-        settings.input_weight,
-        settings.cache_read_weight,
-        settings.output_weight,
-        settings.cache_read_fallback_pct,
-    );
-    let new_blended = new.price(
-        PriceMetric::Blended,
-        settings.input_weight,
-        settings.cache_read_weight,
-        settings.output_weight,
-        settings.cache_read_fallback_pct,
-    );
+    let weights = settings.pricing_weights();
+    let old_blended = old.price(PriceMetric::Blended, weights);
+    let new_blended = new.price(PriceMetric::Blended, weights);
     prices_differ(old.input, new.input)
         || prices_differ(old.output, new.output)
         || prices_differ(old_blended, new_blended)
@@ -442,20 +396,9 @@ pub(crate) fn qualifying_move(
     alert: &AlertRule,
     settings: &Settings,
 ) -> Option<LegMove> {
-    let old_blended = previous.price(
-        PriceMetric::Blended,
-        settings.input_weight,
-        settings.cache_read_weight,
-        settings.output_weight,
-        settings.cache_read_fallback_pct,
-    );
-    let new_blended = quote.price(
-        PriceMetric::Blended,
-        settings.input_weight,
-        settings.cache_read_weight,
-        settings.output_weight,
-        settings.cache_read_fallback_pct,
-    );
+    let weights = settings.pricing_weights();
+    let old_blended = previous.price(PriceMetric::Blended, weights);
+    let new_blended = quote.price(PriceMetric::Blended, weights);
     [
         LegMove {
             label: "Input",
@@ -503,6 +446,7 @@ pub(crate) fn detect_delisted(
     current: &PriceSnapshot,
     settings: &Settings,
 ) -> Vec<ListingChange> {
+    let weights = settings.pricing_weights();
     if previous.base_source != current.base_source {
         return Vec::new();
     }
@@ -513,13 +457,7 @@ pub(crate) fn detect_delisted(
         .filter(|q| !current_ids.contains(q.model.as_str()))
         .map(|q| ListingChange {
             display_name: q.display_name.clone(),
-            last_blended: q.price(
-                PriceMetric::Blended,
-                settings.input_weight,
-                settings.cache_read_weight,
-                settings.output_weight,
-                settings.cache_read_fallback_pct,
-            ),
+            last_blended: q.price(PriceMetric::Blended, weights),
         })
         .collect::<Vec<_>>();
     out.sort_by(|a, b| a.display_name.cmp(&b.display_name));
@@ -567,6 +505,7 @@ pub(crate) fn detect_price_changes(
     current: &PriceSnapshot,
     settings: &Settings,
 ) -> Vec<PriceChangeEvent> {
+    let weights = settings.pricing_weights();
     let old_by_model = previous
         .quotes
         .iter()
@@ -592,20 +531,8 @@ pub(crate) fn detect_price_changes(
             model: new.model.clone(),
             display_name: new.display_name.clone(),
             at: current.fetched_at,
-            old_blended: old.price(
-                PriceMetric::Blended,
-                settings.input_weight,
-                settings.cache_read_weight,
-                settings.output_weight,
-                settings.cache_read_fallback_pct,
-            ),
-            new_blended: new.price(
-                PriceMetric::Blended,
-                settings.input_weight,
-                settings.cache_read_weight,
-                settings.output_weight,
-                settings.cache_read_fallback_pct,
-            ),
+            old_blended: old.price(PriceMetric::Blended, weights),
+            new_blended: new.price(PriceMetric::Blended, weights),
             old_input: old.input,
             new_input: new.input,
             old_output: old.output,
