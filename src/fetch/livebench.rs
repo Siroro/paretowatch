@@ -18,7 +18,7 @@ use anyhow::{Context, Result, anyhow};
 use reqwest::blocking::Client;
 use serde_json::Value;
 
-use super::fetch_text;
+use super::http::fetch_text;
 use crate::model_id::infer_creator;
 use crate::types::{Benchmark, BenchmarkKind};
 

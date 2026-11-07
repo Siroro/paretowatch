@@ -14,8 +14,8 @@ use regex::Regex;
 use reqwest::blocking::Client;
 use serde_json::Value;
 
-use super::fetch_text;
-use super::number_value;
+use super::http::{fetch_json, fetch_text};
+use super::parse::number_value;
 use crate::types::{Benchmark, BenchmarkKind, VALS_SRE_BENCH_URL, score_benchmark};
 
 pub(crate) fn fetch_vals_sre_bench(client: &Client) -> Result<Vec<Benchmark>> {
@@ -34,7 +34,7 @@ pub(crate) fn fetch_vals_sre_bench(client: &Client) -> Result<Vec<Benchmark>> {
     } else {
         format!("https://www.vals.ai{data_url}")
     };
-    let data = super::fetch_json(client, &full_url, "SRE Bench (Vals) leaderboard data")?;
+    let data = fetch_json(client, &full_url, "SRE Bench (Vals) leaderboard data")?;
     let rows = parse_vals_sre_bench(&data);
     if rows.is_empty() {
         return Err(anyhow!(

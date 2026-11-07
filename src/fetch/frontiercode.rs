@@ -14,7 +14,7 @@ use anyhow::{Result, anyhow};
 use reqwest::blocking::Client;
 use serde_json::Value;
 
-use super::fetch_json;
+use super::http::fetch_json;
 use crate::model_id::{canonical_group, infer_creator};
 use crate::types::score_benchmark;
 use crate::types::{Benchmark, BenchmarkKind};

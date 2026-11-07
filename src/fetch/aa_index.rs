@@ -25,7 +25,7 @@ use regex::Regex;
 use reqwest::blocking::Client;
 
 use super::aa_names::{classify_aa_name, variant_preference};
-use super::fetch_text;
+use super::http::fetch_text;
 use crate::artificial_analysis_snapshot::{SAME_WEIGHTS_SKU_ALIASES, artificial_analysis_snapshot};
 use crate::model_id::{benchmark_model_key, token_jaccard};
 use crate::types::{Benchmark, BenchmarkKind, score_benchmark};

@@ -34,7 +34,8 @@ use regex::Regex;
 use reqwest::blocking::Client;
 
 use super::aa_names::{alias_display_name, split_aa_display_name};
-use super::{collapse_whitespace, fetch_text, strip_html_tags};
+use super::http::fetch_text;
+use super::parse::{collapse_whitespace, strip_html_tags};
 use crate::model_id::benchmark_model_key;
 use crate::types::{Benchmark, BenchmarkKind, score_benchmark};
 

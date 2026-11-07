@@ -31,7 +31,6 @@ use crate::fetch::aa_speed::aa_speed_for_quote;
 use crate::fetch::performance::{
     PERFORMANCE_REFRESH_SECS, PERFORMANCE_RETRY_BACKOFF_SECS, performance_key,
 };
-use crate::fetch::start_worker;
 use crate::history;
 use crate::history::track::blended_series;
 use crate::notifications::{
@@ -53,6 +52,7 @@ use crate::types::{
     PriceSnapshot, PricingSource, Quote, Settings, UncensoredFilter, default_common_scaffold,
 };
 use crate::widgets;
+use crate::worker::start_worker;
 use crate::worker::{WorkerCommand, WorkerMessage};
 
 #[cfg(not(target_os = "linux"))]
@@ -381,7 +381,10 @@ impl ParetoWatchApp {
         let notifications: SharedNotifications =
             Arc::new(Mutex::new(NotificationLog::open(&settings)));
         let (worker_tx, worker_rx) = start_worker(
-            cc.egui_ctx.clone(),
+            {
+                let ctx = cc.egui_ctx.clone();
+                move || ctx.request_repaint()
+            },
             settings.clone(),
             Arc::clone(&notifications),
         );

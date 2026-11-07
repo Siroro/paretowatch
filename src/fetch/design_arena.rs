@@ -7,7 +7,7 @@ use anyhow::{Result, anyhow};
 use reqwest::blocking::Client;
 use serde_json::{Value, json};
 
-use super::fetch_json_post;
+use super::http::fetch_json_post;
 use crate::model_id::infer_creator;
 use crate::types::{Benchmark, BenchmarkKind};
 

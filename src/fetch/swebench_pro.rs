@@ -15,7 +15,7 @@ use regex::Regex;
 use reqwest::blocking::Client;
 
 use super::aa_names::{NAMED_EFFORTS, alias_display_name};
-use super::fetch_text;
+use super::http::fetch_text;
 use crate::types::{Benchmark, BenchmarkKind, score_benchmark};
 
 const SWEBENCH_PRO_URL: &str = "https://labs.scale.com/leaderboard/swe_bench_pro_public_v2";

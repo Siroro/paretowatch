@@ -8,8 +8,7 @@ use anyhow::{Context, Result, anyhow};
 use reqwest::blocking::Client;
 use serde_json::Value;
 
-use super::json_shape;
-use super::number_value;
+use super::parse::{json_shape, number_value};
 use crate::model_id::normalize;
 use crate::types::{Benchmark, BenchmarkKind, score_benchmark};
 

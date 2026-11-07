@@ -21,11 +21,17 @@ use reqwest::blocking::Client;
 use super::terminal_bench::{
     TERMINAL_BENCH_4_LEADERBOARD, fetch_terminal_bench_version, parse_terminal_bench_harbor,
 };
-use super::{
-    fetch_aa_3d, fetch_aa_briefcase, fetch_aa_index_and_speed, fetch_automationbench_aa,
-    fetch_deepswe, fetch_design_arena, fetch_frontiercode, fetch_frontiercode2, fetch_livebench,
-    fetch_swebench_pro, fetch_text, fetch_vals_sre_bench,
-};
+use super::aa_index::fetch_aa_index_and_speed;
+use super::aa_evals::{fetch_aa_3d, fetch_aa_briefcase, fetch_automationbench_aa};
+use super::deepswe::fetch_deepswe;
+use super::design_arena::fetch_design_arena;
+use super::frontiercode::{fetch_frontiercode, fetch_frontiercode2};
+use super::http::fetch_text;
+use super::livebench::fetch_livebench;
+use super::parse::{collapse_whitespace, strip_html_tags};
+use super::prices::fetch_prices;
+use super::swebench_pro::fetch_swebench_pro;
+use super::vals_sre::fetch_vals_sre_bench;
 use crate::types::Benchmark;
 
 /// Same client shape the worker uses, with a little more headroom for slow
@@ -557,7 +563,7 @@ fn live_aa_3d_elo_matches_server_table() {
     {
         let cells: Vec<String> = td
             .captures_iter(&row_html)
-            .map(|c| super::collapse_whitespace(&super::strip_html_tags(c.extract::<1>().1[0])))
+            .map(|c| collapse_whitespace(&strip_html_tags(c.extract::<1>().1[0])))
             .collect();
         if cells.len() < 4 {
             continue;
@@ -676,7 +682,7 @@ fn live_aa_boards_reconcile_with_published_values() {
             .map(|row_html| {
                 td.captures_iter(&row_html)
                     .map(|c| {
-                        super::collapse_whitespace(&super::strip_html_tags(c.extract::<1>().1[0]))
+                        collapse_whitespace(&strip_html_tags(c.extract::<1>().1[0]))
                     })
                     .collect::<Vec<_>>()
             })
@@ -1132,7 +1138,7 @@ fn live_model_join_audit() {
 
     let client = validation_client();
     let settings = Settings::default();
-    let snapshot = super::fetch_prices(&client, &settings).expect("Surplus price fetch failed");
+    let snapshot = fetch_prices(&client, &settings).expect("Surplus price fetch failed");
     println!("catalogue: {} quotes", snapshot.quotes.len());
 
     let same_weight_pairs = same_weight_pairs();

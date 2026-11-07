@@ -16,7 +16,8 @@ use chrono::Utc;
 use reqwest::blocking::Client;
 use serde_json::Value;
 
-use super::{fetch_json, first_number_path, string_at};
+use super::http::fetch_json;
+use super::parse::{first_number_path, string_at};
 use crate::model_id::normalize;
 use crate::types::{ModelPerformance, ProviderPerformance};
 
