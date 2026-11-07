@@ -1,7 +1,61 @@
-//! Small text/JSON parsing utilities shared across the board fetchers.
+//! Small text/JSON parsing utilities shared across the board fetchers,
+//! including the escaped-RSC `shortName` attribution every AA board read
+//! builds on.
+
+use std::sync::LazyLock;
 
 use regex::Regex;
 use serde_json::Value;
+
+/// A `shortName`/score field may sit at most this far from the name it
+/// belongs to; anything farther back belongs to another record (or the i18n
+/// label tables, which carry field-shaped keys with no names around).
+pub(crate) const ATTRIBUTION_WINDOW: usize = 2_500;
+
+static SHORT_NAME_RE: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r#"\\?"shortName\\?":\\?"(.{1,120}?)\\?""#).expect("name regex"));
+
+/// Every `\"shortName\":\"…\"` occurrence in an escaped-JSON RSC payload,
+/// in document order, with the display name's `\u0026` escapes resolved.
+pub(crate) fn rsc_short_names(html: &str) -> Vec<(usize, String)> {
+    SHORT_NAME_RE
+        .captures_iter(html)
+        .map(|c| {
+            (
+                c.get(0).expect("whole match").start(),
+                c.extract::<1>().1[0].replace("\\u0026", "&"),
+            )
+        })
+        .collect()
+}
+
+/// The nearest shortName strictly before `pos`, when it sits within
+/// `max_gap` bytes (`None` = unlimited) — the attribution rule the AA board
+/// parsers share: the score occurrence belongs to the model named just
+/// before it.
+pub(crate) fn short_name_before(
+    names: &[(usize, String)],
+    pos: usize,
+    max_gap: Option<usize>,
+) -> Option<&str> {
+    let (start, name) = names.iter().rev().find(|(start, _)| *start < pos)?;
+    if let Some(gap) = max_gap
+        && pos - start > gap
+    {
+        return None;
+    }
+    Some(name)
+}
+
+/// Sort rows by `agentic_coding` descending — the leaderboard display order
+/// every board parser ends with.
+pub(crate) fn sort_rows_by_score_desc(rows: &mut [crate::types::Benchmark]) {
+    rows.sort_by(|a, b| {
+        b.agentic_coding
+            .unwrap_or_default()
+            .total_cmp(&a.agentic_coding.unwrap_or_default())
+    });
+}
 
 pub(crate) fn strip_html_tags(html: &str) -> String {
     let re = Regex::new(r"(?s)<[^>]*>").expect("valid tag regex");

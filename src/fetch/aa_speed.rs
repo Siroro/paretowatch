@@ -16,17 +16,13 @@ use chrono::Utc;
 use regex::Regex;
 
 use super::aa_names::{NAMED_EFFORTS, classify_aa_name};
+use super::parse::ATTRIBUTION_WINDOW;
 use crate::model_id::infer_creator;
 use crate::model_id::{
     benchmark_model_key, canonical_creator, creators_compatible, keys_differ_only_by_release_tag,
     token_jaccard,
 };
 use crate::types::{AaSpeedEntry, AaSpeedSnapshot, Quote};
-
-/// A `shortName`/`modelCreatorName`/speed field may sit this far into the
-/// escaped record; anything farther back belongs to another record (or the
-/// i18n label tables, which carry field-shaped keys with no names around).
-const ATTRIBUTION_WINDOW: usize = 2_500;
 
 fn escaped_number(key: &str) -> Regex {
     Regex::new(&format!(

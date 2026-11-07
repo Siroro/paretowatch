@@ -35,7 +35,10 @@ use reqwest::blocking::Client;
 
 use super::aa_names::{alias_display_name, split_aa_display_name};
 use super::http::fetch_text;
-use super::parse::{collapse_whitespace, strip_html_tags};
+use super::parse::{
+    collapse_whitespace, rsc_short_names, short_name_before, sort_rows_by_score_desc,
+    strip_html_tags,
+};
 use crate::model_id::benchmark_model_key;
 use crate::types::{Benchmark, BenchmarkKind, score_benchmark};
 
@@ -72,11 +75,7 @@ fn dedupe_keep_best(rows: Vec<Benchmark>) -> Vec<Benchmark> {
         }
     }
     let mut out: Vec<Benchmark> = best.into_values().collect();
-    out.sort_by(|a, b| {
-        b.agentic_coding
-            .unwrap_or_default()
-            .total_cmp(&a.agentic_coding.unwrap_or_default())
-    });
+    sort_rows_by_score_desc(&mut out);
     out
 }
 
@@ -140,18 +139,9 @@ pub(crate) fn fetch_automationbench_aa(client: &Client) -> Result<Vec<Benchmark>
 /// Attribute each score to the nearest preceding shortName and read the
 /// partial score as a percentage.
 pub(crate) fn parse_automationbench_aa(html: &str) -> Vec<Benchmark> {
-    let name_re = Regex::new(r#"\\?"shortName\\?":\\?"(.{1,120}?)\\?""#).expect("name regex");
     let score_re = Regex::new(r#"\\?"automationBenchPartialScore\\?":([0-9]+\.?[0-9]*)"#)
         .expect("score regex");
-    let names: Vec<(usize, String)> = name_re
-        .captures_iter(html)
-        .map(|c| {
-            (
-                c.get(0).expect("whole match").start(),
-                c.extract::<1>().1[0].to_owned(),
-            )
-        })
-        .collect();
+    let names = rsc_short_names(html);
     let mut rows = Vec::new();
     for caps in score_re.captures_iter(html) {
         let whole = caps.get(0).expect("whole match");
@@ -159,12 +149,11 @@ pub(crate) fn parse_automationbench_aa(html: &str) -> Vec<Benchmark> {
             continue;
         };
         // Nearest preceding shortName owns this score.
-        let Some((_, name)) = names.iter().rev().find(|(pos, _)| *pos < whole.start()) else {
+        let Some(name) = short_name_before(&names, whole.start(), None) else {
             continue;
         };
-        let name = name.replace("\\u0026", "&");
         if let Some(row) = build_row(
-            &name,
+            name,
             (frac * 100.0).clamp(0.0, 100.0),
             "AutomationBench partial score",
         ) {
@@ -183,27 +172,9 @@ pub(crate) fn fetch_aa_3d(client: &Client) -> Result<Vec<Benchmark>> {
     Ok(rows)
 }
 
-/// AA-3D Elo from the evaluation page's escaped-JSON RSC payload. The
-/// board's model objects end with `\"elo\":<integer>}` right after the
-/// model's shortName — the same integer the leaderboard table renders
-/// (verified: 23 objects for 23 ranked models, GPT-6 Luna anchored at
-/// 1000). The integer-only object-end form is the discriminator: the page
-/// also embeds DECIMAL `elo` fields with `lower95ci` followers for other
-/// boards (AA-Briefcase breakdowns, per-domain win rates), which must not
-/// be captured — nearest-preceding-name attribution plus this shape pins
-/// each Elo to the model object that carries it.
 pub(crate) fn parse_aa_3d(html: &str) -> Vec<Benchmark> {
-    let name_re = Regex::new(r#"\\?"shortName\\?":\\?"(.{1,120}?)\\?""#).expect("name regex");
     let elo_re = Regex::new(r#"\\?"elo\\?":([0-9]+)\}"#).expect("elo regex");
-    let names: Vec<(usize, String)> = name_re
-        .captures_iter(html)
-        .map(|c| {
-            (
-                c.get(0).expect("whole match").start(),
-                c.extract::<1>().1[0].to_owned(),
-            )
-        })
-        .collect();
+    let names = rsc_short_names(html);
     let mut rows = Vec::new();
     for caps in elo_re.captures_iter(html) {
         let whole = caps.get(0).expect("whole match");
@@ -213,11 +184,10 @@ pub(crate) fn parse_aa_3d(html: &str) -> Vec<Benchmark> {
         if !(500.0..=3000.0).contains(&elo) {
             continue;
         }
-        let Some((_, name)) = names.iter().rev().find(|(pos, _)| *pos < whole.start()) else {
+        let Some(name) = short_name_before(&names, whole.start(), None) else {
             continue;
         };
-        let name = name.replace("\\u0026", "&");
-        if let Some(row) = build_row(&name, elo, "3D Elo") {
+        if let Some(row) = build_row(name, elo, "3D Elo") {
             rows.push(row);
         }
     }

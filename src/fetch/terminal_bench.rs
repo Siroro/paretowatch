@@ -4,10 +4,11 @@
 //! superseded by 4.0, which AA's own v5 index switched to — and its
 //! GitHub-snapshot fallback went with it.)
 
-use anyhow::{Context, Result, anyhow};
+use anyhow::{Result, anyhow};
 use reqwest::blocking::Client;
 use serde_json::Value;
 
+use super::http::fetch_json_post;
 use super::parse::{json_shape, number_value};
 use crate::model_id::normalize;
 use crate::types::{Benchmark, BenchmarkKind, score_benchmark};
@@ -36,26 +37,15 @@ pub(crate) fn fetch_terminal_bench_version(
     leaderboard: &str,
     version_label: &str,
 ) -> Result<Value> {
-    client
-        .post(TERMINAL_BENCH_HARBOR_URL)
-        .json(&serde_json::json!({
+    fetch_json_post(
+        client,
+        TERMINAL_BENCH_HARBOR_URL,
+        &serde_json::json!({
             "package": TERMINAL_BENCH_PACKAGE,
             "name": leaderboard,
-        }))
-        .send()
-        .with_context(|| {
-            format!("Terminal-Bench {version_label} Harbor request failed ({TERMINAL_BENCH_HARBOR_URL})")
-        })?
-        .error_for_status()
-        .with_context(|| {
-            format!(
-                "Terminal-Bench {version_label} Harbor returned an HTTP error ({TERMINAL_BENCH_HARBOR_URL})"
-            )
-        })?
-        .json::<Value>()
-        .with_context(|| {
-            format!("Terminal-Bench {version_label} Harbor returned invalid JSON ({TERMINAL_BENCH_HARBOR_URL})")
-        })
+        }),
+        &format!("Terminal-Bench {version_label} Harbor"),
+    )
 }
 
 pub(crate) fn parse_terminal_bench_harbor(root: &Value) -> Result<Vec<Benchmark>> {

@@ -26,17 +26,12 @@ use reqwest::blocking::Client;
 
 use super::aa_names::{classify_aa_name, variant_preference};
 use super::http::fetch_text;
+use super::parse::{ATTRIBUTION_WINDOW, rsc_short_names, short_name_before};
 use crate::artificial_analysis_snapshot::{SAME_WEIGHTS_SKU_ALIASES, artificial_analysis_snapshot};
 use crate::model_id::{benchmark_model_key, token_jaccard};
 use crate::types::{Benchmark, BenchmarkKind, score_benchmark};
 
 const AA_LEADERBOARD_URL: &str = "https://artificialanalysis.ai/leaderboards/models";
-
-/// An `intelligenceIndex` may sit this far into the escaped record from its
-/// `shortName`; anything farther back belongs to another record (or the i18n
-/// label tables, which carry field-shaped keys with no names around).
-/// Mirrors the standardized-speed parser's window.
-const ATTRIBUTION_WINDOW: usize = 2_500;
 
 /// One live leaderboard entry, after name splitting.
 #[derive(Debug, Clone)]
@@ -112,20 +107,11 @@ fn parse_index_version(html: &str) -> Option<String> {
 /// preceding `shortName`, AA estimates skipped, variants folded by the
 /// snapshot's preference order.
 pub(crate) fn parse_live_entries(html: &str) -> Vec<LiveEntry> {
-    let name_re = Regex::new(r#"\\?"shortName\\?":\\?"(.{1,120}?)\\?""#).expect("name regex");
     let score_re = Regex::new(
         r#"\\?"intelligenceIndex\\?":(null|[0-9]+\.?[0-9]*),\\?"intelligenceIndexIsEstimated\\?":(true|false)"#,
     )
     .expect("score regex");
-    let names: Vec<(usize, String)> = name_re
-        .captures_iter(html)
-        .map(|c| {
-            (
-                c.get(0).expect("whole match").start(),
-                c.extract::<1>().1[0].to_owned(),
-            )
-        })
-        .collect();
+    let names = rsc_short_names(html);
 
     let mut best: std::collections::HashMap<String, LiveEntry> = std::collections::HashMap::new();
     for caps in score_re.captures_iter(html) {
@@ -140,17 +126,13 @@ pub(crate) fn parse_live_entries(html: &str) -> Vec<LiveEntry> {
             continue;
         }
         let whole = caps.get(0).expect("whole match");
-        let Some((pos, short)) = names.iter().rev().find(|(pos, _)| *pos < whole.start()) else {
+        // A score occurrence far from every shortName (i18n label tables
+        // carry field-shaped keys) must not be attributed to an unrelated
+        // preceding model — the shared attribution window.
+        let Some(short) = short_name_before(&names, whole.start(), Some(ATTRIBUTION_WINDOW)) else {
             continue;
         };
-        // Mirror the speed parser's window: a score occurrence far from
-        // every shortName (i18n label tables carry field-shaped keys) must
-        // not be attributed to an unrelated preceding model.
-        if whole.start() - *pos > ATTRIBUTION_WINDOW {
-            continue;
-        }
-        let short = short.replace("\\u0026", "&");
-        let Some(entry) = classify_short_name(&short, score) else {
+        let Some(entry) = classify_short_name(short, score) else {
             continue;
         };
         let current = best.get(&entry.key);
