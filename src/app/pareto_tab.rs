@@ -1057,19 +1057,56 @@ impl ParetoWatchApp {
             .or_else(|| p.listed_at.map(|ts| (ts, false)));
         let age_days = age.map(|(ts, _)| (((now - ts) as f64) / 86_400.0).max(0.0).floor());
         let age_color = age_days.map(age_color);
-        // Rank on the current frontier (cost-ascending, so #1 is cheapest).
-        let frontier_rank = self.pareto_cache.as_ref().and_then(|cache| {
-            cache
-                .frontier
-                .iter()
-                .position(|f| f.model_id == p.model_id)
-                .map(|idx| (idx + 1, cache.frontier.len()))
+        // Live-market discount: the same workload billed at catalog list
+        // rates under the current metric and cost basis. Some only when the
+        // plotted price is genuinely below list, so the hero band shows a
+        // real saving instead of a 0% footnote. Catalog-priced quotes (and
+        // comparison rows with no list of their own) bill their own legs and
+        // drop out on their own.
+        let list_discount = selected_quote.as_ref().and_then(|quote| {
+            let per_million = quote.price_for(
+                PricingSource::Catalog,
+                self.price_metric,
+                self.settings.input_weight,
+                self.settings.cache_read_weight,
+                self.settings.output_weight,
+                self.settings.cache_read_fallback_pct,
+            );
+            let list_cost = match self.cost_basis {
+                CostBasis::PerMillion => per_million,
+                CostBasis::EstimatedPerTask => p.tokens_per_task? * per_million / 1_000_000.0,
+            };
+            if !list_cost.is_finite() || list_cost <= 0.0 || p.cost >= list_cost {
+                return None;
+            }
+            let discount_pct = (1.0 - p.cost / list_cost) * 100.0;
+            if !discount_pct.is_finite() || discount_pct < 0.5 {
+                return None;
+            }
+            let mut hover = format!(
+                "The same workload at catalog list rates: {} {} \u{2014} the plotted price \
+                 is {discount_pct:.1}% below list. Tracks the current pricing source, \
+                 metric, and workload mix.",
+                format_price_tick(list_cost),
+                self.cost_basis.unit(),
+            );
+            // A zero-priced live cache ask collapses the blend under
+            // cache-heavy weights; say so when the discount is that extreme.
+            if p.cache_read == Some(0.0) {
+                hover.push_str(
+                    " This market's live cache-read ask is $0, which deepens the \
+                     blended discount under cache-heavy workloads.",
+                );
+            }
+            Some((list_cost, discount_pct, hover))
         });
 
         let card = egui::Frame::group(ui.style()).show(ui, |ui| {
             ui.vertical(|ui| {
-                // Header: creator dot, name, age chip. The chip is the one
-                // element that carries the model's age at a glance.
+                // Header: creator dot, name, vision eye, uncensored lock on
+                // the left — the eye is the only modality mark, so its
+                // absence means text-only, matching the models browser rows —
+                // and the selection actions riding the right edge.
                 ui.horizontal(|ui| {
                     ui.label(
                         egui::RichText::new("\u{25cf}")
@@ -1077,34 +1114,25 @@ impl ParetoWatchApp {
                             .size(16.0),
                     );
                     ui.heading(&p.model);
-                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        if let (Some(days), Some(color)) = (age_days, age_color)
-                            && let Some((ts, is_release)) = age
-                        {
-                            let date_text = DateTime::from_timestamp(ts, 0)
-                                .map(|dt| dt.format("%Y-%m-%d").to_string())
-                                .unwrap_or_default();
-                            let chip_hover = if is_release {
-                                format!(
-                                    "Released {date_text} \u{2014} age from the bundled \
-                                     release-date table; color marks freshness"
-                                )
-                            } else {
-                                format!(
-                                    "Listed on Surplus {date_text} \u{2014} no release date \
-                                     on file for this model, so its age runs from the \
-                                     marketplace listing"
-                                )
-                            };
-                            pill(ui, &age_label(days), color, Some(&chip_hover));
-                        }
-                    });
-                });
-                // Slug + selection actions on one line: the identifier to
-                // copy on the left, the destructive/secondary actions on the
-                // right.
-                ui.horizontal(|ui| {
-                    copyable_slug(ui, &p.model_id);
+                    if p.vision {
+                        ui.label(
+                            egui::RichText::new("\u{1f441}")
+                                .size(14.0)
+                                .color(egui::Color32::from_rgb(120, 200, 255)),
+                        )
+                        .on_hover_text("Accepts image input (vision LLM)");
+                    }
+                    if p.uncensored {
+                        ui.label(
+                            egui::RichText::new("\u{1f513}")
+                                .size(14.0)
+                                .color(egui::Color32::from_rgb(240, 170, 60)),
+                        )
+                        .on_hover_text(
+                            "Uncensored \u{2014} refusal behavior removed \
+                             (abliterated/uncensored finetune)",
+                        );
+                    }
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                         if ui
                             .small_button("\u{2715}")
@@ -1161,108 +1189,57 @@ impl ParetoWatchApp {
                         .on_hover_text("Add alarm");
                         // Frontier visibility: hidden models keep a faded orb
                         // but leave the frontier line and its entry/exit
-                        // alerts.
+                        // alerts. Glyph-only button — the hover names the
+                        // action and its consequences.
                         let hidden = self
                             .settings
                             .hidden_frontier_models
                             .iter()
                             .any(|m| m == &p.model_id);
-                        let toggle = if hidden {
-                            "\u{2295} Show on frontier"
+                        let (glyph, action) = if hidden {
+                            ("\u{2295}", "Show on frontier")
                         } else {
-                            "\u{2296} Hide from frontier"
+                            ("\u{2296}", "Hide from frontier")
                         };
                         if ui
-                            .button(toggle)
-                            .on_hover_text(
-                                "Hidden models stay on the chart (faded) \u{2014} the frontier \
-                                 line and frontier entry/exit alerts skip them",
-                            )
+                            .button(glyph)
+                            .on_hover_text(format!(
+                                "{action} \u{2014} hidden models stay on the chart (faded); \
+                                 the frontier line and frontier entry/exit alerts skip them"
+                            ))
                             .clicked()
                         {
                             self.toggle_frontier_hidden(&p.model_id);
                         }
                     });
                 });
-                // Modality / pricing-source / frontier status as compact
-                // pills; every pill carries its disclosure on hover.
-                ui.horizontal_wrapped(|ui| {
-                    if p.vision {
-                        pill(
-                            ui,
-                            "vision",
-                            egui::Color32::from_rgb(120, 200, 255),
-                            Some(
-                                "Accepts image input alongside text (catalog architecture \
-                                 metadata)",
-                            ),
-                        );
-                    } else {
-                        pill(
-                            ui,
-                            "text-only",
-                            ui.visuals().weak_text_color(),
-                            Some("No image input in the catalog architecture metadata"),
-                        );
-                    }
-                    if p.uncensored {
-                        pill(
-                            ui,
-                            "uncensored",
-                            egui::Color32::from_rgb(240, 170, 60),
-                            Some(
-                                "Listing presents itself as uncensored \u{2014} refusal behavior \
-                                 removed (abliterated/uncensored finetune)",
-                            ),
-                        );
-                    }
-                    if self.pricing_source == PricingSource::Catalog {
-                        pill(
-                            ui,
-                            "catalog list price",
-                            egui::Color32::from_rgb(240, 170, 60),
-                            Some(
-                                "Catalog pricing is active \u{2014} every model is billed at its \
-                                 published list rates, not the live-market asks",
-                            ),
-                        );
-                    } else if p.live_market {
-                        pill(
-                            ui,
-                            "live market",
-                            egui::Color32::from_rgb(54, 179, 126),
-                            Some(
-                                "Priced at the cheapest live-market ask that actually costs money",
-                            ),
-                        );
-                        if p.free_offer_listed {
-                            free_offer_badge(ui);
+                // Slug on the left, age chip on the right: the identifier to
+                // copy shares its line with the freshness glance.
+                ui.horizontal(|ui| {
+                    copyable_slug(ui, &p.model_id);
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        if let (Some(days), Some(color)) = (age_days, age_color)
+                            && let Some((ts, is_release)) = age
+                        {
+                            let date_text = DateTime::from_timestamp(ts, 0)
+                                .map(|dt| dt.format("%Y-%m-%d").to_string())
+                                .unwrap_or_default();
+                            let chip_hover = if is_release {
+                                format!(
+                                    "Released {date_text} \u{2014} age from the bundled \
+                                     release-date table; color marks freshness"
+                                )
+                            } else {
+                                format!(
+                                    "Listed on Surplus {date_text} \u{2014} no release date \
+                                     on file for this model, so its age runs from the \
+                                     marketplace listing"
+                                )
+                            };
+                            pill(ui, &age_label(days), color, Some(&chip_hover));
                         }
-                    } else {
-                        pill(
-                            ui,
-                            "comparison/catalog price",
-                            ui.visuals().weak_text_color(),
-                            Some("No live-market ask \u{2014} priced from the comparison/catalog list"),
-                        );
-                    }
-                    if let Some((rank, total)) = frontier_rank {
-                        let mut hover = format!(
-                            "#{rank} of {total} on the current Pareto frontier \u{2014} cheapest \
-                             model is #1"
-                        );
-                        if rank == 1 {
-                            hover.push_str(" (this model is the cheapest)");
-                        }
-                        pill(
-                            ui,
-                            &format!("\u{2605} frontier #{rank}"),
-                            egui::Color32::from_rgb(246, 190, 80),
-                            Some(&hover),
-                        );
-                    }
+                    });
                 });
-
                 // Hero band: the plotted price is the headline; the score is
                 // its counterpart on the right.
                 ui.add_space(2.0);
@@ -1292,6 +1269,37 @@ impl ParetoWatchApp {
                                     "Plotted price under the current pricing source, metric, and \
                                      workload mix",
                                 );
+                            // Live-market discount: the list-rate counterpart
+                            // of the plotted price, struck through, with the
+                            // magnitude-colored saving. A listed free ask
+                            // displaces the headline price, so its badge
+                            // qualifies the number it sits next to.
+                            if let Some((list_cost, discount_pct, hover)) = &list_discount {
+                                ui.label(
+                                    egui::RichText::new(format_price_tick(*list_cost))
+                                        .size(12.5)
+                                        .weak()
+                                        .strikethrough(),
+                                )
+                                .on_hover_text(hover);
+                                // One decimal near 100%: a 99.6% saving must
+                                // not round into a "\u{2212}100%" that reads
+                                // as free.
+                                let pct = if *discount_pct >= 99.5 {
+                                    format!("\u{2212}{discount_pct:.1}%")
+                                } else {
+                                    format!("\u{2212}{discount_pct:.0}%")
+                                };
+                                ui.label(
+                                    egui::RichText::new(pct)
+                                        .size(12.5)
+                                        .color(discount_color(*discount_pct)),
+                                )
+                                .on_hover_text(hover);
+                            }
+                            if p.free_offer_listed {
+                                free_offer_badge(ui);
+                            }
                             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                                 ui.label(
                                     egui::RichText::new(format!("{:.1}", p.score))

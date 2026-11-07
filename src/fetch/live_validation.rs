@@ -1056,10 +1056,89 @@ fn live_model_join_audit() {
             .collect()
     }
 
+    /// Parameter-count token shapes the leaderboard and snapshot naming swap
+    /// freely: `30b`, `a22b`, `4t`, `16x7b`, `350m`.
+    fn is_param_count(token: &str) -> bool {
+        !token.is_empty()
+            && token.chars().any(|c| c.is_ascii_digit())
+            && token
+                .chars()
+                .all(|c| c.is_ascii_digit() || matches!(c, 'a' | 'b' | 'k' | 'm' | 't' | 'x'))
+    }
+
+    /// Tokens whose multiset count differs between the two canonical keys,
+    /// both directions: an undated quote joining a dated row carries the
+    /// release tag; a leaderboard row joining a snapshot row carries the
+    /// parameter count the snapshot spells out.
+    fn surplus_tokens<'k>(a: &'k str, b: &'k str) -> Vec<&'k str> {
+        fn counts(s: &str) -> std::collections::HashMap<&str, usize> {
+            let mut map = std::collections::HashMap::new();
+            for token in s.split_whitespace() {
+                *map.entry(token).or_insert(0) += 1;
+            }
+            map
+        }
+        let (ca, cb) = (counts(a), counts(b));
+        let mut out = Vec::new();
+        for (map, other) in [(&ca, &cb), (&cb, &ca)] {
+            for (token, n) in map {
+                for _ in 0..*n - other.get(token).copied().unwrap_or(0).min(*n) {
+                    out.push(*token);
+                }
+            }
+        }
+        out
+    }
+
+    fn same_weight_pairs() -> Vec<(String, String)> {
+        let mut out = Vec::new();
+        for (sku, base, _) in crate::artificial_analysis_snapshot::SAME_WEIGHTS_SKU_ALIASES {
+            let sku_key = crate::bench::matching::benchmark_model_key(sku);
+            let base_key = crate::bench::matching::benchmark_model_key(base);
+            if !sku_key.is_empty() && !base_key.is_empty() {
+                out.push((sku_key.clone(), base_key.clone()));
+                out.push((base_key, sku_key));
+            }
+        }
+        out
+    }
+
+    /// Word tokens a curated same-weights alias adds over its base (pro,
+    /// turbo, thinking, flashx, contributor, …) — explainable because
+    /// curation owns the pair, not because the names say so.
+    fn same_weight_delta_tokens() -> HashSet<String> {
+        let mut out = HashSet::new();
+        for (sku, base, _) in crate::artificial_analysis_snapshot::SAME_WEIGHTS_SKU_ALIASES {
+            let sku_key = crate::bench::matching::benchmark_model_key(sku);
+            let base_key = crate::bench::matching::benchmark_model_key(base);
+            for token in surplus_tokens(&sku_key, &base_key) {
+                out.insert(token.to_owned());
+            }
+        }
+        out
+    }
+
+    fn pair_in(pairs: &[(String, String)], a: &str, b: &str) -> bool {
+        pairs.iter().any(|(x, y)| {
+            (x.as_str() == a && y.as_str() == b) || (x.as_str() == b && y.as_str() == a)
+        })
+    }
+
+    fn token_explainable(token: &str, deltas: &HashSet<String>) -> bool {
+        token.chars().all(|c| c.is_ascii_digit())
+            || crate::bench::matching::is_model_modifier(token)
+            || is_param_count(token)
+            || deltas.contains(token)
+    }
+
     let client = validation_client();
     let settings = Settings::default();
     let snapshot = super::fetch_prices(&client, &settings).expect("Surplus price fetch failed");
     println!("catalogue: {} quotes", snapshot.quotes.len());
+
+    let same_weight_pairs = same_weight_pairs();
+    let delta_tokens = same_weight_delta_tokens();
+    let distinct_build_pairs = crate::bench::matching::distinct_build_key_pairs();
 
     let mut suspicious_total = 0usize;
     let mut quotes_with_any_match = HashSet::new();
@@ -1102,8 +1181,20 @@ fn live_model_join_audit() {
             } else {
                 (&q_model, &b_slug)
             };
-            let explainable = keys_differ_only_by_release_tag(pair_a, pair_b)
-                || version_seq(pair_a) == version_seq(pair_b);
+            // Same version numbers alone do NOT make a join explainable: the
+            // surplus word tokens must each be a digit tag, a deployment or
+            // effort modifier, a parameter count, or a curated alias delta —
+            // anything else is a word naming a different build (the
+            // `qwen 3 8 flash` ↔ `qwen 3 8 flash next` shape the old rule
+            // blessed because both version sequences read [3, 8]). A curated
+            // distinct-build pair is never explainable, whatever the names.
+            let explainable = !pair_in(&distinct_build_pairs, pair_a, pair_b)
+                && (keys_differ_only_by_release_tag(pair_a, pair_b)
+                    || pair_in(&same_weight_pairs, pair_a, pair_b)
+                    || (version_seq(pair_a) == version_seq(pair_b)
+                        && surplus_tokens(pair_a, pair_b)
+                            .iter()
+                            .all(|t| token_explainable(t, &delta_tokens))));
             if !explainable {
                 suspicious += 1;
                 suspicious_total += 1;

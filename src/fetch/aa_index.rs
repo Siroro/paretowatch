@@ -224,6 +224,10 @@ pub(crate) fn overlay_live_rows(
         .unwrap_or(crate::artificial_analysis_snapshot::ARTIFICIAL_ANALYSIS_SNAPSHOT_VERSION);
     let mut rows = bundled;
     let keys: Vec<String> = rows.iter().map(|r| benchmark_model_key(&r.slug)).collect();
+    // Distinct-build families never overlay onto each other, so a live entry
+    // for one side can never re-point a bundled row of the other (and at the
+    // 0.80 bar the undated/dated Qwen3.8 Flash pair would).
+    let non_joins = crate::bench::matching::distinct_build_key_pairs();
 
     // Base key -> live score applied to that row, so SKU aliases can follow.
     let mut applied: Vec<(String, f64)> = Vec::new();
@@ -235,6 +239,12 @@ pub(crate) fn overlay_live_rows(
         let mut best_score = 0.0_f64;
         for (idx, key) in keys.iter().enumerate() {
             if key.is_empty() {
+                continue;
+            }
+            if non_joins
+                .iter()
+                .any(|(x, y)| (x == &entry.key && y == key) || (y == &entry.key && x == key))
+            {
                 continue;
             }
             let similarity = if *key == entry.key {

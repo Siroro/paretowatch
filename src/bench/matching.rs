@@ -2,6 +2,7 @@
 //! canonicalization, and the fuzzy join between Surplus quotes and
 //! benchmark rows.
 
+use crate::artificial_analysis_snapshot::DISTINCT_BUILD_NON_JOINS;
 use crate::theme::{canonical_group, infer_creator};
 use crate::types::{Benchmark, Quote};
 
@@ -17,6 +18,8 @@ pub(crate) fn best_benchmark_match<'a>(
     } else {
         &quote.creator
     });
+    // Distinct-build pairs (both orientations) are checked once per join.
+    let non_joins = distinct_build_key_pairs();
 
     // An exact canonical model key is stronger evidence than provider metadata.
     // Several public leaderboards omit/mislabel the creator while still publishing
@@ -29,6 +32,16 @@ pub(crate) fn best_benchmark_match<'a>(
         return Some(exact);
     }
 
+    // An uncensored listing is a modified-weights derivative of whatever it
+    // names (abliteration, heretic finetunes, …), so its only honest
+    // benchmark is an exact row of its own — the exact branch above, the
+    // curated `Abliterated Large V2` ~proxy pattern. Fuzzy inheritance
+    // handed base-checkpoint scores to finetunes (GLM-5.3 Flash Uncensored
+    // riding GLM-5.3-Flash on seven boards, found 2026-11-02).
+    if quote.uncensored {
+        return None;
+    }
+
     let mut best: Option<(&Benchmark, f64)> = None;
     for b in benchmarks {
         let b_creator = canonical_creator(&b.creator);
@@ -37,6 +50,13 @@ pub(crate) fn best_benchmark_match<'a>(
         }
         let b_key_slug = benchmark_model_key(&b.slug);
         let b_key_name = benchmark_model_key(&b.name);
+        // A curated distinct-build pair never joins, however similar the
+        // names read: the fuzzy bar below is exactly at 0.80 for the shape
+        // this table exists for (the undated Qwen3.8 Flash SKUs vs the
+        // Flash-Next preview).
+        if is_distinct_build_join(&q_model, &q_name, &b_key_slug, &b_key_name, &non_joins) {
+            continue;
+        }
         let mut score =
             token_jaccard(&q_name, &b_key_name).max(token_jaccard(&q_model, &b_key_slug));
         // Dated releases keep their release tag in the canonical key (see
@@ -53,6 +73,38 @@ pub(crate) fn best_benchmark_match<'a>(
         }
     }
     best.map(|(b, _)| b)
+}
+
+/// Canonical-key pairs (both orientations flattened) whose families are
+/// different builds — [`DISTINCT_BUILD_NON_JOINS`]. A quote on one side must
+/// never inherit the other side's benchmark rows, on any board.
+pub(crate) fn distinct_build_key_pairs() -> Vec<(String, String)> {
+    let mut out = Vec::new();
+    for (a, b) in DISTINCT_BUILD_NON_JOINS {
+        let key_a = benchmark_model_key(a);
+        let key_b = benchmark_model_key(b);
+        if !key_a.is_empty() && !key_b.is_empty() && key_a != key_b {
+            out.push((key_a.clone(), key_b.clone()));
+            out.push((key_b, key_a));
+        }
+    }
+    out
+}
+
+/// True when the quote keys and the row keys pair up as distinct builds: any
+/// of the four key combinations the fuzzy matcher could ride on landing in
+/// the non-join table blocks the row. (`distinct_build_key_pairs` flattens
+/// both orientations, so one direction is checked here.)
+fn is_distinct_build_join(
+    q_model: &str,
+    q_name: &str,
+    b_slug: &str,
+    b_name: &str,
+    non_joins: &[(String, String)],
+) -> bool {
+    non_joins
+        .iter()
+        .any(|(x, y)| (x == q_model || x == q_name) && (y == b_slug || y == b_name))
 }
 
 /// True when one canonical key equals the other plus only MMDD-style release
@@ -343,6 +395,83 @@ mod tests {
             "deepseek v4 flash 0731"
         ));
         assert_eq!(token_jaccard("sonnet 5 5", "sonnet 5 5"), 1.0);
+    }
+
+    #[test]
+    fn distinct_build_skus_never_inherit_a_differently_built_rows_score() {
+        // The undated Qwen3.8 Flash SKU shares 4 of 5 canonical tokens with
+        // the Aug-26 Flash-Next preview (`qwen 3 8 flash` vs
+        // `qwen 3 8 flash next`) — exactly the 0.80 fuzzy bar. They are
+        // different builds (AA deleted the undated page; only the preview is
+        // rated), so the join must be refused on every side.
+        let flash_next = score_benchmark(
+            "Qwen3.8-Flash-Next",
+            1575.0,
+            None,
+            None,
+            BenchmarkKind::Model,
+        );
+        for surplus_id in ["qwen3.8-flash", "qwen3.8-omni-flash"] {
+            let q = test_quote(surplus_id, 1.0, true);
+            assert!(
+                best_benchmark_match(&q, std::slice::from_ref(&flash_next)).is_none(),
+                "{surplus_id} must not inherit the Flash-Next preview's rows"
+            );
+        }
+        // Symmetric: a Flash-Next quote must not ride an undated-family row.
+        let q = test_quote("qwen3-8-flash-next", 1.0, true);
+        let undated = score_benchmark("Qwen3.8 Flash", 20.0, None, None, BenchmarkKind::Model);
+        assert!(best_benchmark_match(&q, &[undated]).is_none());
+
+        // The guard is narrow: everything it does not name still joins.
+        // A dated refresh of the undated family keeps its fallback join…
+        let q = test_quote("qwen3.8-flash", 1.0, true);
+        let dated = score_benchmark("Qwen3.8 Flash 1019", 29.0, None, None, BenchmarkKind::Model);
+        assert!(best_benchmark_match(&q, &[dated]).is_some());
+        // …and so does the Flash-Next preview against its own family rows.
+        let q = test_quote("qwen3-8-flash-next", 1.0, true);
+        assert!(best_benchmark_match(&q, &[flash_next]).is_some());
+    }
+
+    #[test]
+    fn uncensored_listings_never_fuzzy_join_a_base_checkpoints_score() {
+        // An uncensored/abliterated listing is a modified-weights derivative
+        // of whatever it names. Its only honest benchmark is an exact row of
+        // its own; fuzzy inheritance handed base scores to finetunes
+        // (GLM-5.3 Flash Uncensored riding GLM-5.3-Flash on seven boards).
+        let mut q = test_quote("glm-5.3-flash-uncensored", 1.0, true);
+        q.uncensored = true;
+        let base = score_benchmark("GLM-5.3-Flash", 41.9, None, None, BenchmarkKind::Model);
+        assert!(best_benchmark_match(&q, &[base]).is_none());
+        // An exact row of the derivative itself still joins (the curated
+        // ~proxy pattern, `Abliterated Large V2`).
+        let own = score_benchmark(
+            "GLM-5.3-Flash-Uncensored",
+            41.9,
+            None,
+            None,
+            BenchmarkKind::Model,
+        );
+        assert!(best_benchmark_match(&q, &[own]).is_some());
+    }
+
+    #[test]
+    fn family_variant_listings_do_not_inherit_the_base_models_rows() {
+        // Tier and family siblings the audit surfaced riding base rows at
+        // exactly the 0.80 bar: Vision-language and Coder variants are
+        // different models, and Flash-Lite is a different tier from Flash.
+        for (variant, base) in [
+            ("Qwen3 VL 235B A22B", "Qwen3 235B A22B"),
+            ("Qwen3 Coder 30B A3B Instruct", "Qwen3 30B A3B"),
+            ("Gemini 3.5 Flash Lite", "Gemini 3.5 Flash"),
+        ] {
+            let q = test_quote(variant, 1.0, true);
+            let row = score_benchmark(base, 50.0, None, None, BenchmarkKind::Model);
+            assert!(
+                best_benchmark_match(&q, &[row]).is_none(),
+                "{variant} must not inherit {base}'s rows"
+            );
+        }
     }
 
     #[test]

@@ -989,6 +989,16 @@ pub(crate) fn build_agentic_composite(
             });
         }
 
+        // A 0-source row plots its standing alone (the prior); labeling it
+        // "measured" would claim board evidence the composite never weighed
+        // (the Flash-Next row entered at its insertion-ranked ~est standing
+        // looking like a measurement).
+        let (measured_label, measured_value) = if contribs.is_empty() {
+            ("estimated", prior_pct)
+        } else {
+            ("measured", measured)
+        };
+
         let mut representative = representative.unwrap_or(Benchmark {
             slug: key.clone(),
             name: key.clone(),
@@ -1012,9 +1022,10 @@ pub(crate) fn build_agentic_composite(
             String::new()
         };
         representative.name = format!(
-            "{} [measured {:.1} · adjusted {:.1} · {} · {} sources · prior {}{} · {}]",
+            "{} [{} {:.1} · adjusted {:.1} · {} · {} sources · prior {}{} · {}]",
             clean_benchmark_display_name(&representative.name),
-            measured,
+            measured_label,
+            measured_value,
             score,
             evidence_tier(coverage),
             contribs.len(),
