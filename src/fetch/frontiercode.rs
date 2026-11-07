@@ -15,15 +15,16 @@ use reqwest::blocking::Client;
 use serde_json::Value;
 
 use super::fetch_json;
-use crate::theme::{canonical_group, infer_creator};
+use crate::model_id::{canonical_group, infer_creator};
+use crate::types::score_benchmark;
 use crate::types::{Benchmark, BenchmarkKind};
 
 const FRONTIERCODE_DATA_URL: &str = "https://cognition.com/data/frontiercode-leaderboard/data.json";
 const FRONTIERCODE2_DATA_URL: &str = "https://cognition.com/data/frontier-code-2.0/data.json";
 
-/// Reasoning efforts the source names as tiers. Anything else (`none`, or a
-/// raw parameter like `0.99`) is a run configuration, not an effort label.
-const NAMED_EFFORTS: [&str; 5] = ["low", "medium", "high", "xhigh", "max"];
+// FrontierCode names effort tiers with the same words AA does; anything
+// else (`none`, or a raw parameter like `0.99`) is a run configuration.
+use super::aa_names::NAMED_EFFORTS;
 
 pub(crate) fn fetch_frontiercode(client: &Client) -> Result<Vec<Benchmark>> {
     let root = fetch_json(client, FRONTIERCODE_DATA_URL, "FrontierCode leaderboard")?;
@@ -151,7 +152,7 @@ fn parse_frontiercode_board(board: &Value) -> Vec<Benchmark> {
         let reasoning_effort = NAMED_EFFORTS.contains(&effort).then_some(effort.to_owned());
         let score = if fraction_scale { score * 100.0 } else { score };
         let score = score.clamp(0.0, 100.0);
-        let mut b = super::score_benchmark(
+        let mut b = score_benchmark(
             slugify(model),
             score,
             agent.clone(),

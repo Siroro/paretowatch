@@ -9,9 +9,9 @@ use reqwest::blocking::Client;
 use serde_json::Value;
 
 use super::json_shape;
-use super::{number_value, score_benchmark};
-use crate::bench::matching::normalize;
-use crate::types::{Benchmark, BenchmarkKind};
+use super::number_value;
+use crate::model_id::normalize;
+use crate::types::{Benchmark, BenchmarkKind, score_benchmark};
 
 pub(crate) const TERMINAL_BENCH_HARBOR_URL: &str =
     "https://ofhuhcpkvzjlejydnvyd.supabase.co/functions/v1/leaderboard-read";

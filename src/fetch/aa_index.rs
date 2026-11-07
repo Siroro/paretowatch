@@ -24,11 +24,11 @@ use anyhow::{Result, anyhow};
 use regex::Regex;
 use reqwest::blocking::Client;
 
-use super::aa_evals::{NAMED_EFFORTS, alias_display_name, split_aa_display_name};
+use super::aa_names::{classify_aa_name, variant_preference};
 use super::fetch_text;
 use crate::artificial_analysis_snapshot::{SAME_WEIGHTS_SKU_ALIASES, artificial_analysis_snapshot};
-use crate::bench::matching::{benchmark_model_key, token_jaccard};
-use crate::types::{Benchmark, BenchmarkKind};
+use crate::model_id::{benchmark_model_key, token_jaccard};
+use crate::types::{Benchmark, BenchmarkKind, score_benchmark};
 
 const AA_LEADERBOARD_URL: &str = "https://artificialanalysis.ai/leaderboards/models";
 
@@ -163,42 +163,6 @@ pub(crate) fn parse_live_entries(html: &str) -> Vec<LiveEntry> {
     out
 }
 
-/// Split a leaderboard `shortName` into its family identity: canonical key,
-/// base display name (post-alias), reasoning-effort variant, and the
-/// non-reasoning marker. Shared by the Intelligence Index reads and the
-/// standardized-speed reads so both fold variants identically.
-pub(crate) fn classify_aa_name(short: &str) -> Option<(String, String, Option<String>, bool)> {
-    let trimmed = short.trim();
-    let mut non_reasoning = false;
-    let mut probe = trimmed;
-    if let Some(open) = trimmed.rfind(" (")
-        && trimmed.ends_with(')')
-        && trimmed[open + 2..]
-            .trim_end_matches(')')
-            .to_ascii_lowercase()
-            .starts_with("non-reasoning")
-    {
-        non_reasoning = true;
-        probe = trimmed[..open].trim();
-    }
-    let (base, effort) = split_aa_display_name(probe);
-    if base.is_empty() {
-        return None;
-    }
-    let base = alias_display_name(&base).to_owned();
-    Some((benchmark_model_key(&base), base, effort, non_reasoning))
-}
-
-/// Variant preference order shared by every AA read: bare > named efforts
-/// (max first) > explicit non-reasoning.
-pub(crate) fn variant_preference(effort: Option<&str>, non_reasoning: bool) -> usize {
-    if non_reasoning {
-        return 0;
-    }
-    let rank = |e: &str| NAMED_EFFORTS.iter().position(|t| *t == e).unwrap_or(0) + 1;
-    1 + effort.map_or(0, rank)
-}
-
 /// Split a leaderboard `shortName` into a family entry, folding the
 /// non-reasoning marker into the variant class.
 fn classify_short_name(short: &str, score: f64) -> Option<LiveEntry> {
@@ -267,7 +231,7 @@ pub(crate) fn overlay_live_rows(
                 applied.push((benchmark_model_key(&slug), entry.score));
             }
             None => {
-                let mut row = super::score_benchmark(
+                let mut row = score_benchmark(
                     entry.name.clone(),
                     entry.score,
                     None,
@@ -307,11 +271,11 @@ pub(crate) fn overlay_live_rows(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::bench::matching::benchmark_model_key;
+    use crate::model_id::benchmark_model_key;
 
     fn entry(name: &str, score: f64) -> LiveEntry {
-        let (base, effort) = split_aa_display_name(name);
-        let base = alias_display_name(&base).to_owned();
+        let (base, effort) = crate::fetch::aa_names::split_aa_display_name(name);
+        let base = crate::fetch::aa_names::alias_display_name(&base).to_owned();
         LiveEntry {
             key: benchmark_model_key(&base),
             name: base,

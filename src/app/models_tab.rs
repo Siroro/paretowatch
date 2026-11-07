@@ -10,15 +10,14 @@
 use eframe::egui;
 use serde::{Deserialize, Serialize};
 
-use crate::bench::normalize;
-use crate::fetch::{ON_DEMAND_REFRESH_SECS, performance_key};
+use crate::fetch::performance::{ON_DEMAND_REFRESH_SECS, performance_key};
 use crate::format::{
     format_compact_number, format_compact_usd, format_latency_ms, format_price_tick,
     format_throughput, format_usd,
 };
-use crate::theme::{
-    PRICE_DOWN, copyable_slug, creator_color, discount_color, free_offer_badge, group_label,
-};
+use crate::model_id::group_label;
+use crate::model_id::normalize;
+use crate::theme::{PRICE_DOWN, copyable_slug, creator_color, discount_color, free_offer_badge};
 use crate::types::{
     AlertMode, CostBasis, ModalityFilter, PriceMetric, Quote, SpeedFilter, UncensoredFilter,
     assumed_cache_price, token_workload_cost,

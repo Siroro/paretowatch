@@ -4,11 +4,9 @@
 pub(crate) mod matching;
 pub(crate) mod scoring;
 
-pub(crate) use matching::*;
-pub(crate) use scoring::*;
-
 use std::collections::HashMap;
 
+use crate::model_id::{benchmark_model_key, normalize};
 use crate::types::{
     Benchmark, BenchmarkKind, BenchmarkSource, ComparisonMode, default_common_scaffold,
 };
@@ -139,7 +137,7 @@ pub(crate) fn benchmarks_for_source(
     common_scaffold: &str,
 ) -> Vec<Benchmark> {
     if let Some(flavor) = source.composite_flavor() {
-        return build_agentic_composite(sets, mode, common_scaffold, flavor);
+        return scoring::build_agentic_composite(sets, mode, common_scaffold, flavor);
     }
     let Some(rows) = sets.get(&source) else {
         return Vec::new();
@@ -164,8 +162,9 @@ pub(crate) fn benchmarks_for_source(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::fetch::score_benchmark;
+    use crate::bench::matching::best_benchmark_match;
     use crate::testfix::test_quote;
+    use crate::types::score_benchmark;
     use crate::types::{BenchmarkKind, BenchmarkSource, ComparisonMode};
     use std::collections::HashMap;
 

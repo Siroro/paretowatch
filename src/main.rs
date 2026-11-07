@@ -9,6 +9,7 @@ mod benchmark_cache;
 mod fetch;
 mod format;
 mod history;
+mod model_id;
 mod notifications;
 mod pareto;
 mod performance_cache;

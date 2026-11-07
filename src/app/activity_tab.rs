@@ -5,7 +5,9 @@ use eframe::egui;
 use egui_plot::{Line, Plot, PlotPoints};
 use std::collections::HashMap;
 
-use crate::bench::{benchmarks_for_source, best_benchmark_match, format_percentile};
+use crate::bench::benchmarks_for_source;
+use crate::bench::matching::best_benchmark_match;
+use crate::bench::scoring::format_percentile;
 use crate::format::{format_compact_number, format_compact_usd, format_price_tick};
 use crate::history::track::{blended_series, historical_low, step_points};
 use crate::history::ui::{HistoryMetric, HistoryRange};
@@ -755,7 +757,10 @@ impl ParetoWatchApp {
 
         // The expanded listing detail is one of the on-demand triggers for
         // this model's per-provider route breakdown.
-        self.ensure_performance(&row.quote.model, crate::fetch::ON_DEMAND_REFRESH_SECS);
+        self.ensure_performance(
+            &row.quote.model,
+            crate::fetch::performance::ON_DEMAND_REFRESH_SECS,
+        );
         self.market_quality_section(ui, &row.quote);
     }
 }
@@ -916,9 +921,9 @@ fn format_listing_axis(value: f64, span_seconds: f64) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::fetch::score_benchmark;
     use crate::testfix::test_quote;
     use crate::types::BenchmarkKind;
+    use crate::types::score_benchmark;
 
     #[test]
     fn coverage_counts_only_scored_matching_boards() {

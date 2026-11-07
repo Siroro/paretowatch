@@ -19,7 +19,7 @@ use reqwest::blocking::Client;
 use serde_json::Value;
 
 use super::fetch_text;
-use crate::theme::infer_creator;
+use crate::model_id::infer_creator;
 use crate::types::{Benchmark, BenchmarkKind};
 
 pub(crate) const LIVEBENCH_HOME_URL: &str = "https://livebench.ai/";

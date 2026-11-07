@@ -15,13 +15,12 @@
 use chrono::Utc;
 use regex::Regex;
 
-use super::aa_evals::NAMED_EFFORTS;
-use super::aa_index::classify_aa_name;
-use crate::bench::matching::{
+use super::aa_names::{NAMED_EFFORTS, classify_aa_name};
+use crate::model_id::infer_creator;
+use crate::model_id::{
     benchmark_model_key, canonical_creator, creators_compatible, keys_differ_only_by_release_tag,
     token_jaccard,
 };
-use crate::theme::infer_creator;
 use crate::types::{AaSpeedEntry, AaSpeedSnapshot, Quote};
 
 /// A `shortName`/`modelCreatorName`/speed field may sit this far into the
@@ -247,7 +246,7 @@ pub(crate) fn aa_speed_for_quote<'a>(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::fetch::aa_evals::alias_display_name;
+    use crate::fetch::aa_names::alias_display_name;
     use crate::testfix::test_quote;
 
     /// Family lookup by display name, for tests.

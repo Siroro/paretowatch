@@ -8,7 +8,8 @@ use super::benchmarks_for_source;
 use crate::artificial_analysis_snapshot::{
     PRE_V5_READS, SAME_WEIGHTS_SKU_ALIASES, reanchor_pre_v5_score,
 };
-use crate::bench::matching::{benchmark_model_key, best_benchmark_match};
+use crate::bench::matching::best_benchmark_match;
+use crate::model_id::benchmark_model_key;
 use crate::types::{
     Benchmark, BenchmarkKind, BenchmarkSource, ComparisonMode, CompositeFlavor,
     HARNESS_DEMOTION_FACTOR, Quote,
@@ -1251,9 +1252,9 @@ pub(crate) fn benchmark_consensus_for_quote(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::bench::matching::benchmark_model_key;
-    use crate::fetch::score_benchmark;
+    use crate::model_id::benchmark_model_key;
     use crate::testfix::test_quote;
+    use crate::types::score_benchmark;
     use crate::types::{BenchmarkKind, BenchmarkSource, ComparisonMode};
     use std::collections::HashMap;
 

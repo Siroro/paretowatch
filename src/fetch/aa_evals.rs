@@ -33,62 +33,14 @@ use anyhow::{Result, anyhow};
 use regex::Regex;
 use reqwest::blocking::Client;
 
-use super::{collapse_whitespace, fetch_text, score_benchmark, strip_html_tags};
-use crate::bench::matching::benchmark_model_key;
-use crate::types::{Benchmark, BenchmarkKind};
+use super::aa_names::{alias_display_name, split_aa_display_name};
+use super::{collapse_whitespace, fetch_text, strip_html_tags};
+use crate::model_id::benchmark_model_key;
+use crate::types::{Benchmark, BenchmarkKind, score_benchmark};
 
 const AA_BRIEFCASE_URL: &str = "https://artificialanalysis.ai/evaluations/aa-briefcase";
 const AUTOMATIONBENCH_URL: &str = "https://artificialanalysis.ai/evaluations/automationbench-aa";
 const AA_3D_URL: &str = "https://artificialanalysis.ai/evaluations/aa-3d";
-
-/// Effort tiers AA names in its variant suffixes. Anything else inside the
-/// parentheses (`Default Fallback`, run notes) is configuration, not effort.
-pub(crate) const NAMED_EFFORTS: [&str; 5] = ["low", "medium", "high", "xhigh", "max"];
-
-/// The AA boards rate some models under short display names that normalize
-/// differently from the Surplus listing. Map them to the listing name so
-/// exact-key joins hit first.
-pub(crate) fn alias_display_name(base: &str) -> &str {
-    match base {
-        // Surplus lists "Thinking Machines: Inkling"; the creator prefix is
-        // not one benchmark matching strips.
-        "Inkling" => "Thinking Machines: Inkling",
-        // The v5.0 (2026-10-28) boards drop parameter counts and creator
-        // prefixes from these names; the snapshot rows (and Surplus display
-        // names) carry the full forms, so alias them rather than rely on the
-        // 0.80 fuzzy bar (or miss the join entirely — these fall well under
-        // it).
-        "Nemotron 3 Ultra" => "NVIDIA Nemotron 3 Ultra 550B A55B",
-        "Muse Glimmer" => "Muse Glimmer 30B",
-        "Beam 1.0" => "Reflection: Beam 1.0 501B A23B",
-        "Ling 3.1 Flash 1019" => "inclusionAI: Ling 3.1 Flash 1019",
-        other => other,
-    }
-}
-
-/// Split an AA display name into its base model and effort tier:
-/// `Claude Sonnet 5.5 (Max, Default Fallback)` → (`Claude Sonnet 5.5`, max),
-/// `Claude Opus 5.5 (max with fallback)` → (`Claude Opus 5.5`, max). A
-/// parenthetical that does not LEAD with an effort tier is part of the model
-/// name (`K2 Horizon (375B A23B)`) and stays.
-pub(crate) fn split_aa_display_name(raw: &str) -> (String, Option<String>) {
-    let raw = raw.trim();
-    let Some(open) = raw.rfind(" (") else {
-        return (raw.to_owned(), None);
-    };
-    let base = raw[..open].trim();
-    if base.is_empty() {
-        return (raw.to_owned(), None);
-    }
-    let inner = raw[open + 2..].trim_end_matches(')');
-    let Some(first) = inner.split([',', ' ']).find(|token| !token.is_empty()) else {
-        return (raw.to_owned(), None);
-    };
-    match NAMED_EFFORTS.iter().find(|e| e.eq_ignore_ascii_case(first)) {
-        Some(effort) => (base.to_owned(), Some((*effort).to_owned())),
-        None => (raw.to_owned(), None),
-    }
-}
 
 fn build_row(raw_name: &str, score: f64, url_note: &str) -> Option<Benchmark> {
     let (base, effort) = split_aa_display_name(raw_name);
@@ -276,32 +228,6 @@ mod tests {
     use super::*;
     use crate::bench::matching::best_benchmark_match;
     use crate::testfix::test_quote;
-
-    #[test]
-    fn splits_effort_suffixes_from_display_names() {
-        assert_eq!(
-            split_aa_display_name("Claude Sonnet 5.5 (Max, Default Fallback)"),
-            ("Claude Sonnet 5.5".to_owned(), Some("max".to_owned()))
-        );
-        assert_eq!(
-            split_aa_display_name("Gemini 4 Argon (high)"),
-            ("Gemini 4 Argon".to_owned(), Some("high".to_owned()))
-        );
-        // AutomationBench shortNames spell the fallback without a comma.
-        assert_eq!(
-            split_aa_display_name("Claude Opus 5.5 (max with fallback)"),
-            ("Claude Opus 5.5".to_owned(), Some("max".to_owned()))
-        );
-        assert_eq!(
-            split_aa_display_name("MiMo-V2.6-Pro"),
-            ("MiMo-V2.6-Pro".to_owned(), None)
-        );
-        // A parenthetical that is not an effort tier stays part of the name.
-        assert_eq!(
-            split_aa_display_name("K2 Horizon (375B A23B)"),
-            ("K2 Horizon (375B A23B)".to_owned(), None)
-        );
-    }
 
     #[test]
     fn parses_briefcase_elo_table() {

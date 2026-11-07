@@ -10,8 +10,8 @@ use serde_json::Value;
 
 use super::fetch_json;
 use super::{first_number_path, first_string_path, json_shape, string_at};
-use crate::bench::matching::normalize;
-use crate::theme::infer_creator;
+use crate::model_id::infer_creator;
+use crate::model_id::normalize;
 use crate::types::*;
 
 pub(crate) const SURPLUS_MARKETS_URL: &str = "https://api.surplusintelligence.ai/api/markets";

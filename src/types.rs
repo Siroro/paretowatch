@@ -1,13 +1,14 @@
 //! Shared data model: settings, alert rules, market quotes, and benchmark
 //! rows, plus their small pure helpers (price blending, liquidity filters,
-//! labels). No fetching, scoring, or UI code lives in this module.
+//! labels, and the benchmark-row constructor every feed builds rows with).
+//! No fetching, scoring, or UI code lives in this module.
 
 use std::collections::HashMap;
 
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
-use crate::bench::matching::normalize;
+use crate::model_id::normalize;
 
 pub(crate) const VALS_SRE_BENCH_URL: &str = "https://www.vals.ai/benchmarks/srebench";
 pub(crate) const FRONTIERCODE_URL: &str = "https://cognition.com/frontiercode";
@@ -1422,6 +1423,33 @@ pub(crate) struct Benchmark {
     /// Surplus quotes.
     pub(crate) tokens_per_task: Option<f64>,
     pub(crate) token_profile: Option<String>,
+}
+
+/// The one Benchmark constructor every feed shares: one score in all three
+/// metric slots, the creator inferred from the model name, and optional
+/// agent/effort metadata. Board-specific parsers rename/tag the row after
+/// calling this.
+pub(crate) fn score_benchmark(
+    model: impl Into<String>,
+    score: f64,
+    agent: Option<String>,
+    reasoning_effort: Option<String>,
+    kind: BenchmarkKind,
+) -> Benchmark {
+    let model = model.into();
+    Benchmark {
+        slug: model.clone(),
+        name: model.clone(),
+        creator: crate::model_id::infer_creator(&model),
+        overall: Some(score),
+        coding: Some(score),
+        agentic_coding: Some(score),
+        agent,
+        reasoning_effort,
+        kind,
+        tokens_per_task: None,
+        token_profile: None,
+    }
 }
 
 #[cfg(test)]

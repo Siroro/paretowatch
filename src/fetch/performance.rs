@@ -17,7 +17,7 @@ use reqwest::blocking::Client;
 use serde_json::Value;
 
 use super::{fetch_json, first_number_path, string_at};
-use crate::bench::matching::normalize;
+use crate::model_id::normalize;
 use crate::types::{ModelPerformance, ProviderPerformance};
 
 pub(crate) const SURPLUS_PERFORMANCE_URL: &str =

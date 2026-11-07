@@ -1,82 +1,10 @@
-//! Creator identification, the chart colour palette, and the small badge
-//! widgets derived from both.
+//! The chart colour palette and the small badge widgets derived from it.
+//! Creator identification (who a row belongs to) lives in
+//! [`crate::model_id`]; this module only decides what it looks like.
 
 use eframe::egui;
 
-use crate::bench::normalize;
-
-/// One canonical display label per lab. The catalog spells the same lab
-/// inconsistently across model rows (`xAI` vs `SpaceXAI`, `Z.ai` vs
-/// `Zhipu AI`, `Alibaba` vs `Qwen` vs `Alibaba Cloud`), which used to split a
-/// single family into several chart colours and legend groups. Everything
-/// that groups, labels, or colours a creator routes through here. Unknown
-/// labs pass through unchanged so each stays its own group.
-pub(crate) fn canonical_group(creator: &str) -> &str {
-    match normalize(creator).as_str() {
-        "xai" | "x ai" | "spacexai" => "xAI",
-        "z ai" | "zai" | "zhipu" | "zhipu ai" => "Z.AI",
-        "alibaba" | "alibaba cloud" | "qwen" => "Alibaba",
-        "openai" | "open ai" => "OpenAI",
-        "google" | "deepmind" | "google deepmind" => "Google",
-        "moonshot" | "moonshot ai" | "kimi" => "Moonshot",
-        "deepseek" | "deepseek ai" => "DeepSeek",
-        "minimax" | "minimax ai" => "MiniMax",
-        "mistral" | "mistral ai" => "Mistral AI",
-        "arcee" | "arcee ai" => "Arcee AI",
-        "meta" | "meta ai" => "Meta",
-        "venice" | "venice ai" | "api venice ai" => "Venice AI",
-        "anthropic" => "Anthropic",
-        "nvidia" => "NVIDIA",
-        "xiaomi" | "mimo" | "mimo ai" => "Xiaomi",
-        "tencent" => "Tencent",
-        "microsoft" => "Microsoft",
-        "cohere" => "Cohere",
-        "ai21" => "AI21",
-        _ => creator,
-    }
-}
-
-pub(crate) fn infer_creator(model: &str) -> String {
-    let n = normalize(model);
-    if n.starts_with("claude ")
-        || n.starts_with("opus ")
-        || n.starts_with("sonnet ")
-        || n.starts_with("haiku ")
-        || n.starts_with("fable ")
-    {
-        "Anthropic".into()
-    } else if n.starts_with("gpt ")
-        || n.starts_with("o1 ")
-        || n.starts_with("o3 ")
-        || n.starts_with("o4 ")
-    {
-        "OpenAI".into()
-    } else if n.starts_with("gemini ") {
-        "Google".into()
-    } else if n.starts_with("grok ") {
-        "xAI".into()
-    } else if n.starts_with("deepseek ") {
-        "DeepSeek".into()
-    } else if n.starts_with("qwen") {
-        "Alibaba".into()
-    } else if n.starts_with("kimi ") {
-        "Moonshot".into()
-    } else if n.starts_with("glm ") {
-        "Z.AI".into()
-    } else if n.starts_with("minimax ") {
-        "MiniMax".into()
-    } else if n.starts_with("mimo ") || n.starts_with("xiaomi ") {
-        "Xiaomi".into()
-    } else if n.starts_with("nemotron ") || n.starts_with("nvidia ") {
-        "NVIDIA".into()
-    } else if n.starts_with("mistral ") {
-        "Mistral AI".into()
-    } else if n.starts_with("arcee ") || n.starts_with("trinity ") {
-        "Arcee AI".into()
-    } else {
-        String::new()
-    }
-}
+use crate::model_id::{canonical_group, normalize};
 
 /// Brand-ish colors for the major labs so model groups read at a glance on
 /// the chart. Everyone else gets a deterministic hue from a hash of the name.
@@ -136,14 +64,6 @@ fn hsl_to_rgb(h: f32, s: f32, l: f32) -> (u8, u8, u8) {
     let m = l - c / 2.0;
     let to_u8 = |v: f32| ((v + m).clamp(0.0, 1.0) * 255.0).round() as u8;
     (to_u8(r1), to_u8(g1), to_u8(b1))
-}
-
-pub(crate) fn group_label(creator: &str) -> &str {
-    if creator.is_empty() {
-        "Unknown"
-    } else {
-        canonical_group(creator)
-    }
 }
 
 /// Semantic price-move colors (buyer's perspective): a price going up is
@@ -235,6 +155,7 @@ pub(crate) fn copyable_slug(ui: &mut egui::Ui, slug: &str) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::model_id::{canonical_group, group_label};
 
     #[test]
     fn catalog_creator_spelling_variants_share_one_group_and_color() {
@@ -251,8 +172,6 @@ mod tests {
         ] {
             let canonical = canonical_group(variants[0]);
             for variant in variants {
-                assert_eq!(canonical_group(variant), canonical, "{variant}");
-                assert_eq!(group_label(variant), canonical, "{variant}");
                 assert_eq!(
                     creator_color(variant),
                     creator_color(canonical),
@@ -260,11 +179,8 @@ mod tests {
                 );
             }
         }
-        // Unknown labs stay their own group (no cross-lab bleed).
-        assert_eq!(canonical_group("Kuaishou"), "Kuaishou");
-        assert_ne!(canonical_group("Kuaishou"), canonical_group("ByteDance"));
-        assert_eq!(canonical_group(""), "");
-        assert_eq!(group_label(""), "Unknown");
+        // Unknown labs get hash colors, never a known lab's brand color.
+        assert_ne!(creator_color("Kuaishou"), creator_color("ByteDance"));
     }
 
     #[test]
@@ -278,15 +194,11 @@ mod tests {
     }
 
     #[test]
-    fn mimo_models_infer_and_color_as_xiaomi() {
-        // Surplus prices rows carry bare IDs like `xiaomi-mimo-v2-5` with no
-        // provider field, and some boards label the creator `MiMo`: both must
-        // land in the Xiaomi group with its brand color, never a hash color.
-        assert_eq!(infer_creator("xiaomi-mimo-v2-5"), "Xiaomi");
-        assert_eq!(infer_creator("MiMo-V2.5"), "Xiaomi");
-        assert_eq!(infer_creator("MiMo-V2.5-Pro"), "Xiaomi");
-        assert_eq!(canonical_group("MiMo"), "Xiaomi");
+    fn mimo_models_color_as_xiaomi() {
+        // Some boards label the creator `MiMo`: it must land in the Xiaomi
+        // group with its brand color, never a hash color.
         assert_eq!(creator_color("MiMo"), creator_color("Xiaomi"));
+        assert_eq!(group_label("MiMo"), "Xiaomi");
     }
 
     #[test]

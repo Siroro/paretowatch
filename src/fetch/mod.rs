@@ -4,6 +4,7 @@
 
 pub(crate) mod aa_evals;
 pub(crate) mod aa_index;
+pub(crate) mod aa_names;
 pub(crate) mod aa_speed;
 pub(crate) mod deepswe;
 pub(crate) mod design_arena;
@@ -16,19 +17,6 @@ pub(crate) mod prices;
 pub(crate) mod swebench_pro;
 pub(crate) mod terminal_bench;
 pub(crate) mod vals_sre;
-
-pub(crate) use aa_evals::*;
-pub(crate) use aa_index::*;
-pub(crate) use aa_speed::*;
-pub(crate) use deepswe::*;
-pub(crate) use design_arena::*;
-pub(crate) use frontiercode::*;
-pub(crate) use livebench::*;
-pub(crate) use performance::*;
-pub(crate) use prices::*;
-pub(crate) use swebench_pro::*;
-pub(crate) use terminal_bench::*;
-pub(crate) use vals_sre::*;
 
 use std::collections::{BTreeMap, HashMap};
 use std::io::Read;
@@ -45,10 +33,22 @@ use reqwest::blocking::Client;
 use serde_json::Value;
 
 use crate::alerts::evaluate_alerts;
+
+use aa_evals::{fetch_aa_3d, fetch_aa_briefcase, fetch_automationbench_aa};
+use aa_index::{fetch_aa_index_and_speed, fetch_artificial_analysis_index};
+
 use crate::notifications::SharedNotifications;
-use crate::theme::infer_creator;
-use crate::types::{Benchmark, BenchmarkKind, BenchmarkSource, Quote, Settings};
+use crate::types::{Benchmark, BenchmarkSource, Quote, Settings};
 use crate::worker::{WorkerCommand, WorkerMessage};
+use deepswe::fetch_deepswe;
+use design_arena::fetch_design_arena;
+use frontiercode::{fetch_frontiercode, fetch_frontiercode2};
+use livebench::fetch_livebench;
+use performance::fetch_models_performance;
+use prices::fetch_prices;
+use swebench_pro::fetch_swebench_pro;
+use terminal_bench::fetch_terminal_bench_4;
+use vals_sre::fetch_vals_sre_bench;
 
 pub(crate) const BENCHMARK_REFRESH_SECS: u64 = 6 * 60 * 60;
 
@@ -355,29 +355,6 @@ pub(crate) fn fetch_benchmark_source(
         BenchmarkSource::CompositeAgentic | BenchmarkSource::CompositeDeployment => {
             Err(anyhow!("Composite is derived locally and is not fetched"))
         }
-    }
-}
-
-pub(crate) fn score_benchmark(
-    model: impl Into<String>,
-    score: f64,
-    agent: Option<String>,
-    reasoning_effort: Option<String>,
-    kind: BenchmarkKind,
-) -> Benchmark {
-    let model = model.into();
-    Benchmark {
-        slug: model.clone(),
-        name: model.clone(),
-        creator: infer_creator(&model),
-        overall: Some(score),
-        coding: Some(score),
-        agentic_coding: Some(score),
-        agent,
-        reasoning_effort,
-        kind,
-        tokens_per_task: None,
-        token_profile: None,
     }
 }
 

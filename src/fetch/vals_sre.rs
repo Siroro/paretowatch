@@ -15,8 +15,8 @@ use reqwest::blocking::Client;
 use serde_json::Value;
 
 use super::fetch_text;
-use super::{number_value, score_benchmark};
-use crate::types::{Benchmark, BenchmarkKind, VALS_SRE_BENCH_URL};
+use super::number_value;
+use crate::types::{Benchmark, BenchmarkKind, VALS_SRE_BENCH_URL, score_benchmark};
 
 pub(crate) fn fetch_vals_sre_bench(client: &Client) -> Result<Vec<Benchmark>> {
     let html = fetch_text(

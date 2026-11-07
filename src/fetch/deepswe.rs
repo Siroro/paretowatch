@@ -7,10 +7,10 @@ use reqwest::blocking::Client;
 use serde_json::Value;
 
 use super::json_shape;
-use super::{fetch_json, number_value, score_benchmark};
-use crate::bench::matching::{model_core, normalize};
+use super::{fetch_json, number_value};
 use crate::format::format_compact_number;
-use crate::types::{Benchmark, BenchmarkKind};
+use crate::model_id::{model_core, normalize};
+use crate::types::{Benchmark, BenchmarkKind, score_benchmark};
 
 pub(crate) const DEEPSWE_LEADERBOARD_URL: &str =
     "https://deepswe.datacurve.ai/artifacts/v1.1/leaderboard-live.json";
@@ -146,7 +146,6 @@ pub(crate) fn reasoning_effort_rank(effort: &str) -> i32 {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::types::*;
 
     #[test]
     fn parses_deepswe_and_prefers_highest_effort() {

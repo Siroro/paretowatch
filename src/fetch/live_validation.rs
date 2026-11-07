@@ -263,8 +263,8 @@ fn live_worker_dispatch_routes_sources() {
 #[ignore = "exploratory: surveys AA board coverage for the v5 gap"]
 fn aa_v5_coverage_survey() {
     use crate::artificial_analysis_snapshot::artificial_analysis_snapshot;
-    use crate::bench::matching::benchmark_model_key;
-    use crate::fetch::aa_evals::{alias_display_name, split_aa_display_name};
+    use crate::fetch::aa_names::{alias_display_name, split_aa_display_name};
+    use crate::model_id::benchmark_model_key;
     use std::collections::{BTreeMap, BTreeSet};
     use std::time::Instant;
 
@@ -536,8 +536,9 @@ fn aa_v5_coverage_survey() {
 #[test]
 #[ignore = "fetches live upstreams"]
 fn live_aa_3d_elo_matches_server_table() {
-    use crate::bench::matching::benchmark_model_key;
-    use crate::fetch::aa_evals::{alias_display_name, parse_aa_3d, split_aa_display_name};
+    use crate::fetch::aa_evals::parse_aa_3d;
+    use crate::fetch::aa_names::{alias_display_name, split_aa_display_name};
+    use crate::model_id::benchmark_model_key;
     use std::collections::BTreeMap;
 
     let client = validation_client();
@@ -644,11 +645,10 @@ fn live_aa_3d_elo_matches_server_table() {
 #[test]
 #[ignore = "fetches live upstreams"]
 fn live_aa_boards_reconcile_with_published_values() {
-    use crate::bench::matching::benchmark_model_key;
-    use crate::fetch::aa_evals::{
-        NAMED_EFFORTS, parse_aa_3d, parse_aa_briefcase, parse_automationbench_aa,
-    };
-    use crate::fetch::aa_index::{classify_aa_name, variant_preference};
+    use crate::fetch::aa_evals::{parse_aa_3d, parse_aa_briefcase, parse_automationbench_aa};
+    use crate::fetch::aa_names::NAMED_EFFORTS;
+    use crate::fetch::aa_names::{classify_aa_name, variant_preference};
+    use crate::model_id::benchmark_model_key;
     use crate::types::AaSpeedSnapshot;
     use std::collections::BTreeMap;
 
@@ -1044,9 +1044,8 @@ fn live_aa_boards_reconcile_with_published_values() {
 #[test]
 #[ignore = "fetches live upstreams"]
 fn live_model_join_audit() {
-    use crate::bench::matching::{
-        benchmark_model_key, best_benchmark_match, keys_differ_only_by_release_tag,
-    };
+    use crate::bench::matching::best_benchmark_match;
+    use crate::model_id::{benchmark_model_key, keys_differ_only_by_release_tag};
     use crate::types::{BenchmarkSource, Settings};
     use std::collections::HashSet;
 
@@ -1093,8 +1092,8 @@ fn live_model_join_audit() {
     fn same_weight_pairs() -> Vec<(String, String)> {
         let mut out = Vec::new();
         for (sku, base, _) in crate::artificial_analysis_snapshot::SAME_WEIGHTS_SKU_ALIASES {
-            let sku_key = crate::bench::matching::benchmark_model_key(sku);
-            let base_key = crate::bench::matching::benchmark_model_key(base);
+            let sku_key = crate::model_id::benchmark_model_key(sku);
+            let base_key = crate::model_id::benchmark_model_key(base);
             if !sku_key.is_empty() && !base_key.is_empty() {
                 out.push((sku_key.clone(), base_key.clone()));
                 out.push((base_key, sku_key));
@@ -1109,8 +1108,8 @@ fn live_model_join_audit() {
     fn same_weight_delta_tokens() -> HashSet<String> {
         let mut out = HashSet::new();
         for (sku, base, _) in crate::artificial_analysis_snapshot::SAME_WEIGHTS_SKU_ALIASES {
-            let sku_key = crate::bench::matching::benchmark_model_key(sku);
-            let base_key = crate::bench::matching::benchmark_model_key(base);
+            let sku_key = crate::model_id::benchmark_model_key(sku);
+            let base_key = crate::model_id::benchmark_model_key(base);
             for token in surplus_tokens(&sku_key, &base_key) {
                 out.insert(token.to_owned());
             }
@@ -1126,7 +1125,7 @@ fn live_model_join_audit() {
 
     fn token_explainable(token: &str, deltas: &HashSet<String>) -> bool {
         token.chars().all(|c| c.is_ascii_digit())
-            || crate::bench::matching::is_model_modifier(token)
+            || crate::model_id::is_model_modifier(token)
             || is_param_count(token)
             || deltas.contains(token)
     }
@@ -1174,8 +1173,8 @@ fn live_model_join_audit() {
                 continue;
             }
             fuzzy += 1;
-            let (pair_a, pair_b) = if crate::bench::matching::token_jaccard(&q_name, &b_name)
-                >= crate::bench::matching::token_jaccard(&q_model, &b_slug)
+            let (pair_a, pair_b) = if crate::model_id::token_jaccard(&q_name, &b_name)
+                >= crate::model_id::token_jaccard(&q_model, &b_slug)
             {
                 (&q_name, &b_name)
             } else {

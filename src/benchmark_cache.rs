@@ -74,8 +74,8 @@ pub(crate) fn save_benchmark_cache(sets: &HashMap<BenchmarkSource, Vec<Benchmark
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::fetch::score_benchmark;
     use crate::types::BenchmarkKind;
+    use crate::types::score_benchmark;
 
     fn sample_sets() -> HashMap<BenchmarkSource, Vec<Benchmark>> {
         let mut sets = HashMap::new();

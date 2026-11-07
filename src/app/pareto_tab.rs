@@ -9,17 +9,19 @@ use eframe::egui;
 use egui_plot::{HoverPosition, Line, Plot, PlotPoint, PlotPoints, Points, Text};
 
 use crate::artificial_analysis_snapshot::ARTIFICIAL_ANALYSIS_SNAPSHOT_DATE;
-use crate::bench::{format_percentile, normalize};
-use crate::fetch::ON_DEMAND_REFRESH_SECS;
+use crate::bench::scoring::format_percentile;
+use crate::fetch::performance::ON_DEMAND_REFRESH_SECS;
 use crate::format::{
     format_compact_number, format_compact_usd, format_latency_ms, format_price_tick,
     format_throughput,
 };
 use crate::history::track::{ModelSeries, blended_series, clip_series_to_window, historical_low};
+use crate::model_id::group_label;
+use crate::model_id::normalize;
 use crate::pareto::{JoinedPoint, pareto_search_matches, price_from_plot_x, price_to_plot_x};
 use crate::theme::{
     PRICE_DOWN, PRICE_UP, age_color, age_label, copyable_slug, creator_color, discount_color,
-    free_offer_badge, group_label,
+    free_offer_badge,
 };
 use crate::types::{
     ANY_MODEL, AgeFilter, AlertMode, BenchmarkMetric, BenchmarkSource, ComparisonMode, CostBasis,

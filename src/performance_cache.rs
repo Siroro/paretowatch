@@ -98,7 +98,7 @@ pub(crate) fn save_performance_cache(rows: &mut HashMap<String, ModelPerformance
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::fetch::performance_key;
+    use crate::fetch::performance::performance_key;
     use crate::types::ProviderPerformance;
     use chrono::{Duration, Utc};
 

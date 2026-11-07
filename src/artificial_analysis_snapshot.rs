@@ -388,7 +388,7 @@
 //! for the missing evidence instead of renormalizing it away, so absent rows
 //! cost coverage confidence but never invent capability.
 
-use crate::fetch::score_benchmark;
+use crate::types::score_benchmark;
 use crate::types::{Benchmark, BenchmarkKind};
 
 pub(crate) const ARTIFICIAL_ANALYSIS_SNAPSHOT_DATE: &str = "2026-10-29";
@@ -806,51 +806,6 @@ pub(crate) const SAME_WEIGHTS_SKU_ALIASES: &[(&str, &str, &str)] = &[
     ),
 ];
 
-/// Canonical-key pairs that are DIFFERENT BUILDS and must never join — not
-/// exactly, and not through the 0.80 fuzzy bar in
-/// [`crate::bench::matching::best_benchmark_match`] (or the live overlay's
-/// matching loop in [`crate::fetch::aa_index::overlay_live_rows`]).
-///
-/// The shape that forces this table: two family names whose canonical keys
-/// differ by one non-numeric word token sit exactly at the fuzzy bar
-/// (`qwen 3 8 flash` vs `qwen 3 8 flash next` shares 4 of 5 tokens = 0.80),
-/// and the count-aware matching hardening only defends version-number
-/// collapses (`Sonnet 5` vs `Sonnet 5.5`). Without the guard, the undated
-/// Surplus SKUs silently inherit the Aug-26 preview's live board evidence —
-/// AA-Briefcase rates `qwen3-8-flash-next` (Elo ~1575) while AA's own
-/// Intelligence Index leaves it at null, so the composite manufactures a
-/// ~74th-percentile standing for a family the index deliberately does not
-/// measure, and the undated listings plot at the preview's rank (#15 of 162
-/// as found 2026-11-02). Per the 2026-10-23 row removal ("a different build
-/// is not [the same model]"), the undated SKUs stay unrated — the GLM-4.5
-/// precedent — until AA rates them under their own name.
-///
-/// The 2026-11-02 audit sweep (the live join audit's explainability rule now
-/// rejects surplus word tokens, where the old version-sequence rule blessed
-/// anything reading `[..., 3, 8, ...]` on both sides) surfaced the same
-/// disease across the catalogue: derivative fine-tunes riding their base
-/// checkpoint's rows, family variants (VL/Coder) riding the base model's
-/// rows, and tier/experimental siblings (Flash Lite ↔ Flash, Vision Exp)
-/// merging. Uncensored/heretic listings are handled generally in the matcher
-/// (a flagged quote never fuzzy-joins — its only honest benchmark is an
-/// exact row of its own, the curated `Abliterated Large V2` pattern); the
-/// rest are curated here pair by pair. The live join audit fails on any new
-/// word-token collision, so each future one must be either curated here or
-/// proven same-weights in [`SAME_WEIGHTS_SKU_ALIASES`].
-pub(crate) const DISTINCT_BUILD_NON_JOINS: &[(&str, &str)] = &[
-    ("Qwen3.8 Flash", "Qwen3.8-Flash-Next"),
-    ("Qwen3.8 Omni Flash", "Qwen3.8-Flash-Next"),
-    // Family variants are different models, not spellings of the base.
-    ("Qwen3 Coder 30B A3B Instruct", "Qwen3 30B A3B"),
-    ("Qwen3 VL 235B A22B", "Qwen3 235B A22B"),
-    ("Qwen3 VL 30B A3B", "Qwen3 30B A3B"),
-    // Tier and experimental siblings rate separately.
-    ("Gemini 3.5 Flash Lite", "Gemini 3.5 Flash"),
-    ("DeepSeek V4 Flash Vision Exp", "DeepSeek V4 Flash Vision"),
-    // A legal-domain finetune of FlashX is not FlashX.
-    ("GLM 5.3 FlashX Legal", "GLM-5.3-FlashX"),
-];
-
 /// Old-index (v4.3.2) → v5.0 score re-anchoring, fitted on the 39 families
 /// AA measured on both indices. v5's harder, more private task sets cut the
 /// sub-frontier hardest — small models fell to ~0.5x their old score, the
@@ -1072,7 +1027,7 @@ pub(crate) fn artificial_analysis_snapshot() -> Vec<Benchmark> {
                 None => Benchmark {
                     slug: (*model).to_owned(),
                     name: (*model).to_owned(),
-                    creator: crate::theme::infer_creator(model),
+                    creator: crate::model_id::infer_creator(model),
                     overall: None,
                     coding: None,
                     agentic_coding: None,
@@ -1123,7 +1078,7 @@ pub(crate) fn artificial_analysis_snapshot() -> Vec<Benchmark> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::bench::matching::{benchmark_model_key, token_jaccard};
+    use crate::model_id::{benchmark_model_key, token_jaccard};
 
     #[test]
     fn rows_are_well_formed() {
@@ -1140,7 +1095,7 @@ mod tests {
 
     #[test]
     fn distinct_build_non_joins_are_well_formed_and_load_bearing() {
-        for (a, b) in DISTINCT_BUILD_NON_JOINS {
+        for (a, b) in crate::bench::matching::DISTINCT_BUILD_NON_JOINS {
             let key_a = benchmark_model_key(a);
             let key_b = benchmark_model_key(b);
             assert!(
@@ -1153,7 +1108,7 @@ mod tests {
         // fuzzy bar; a rename that drops the similarity below it would leave
         // a dead entry (harmless) — but also means the table no longer
         // documents a real collision, so keep it load-bearing.
-        let (a, b) = DISTINCT_BUILD_NON_JOINS[0];
+        let (a, b) = crate::bench::matching::DISTINCT_BUILD_NON_JOINS[0];
         let key_a = benchmark_model_key(a);
         let key_b = benchmark_model_key(b);
         let similarity = token_jaccard(&key_a, &key_b);
@@ -1391,7 +1346,7 @@ mod tests {
             "Beam 1.0",
             "Ling 3.1 Flash 1019",
         ] {
-            let aliased = crate::fetch::aa_evals::alias_display_name(board_name);
+            let aliased = crate::fetch::aa_names::alias_display_name(board_name);
             let key = benchmark_model_key(aliased);
             assert!(
                 !key.is_empty() && keys.contains(&key),

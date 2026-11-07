@@ -24,14 +24,14 @@ use crate::alerts::{
     ListingChange, detect_delisted, detect_price_changes, frontier_changes, semantic_alert_status,
 };
 use crate::artificial_analysis_snapshot::artificial_analysis_snapshot;
-use crate::bench::{
-    BenchmarkConsensus, available_scaffolds, benchmark_consensus_for_quote, benchmarks_for_source,
-};
+use crate::bench::scoring::{BenchmarkConsensus, benchmark_consensus_for_quote};
+use crate::bench::{available_scaffolds, benchmarks_for_source};
 use crate::benchmark_cache::{load_benchmark_cache, save_benchmark_cache};
-use crate::fetch::start_worker;
-use crate::fetch::{
-    PERFORMANCE_REFRESH_SECS, PERFORMANCE_RETRY_BACKOFF_SECS, aa_speed_for_quote, performance_key,
+use crate::fetch::aa_speed::aa_speed_for_quote;
+use crate::fetch::performance::{
+    PERFORMANCE_REFRESH_SECS, PERFORMANCE_RETRY_BACKOFF_SECS, performance_key,
 };
+use crate::fetch::start_worker;
 use crate::history;
 use crate::history::track::blended_series;
 use crate::notifications::{

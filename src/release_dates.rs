@@ -25,7 +25,7 @@
 //!   row of their own.
 
 use crate::artificial_analysis_snapshot::SAME_WEIGHTS_SKU_ALIASES;
-use crate::bench::matching::benchmark_model_key;
+use crate::model_id::benchmark_model_key;
 
 /// `(model name, release date)` pairs, grouped by provenance and roughly
 /// newest-first within each group (lookups join on the normalized key, so

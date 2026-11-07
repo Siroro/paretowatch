@@ -14,26 +14,11 @@ use anyhow::{Result, anyhow};
 use regex::Regex;
 use reqwest::blocking::Client;
 
+use super::aa_names::{NAMED_EFFORTS, alias_display_name};
 use super::fetch_text;
-use crate::types::{Benchmark, BenchmarkKind};
+use crate::types::{Benchmark, BenchmarkKind, score_benchmark};
 
 const SWEBENCH_PRO_URL: &str = "https://labs.scale.com/leaderboard/swe_bench_pro_public_v2";
-
-/// Effort tiers the leaderboard appends after the harness.
-const NAMED_EFFORTS: [&str; 5] = ["low", "medium", "high", "xhigh", "max"];
-
-/// Display names the leaderboard renders differently from the Surplus
-/// listing, mapped to the listing name so exact-key joins hit first.
-fn alias_display_name(base: &str) -> &str {
-    match base {
-        // Scale versions Muse Wonder as "1.0"; Surplus lists it unversioned.
-        "Muse Wonder 1.0" => "Muse Wonder",
-        // Surplus lists "Thinking Machines: Inkling"; the creator prefix is
-        // not one benchmark matching strips.
-        "Inkling" => "Thinking Machines: Inkling",
-        other => other,
-    }
-}
 
 pub(crate) fn fetch_swebench_pro(client: &Client) -> Result<Vec<Benchmark>> {
     let html = fetch_text(client, SWEBENCH_PRO_URL, "SWE-Bench Pro V2 leaderboard")?;
@@ -115,7 +100,7 @@ pub(crate) fn parse_swebench_pro(html: &str) -> Vec<Benchmark> {
         } else {
             BenchmarkKind::Model
         };
-        let mut row = super::score_benchmark(base.clone(), score, agent.clone(), effort, kind);
+        let mut row = score_benchmark(base.clone(), score, agent.clone(), effort, kind);
         row.name = format!("{base} [SWE-Bench Pro V2 HARD resolve rate]");
         if let Some(agent) = &agent {
             row.name = format!("{base} ({agent}) [SWE-Bench Pro V2 HARD resolve rate]");

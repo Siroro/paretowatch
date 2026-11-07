@@ -2,7 +2,8 @@
 //! cost/score frontier, the cache that keys it, and the plot-axis math the
 //! chart needs.
 
-use crate::bench::{best_benchmark_match, normalize};
+use crate::bench::matching::best_benchmark_match;
+use crate::model_id::normalize;
 use crate::types::{
     AgeFilter, Benchmark, BenchmarkMetric, BenchmarkSource, ComparisonMode, CostBasis,
     LiquidityFilter, ModalityFilter, PriceMetric, PricingSource, Quote, UncensoredFilter,
@@ -97,7 +98,7 @@ pub(crate) fn filter_hidden_groups(
 ) -> Vec<JoinedPoint> {
     joined
         .iter()
-        .filter(|p| !hidden_groups.contains(crate::theme::group_label(&p.creator)))
+        .filter(|p| !hidden_groups.contains(crate::model_id::group_label(&p.creator)))
         .cloned()
         .collect()
 }
@@ -257,9 +258,9 @@ pub(crate) fn pareto_search_matches(query: &str, p: &JoinedPoint) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::fetch::score_benchmark;
     use crate::testfix::test_quote;
     use crate::types::BenchmarkKind;
+    use crate::types::score_benchmark;
 
     #[test]
     fn log_price_axis_round_trips_prices() {
