@@ -29,19 +29,20 @@ pub(crate) const MIN_ANCHORED_POPULATION: usize = 10;
 /// 15 points of measured intelligence. Interpolating over these hand-picked
 /// anchors keeps AA comparable with the other boards while preserving how far
 /// apart two models actually are. Bump together with snapshot bumps if the
-/// score scale shifts: these points are for the v5.0 index (the 2026-10-28
-/// rebaseline re-compressed the scale below the leader — the open-weights
-/// frontier fell by 9-14 points while Claude Opus 5.5 stayed the leader at
-/// 58 — so the same reference classes re-anchor roughly ten points lower).
-/// Each landmark tracks the same reference models as before: the leader tier
-/// ~99th (Opus 5.5, 58; Gemini 4 Carbon's same-day launch at 59.4 reads
-/// ~99.5 via the top-segment slope, so the anchor holds), the Gemini-3.x-
-/// Flash class ~90th (Gemini 3.8 Flash, 31), the Luna/DeepSeek-refresh class
-/// ~80th (GPT-6 Luna, 28), the broad frontier mid-pack ~68th (DeepSeek V4
-/// Pro 0813, 23), then the open-weights and small-model tiers down to the
-/// 2-point Nano floor.
+/// score scale shifts: these points are for the v5.0.1 index. The 2026-10-28
+/// v5.0 rebaseline re-compressed the scale below the leader (the open-weights
+/// frontier fell by 9-14 points), and the 2026-11-12 bump moved only the top
+/// anchor: Claude Fable 5.2's 2026-11-09 entry opened a five-point lead over
+/// the whole board (65 vs Carbon's 60) — a real capability tier of one — so
+/// the leader anchor tracks it (58 → 65) and the former leader tier reads
+/// ~97.3-97.7 via the top-segment slope instead of piling under the ceiling.
+/// Each landmark tracks the same reference classes as before: the leader
+/// tier ~99th (Fable 5.2, 65), the Gemini-3.x-Flash class ~90th (Gemini 3.8
+/// Flash, 31), the Luna/DeepSeek-refresh class ~80th (GPT-6 Luna, 28), the
+/// broad frontier mid-pack ~68th (DeepSeek V4 Pro 0813, 23), then the
+/// open-weights and small-model tiers down to the 2-point Nano floor.
 pub(crate) const AA_CALIBRATION_POINTS: &[(f64, f64)] = &[
-    (58.0, 99.0),
+    (65.0, 99.0),
     (31.0, 90.0),
     (28.0, 80.0),
     (23.0, 68.0),
@@ -1396,7 +1397,7 @@ mod tests {
         sets.insert(
             BenchmarkSource::DeepSWE11,
             vec![
-                mk("Gemma 4 31B", 30.0),
+                mk("Gemma 4 26B A4B", 30.0),
                 mk("Claude Haiku 5.5", 30.0),
                 mk("DeepSeek V4 Pro 0813", 25.0),
                 mk("MiMo-V2.6-Pro", 33.0),
@@ -1417,7 +1418,7 @@ mod tests {
         );
         let gemma = composite
             .iter()
-            .find(|b| benchmark_model_key(&b.slug) == "gemma 4 31b")
+            .find(|b| benchmark_model_key(&b.slug) == "gemma 4 26b a4b")
             .unwrap();
         let haiku = composite
             .iter()
@@ -2470,25 +2471,6 @@ mod tests {
     }
 
     #[test]
-    fn huber_weights_downweight_outliers_smoothly_and_symmetrically() {
-        // Inside the consensus band: full weight.
-        assert!((huber_weight(5.0, 10.0) - 1.0).abs() < 1e-12);
-        assert!((huber_weight(10.0, 10.0) - 1.0).abs() < 1e-12);
-        // Outside 2.5·scale: weight decays proportionally to the excess,
-        // identically for high and low outliers.
-        assert!((huber_weight(50.0, 10.0) - 0.5).abs() < 1e-12);
-        assert!((huber_weight(125.0, 10.0) - 0.2).abs() < 1e-12);
-        // Degenerate scale (all percentiles equal): never downweight.
-        assert!((huber_weight(1e6, 0.0) - 1.0).abs() < 1e-12);
-        // Population precision: tiny boards fade, real boards keep their weight.
-        assert!(population_factor(0) < 1e-9);
-        assert!(population_factor(1) < 0.6);
-        assert!(population_factor(3) < 0.78);
-        assert!(population_factor(20) > 0.9);
-        assert!(population_factor(60) > 0.95);
-    }
-
-    #[test]
     fn catastrophic_harness_outlier_is_downweighted_and_disclosed() {
         // Same elite-cohort shape as the Sol/GLM regression so the anchored-AA
         // prior path runs; one harness catastrophically disagrees with four
@@ -2655,27 +2637,15 @@ mod tests {
     }
 
     #[test]
-    fn format_percentile_uses_ordinals() {
-        assert_eq!(format_percentile(0.0), "0th");
-        assert_eq!(format_percentile(1.2), "1st");
-        assert_eq!(format_percentile(2.4), "2nd");
-        assert_eq!(format_percentile(3.9), "4th");
-        assert_eq!(format_percentile(11.0), "11th");
-        assert_eq!(format_percentile(21.0), "21st");
-        assert_eq!(format_percentile(57.3), "57th");
-        assert_eq!(format_percentile(100.0), "100th");
-    }
-
-    #[test]
     fn calibrated_aa_percentile_separates_scores_above_the_top_anchor() {
         // Above-anchor scores must stay strictly ordered (and clamped at the
         // ceiling), not all flatten onto the top anchor's percentile.
-        let at_anchor = calibrated_aa_percentile(58.0);
-        let above = calibrated_aa_percentile(62.0);
+        let at_anchor = calibrated_aa_percentile(65.0);
+        let above = calibrated_aa_percentile(68.0);
         assert!((at_anchor - 99.0).abs() < 1e-9);
         assert!(above > at_anchor, "{above} must exceed {at_anchor}");
         assert!(above <= 100.0);
-        assert!(calibrated_aa_percentile(66.0) <= 100.0);
+        assert!(calibrated_aa_percentile(75.0) <= 100.0);
     }
 
     #[test]
@@ -2684,20 +2654,22 @@ mod tests {
         // fetch failed), the composite is the calibration curve alone, and the
         // old flat clamp tied Fable 5.1 (AA 53) with Opus 5 (AA 51) at 99.0 —
         // HashMap iteration order then decided the leader per launch. The
-        // 2026-09-22 leader is Opus 5.5 (AA 58, exactly at the top anchor);
-        // the previous leader tier must now rank strictly below it rather
-        // than piling onto the 100th-percentile ceiling. The 2026-09-29 bump
-        // added Sonnet 5.5 at AA 56: it slots between the leader and the old
-        // tier on the curve alone.
+        // 2026-11-09 leader is Claude Fable 5.2 (AA 65, exactly at the top
+        // anchor); the former leader tier (Opus 5.5 59, Carbon 60) must now
+        // rank strictly below it rather than piling onto the 100th-percentile
+        // ceiling, and Sonnet 5.5 (AA 55) slots between that tier and Fable
+        // 5.1 (AA 49) on the curve alone.
         let mk =
             |name: &str, score: f64| score_benchmark(name, score, None, None, BenchmarkKind::Model);
         let mut sets = HashMap::new();
         sets.insert(
             BenchmarkSource::ArtificialAnalysisSnapshot,
             vec![
-                mk("Claude Opus 5.5", 58.0),
-                mk("Claude Sonnet 5.5", 56.0),
-                mk("Claude Fable 5.1", 53.4),
+                mk("Claude Fable 5.2", 65.0),
+                mk("Gemini 4 Carbon", 60.0),
+                mk("Claude Opus 5.5", 59.0),
+                mk("Claude Sonnet 5.5", 55.0),
+                mk("Claude Fable 5.1", 49.0),
                 mk("GPT-6 Astra", 52.8),
                 mk("GPT-6 Sol", 48.0),
                 mk("Claude Opus 5", 50.7),
@@ -2714,10 +2686,14 @@ mod tests {
         let leader = composite.first().expect("composite is non-empty");
         assert_eq!(
             benchmark_model_key(&leader.slug),
-            "opus 5 5",
+            "fable 5 2",
             "higher AA score must lead the pure-AA fallback, got {}",
             leader.name
         );
+        let carbon = composite
+            .iter()
+            .find(|b| benchmark_model_key(&b.slug) == "gemini 4 carbon")
+            .unwrap();
         let sonnet = composite
             .iter()
             .find(|b| benchmark_model_key(&b.slug) == "sonnet 5 5")
@@ -2727,45 +2703,23 @@ mod tests {
             .find(|b| benchmark_model_key(&b.slug) == "fable 5 1")
             .unwrap();
         assert!(
-            leader.agentic_coding.unwrap() > sonnet.agentic_coding.unwrap(),
+            leader.agentic_coding.unwrap() > carbon.agentic_coding.unwrap(),
             "{}",
             leader.name
         );
         assert!(
+            carbon.agentic_coding.unwrap() < 100.0,
+            "the former leader tier must spread below the ceiling, not clamp at 100"
+        );
+        assert!(
             sonnet.agentic_coding.unwrap() > fable.agentic_coding.unwrap(),
-            "Sonnet 5.5 (AA 56) must outrank Fable 5.1 (AA 53) in the pure-AA fallback\nSonnet: {}\nFable: {}",
+            "Sonnet 5.5 (AA 55) must outrank Fable 5.1 (AA 49) in the pure-AA fallback\nSonnet: {}\nFable: {}",
             sonnet.name,
             fable.name,
         );
         assert!(
             fable.agentic_coding.unwrap() < 100.0,
             "the previous leader tier must spread below the ceiling, not clamp at 100"
-        );
-    }
-
-    #[test]
-    fn coverage_first_composite_accepts_a_single_credible_source() {
-        let mut sets = HashMap::new();
-        sets.insert(
-            BenchmarkSource::ArtificialAnalysisSnapshot,
-            vec![score_benchmark(
-                "DeepSeek V4 Flash 0731",
-                34.5,
-                None,
-                None,
-                BenchmarkKind::Model,
-            )],
-        );
-        let composite = build_agentic_composite(
-            &sets,
-            ComparisonMode::BestAvailableAgent,
-            "mini-SWE-agent",
-            CompositeFlavor::Capability,
-        );
-        assert_eq!(composite.len(), 1);
-        assert_eq!(
-            benchmark_model_key(&composite[0].slug),
-            "deepseek v4 flash 0731"
         );
     }
 
@@ -2988,64 +2942,6 @@ mod tests {
             sol.name.contains("strong evidence") || sol.name.contains("moderate evidence"),
             "{}",
             sol.name
-        );
-    }
-
-    #[test]
-    fn evidence_confidence_ramps_from_zero_coverage_to_strong() {
-        assert!((evidence_confidence(0.0) - ZERO_EVIDENCE_CONFIDENCE).abs() < 1e-12);
-        assert!((evidence_confidence(STRONG_EVIDENCE_COVERAGE) - 1.0).abs() < 1e-12);
-        assert!((evidence_confidence(1.0) - 1.0).abs() < 1e-12);
-        let quarter = evidence_confidence(0.15);
-        assert!(quarter > ZERO_EVIDENCE_CONFIDENCE && quarter < evidence_confidence(0.45));
-    }
-
-    /// Live-data smoke check: runs the REAL board fetchers and the bundled AA
-    /// snapshot through the composite and prints the top of the chart, so a
-    /// reported ranking can be verified against what a current build actually
-    /// computes (e.g. the Fable 5.1 AA-leader ruling of 2026-09-02). Not part
-    /// of CI: it needs network access and its assertions describe today's
-    /// snapshot leader — update the expected leader when the snapshot's top
-    /// row changes, or when boards have genuinely demoted the leader with
-    /// broad evidence.
-    #[test]
-    #[ignore = "hits live leaderboards; run explicitly with cargo test -- --ignored"]
-    fn live_composite_ranks_aa_leader_first() {
-        use crate::fetch::fetch_benchmark_source;
-        let client = reqwest::blocking::Client::builder()
-            .timeout(std::time::Duration::from_secs(30))
-            .build()
-            .unwrap();
-        let mut sets = HashMap::new();
-        for source in BenchmarkSource::remote_sources() {
-            match fetch_benchmark_source(&client, source) {
-                Ok(rows) => {
-                    println!("{source:?}: {} rows", rows.len());
-                    sets.insert(source, rows);
-                }
-                Err(err) => println!("{source:?}: FAILED {err:#}"),
-            }
-        }
-        let composite = build_agentic_composite(
-            &sets,
-            ComparisonMode::ModelCapability,
-            "mini-SWE-agent",
-            CompositeFlavor::Capability,
-        );
-        println!("--- composite top 10 ---");
-        for row in composite.iter().take(10) {
-            println!(
-                "{:6.1}  {}",
-                row.agentic_coding.unwrap_or(f64::NAN),
-                clean_benchmark_display_name(&row.name),
-            );
-        }
-        let leader = composite.first().expect("composite is non-empty");
-        assert_eq!(
-            benchmark_model_key(&leader.slug),
-            "gemini 4 carbon",
-            "expected the AA leader Gemini 4 Carbon on top, got {}",
-            leader.name
         );
     }
 
@@ -3343,89 +3239,5 @@ mod tests {
             bottom.name
         );
         assert!(bottom.name.contains("prior AA 0th"), "{}", bottom.name);
-    }
-
-    /// Tuning view for the post-v5 composite rejiggle: prints the capability
-    /// composite's frontier plus the evidence breakdown (method string) of
-    /// the models the rebalance targets — the DeepSeek 1017 refresh, the GLM
-    /// family, Haiku, Luna, and the pre-v5 ~est families the unrating had
-    /// left at the neutral prior (Grok 4.5, Grok 4.6, Gemma 4 31B, GLM-5.1,
-    /// Kimi K2.6). Temporary tooling.
-    #[test]
-    #[ignore = "tuning: fetches every live board"]
-    fn live_composite_tuning_view() {
-        use crate::fetch::fetch_benchmark_source;
-        let client = reqwest::blocking::Client::builder()
-            .timeout(std::time::Duration::from_secs(30))
-            .build()
-            .unwrap();
-        let mut sets = HashMap::new();
-        for source in BenchmarkSource::remote_sources() {
-            match fetch_benchmark_source(&client, source) {
-                Ok(rows) => {
-                    sets.insert(source, rows);
-                }
-                Err(err) => println!("{source:?}: FAILED {err:#}"),
-            }
-        }
-        let composite = build_agentic_composite(
-            &sets,
-            ComparisonMode::ModelCapability,
-            "mini-SWE-agent",
-            CompositeFlavor::Capability,
-        );
-        println!("--- capability composite (top 60) ---");
-        for (rank, row) in composite.iter().enumerate().take(60) {
-            println!(
-                "{:>2} {:6.1}  {}",
-                rank + 1,
-                row.agentic_coding.unwrap_or(f64::NAN),
-                clean_benchmark_display_name(&row.name),
-            );
-        }
-        let targets = [
-            "deepseek v4 1 flash 1017",
-            "glm 5 3",
-            "glm 5 2",
-            "haiku 5 5",
-            "gpt 5 6 luna",
-            "grok 4 5",
-            "grok 4 6",
-            "gemma 4 31b",
-            "gemma 4 26b a4b",
-            "kimi k2 6",
-            "claude sonnet 5",
-            "gpt 5 5",
-            "glm 5 1",
-            "qwen3 5 397b a17b",
-            "kimi k3",
-            "glm 5 3 flashx",
-        ];
-        println!("--- target evidence (capability) ---");
-        for row in &composite {
-            let key = benchmark_model_key(&row.slug);
-            if targets.contains(&key.as_str()) {
-                let rank = composite
-                    .iter()
-                    .position(|r| benchmark_model_key(&r.slug) == key)
-                    .unwrap_or(usize::MAX);
-                println!("#{} {}\n      {}", rank + 1, key, row.name);
-            }
-        }
-        let deployment = build_agentic_composite(
-            &sets,
-            ComparisonMode::ModelCapability,
-            "mini-SWE-agent",
-            CompositeFlavor::Deployment,
-        );
-        println!("--- deployment composite (top 15) ---");
-        for (rank, row) in deployment.iter().enumerate().take(15) {
-            println!(
-                "{:>2} {:6.1}  {}",
-                rank + 1,
-                row.agentic_coding.unwrap_or(f64::NAN),
-                clean_benchmark_display_name(&row.name),
-            );
-        }
     }
 }

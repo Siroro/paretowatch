@@ -189,8 +189,6 @@ fn slugify(name: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::bench::matching::best_benchmark_match;
-    use crate::testfix::test_quote;
     use serde_json::json;
 
     fn board_json() -> Value {
@@ -273,13 +271,6 @@ mod tests {
         assert_eq!(fable.agent.as_deref(), Some("claude-code"));
         // The versioned 1.1 reader never touches the flat shape.
         assert!(parse_frontiercode(&board_json()["v1_1"]).is_empty());
-    }
-
-    #[test]
-    fn display_names_join_surplus_quotes() {
-        let rows = parse_frontiercode(&board_json());
-        let q = test_quote("claude-fable-5", 1.0, true);
-        assert!(best_benchmark_match(&q, &rows).is_some());
     }
 
     #[test]

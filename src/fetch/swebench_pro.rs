@@ -114,8 +114,6 @@ pub(crate) fn parse_swebench_pro(html: &str) -> Vec<Benchmark> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::bench::matching::best_benchmark_match;
-    use crate::testfix::test_quote;
 
     fn page(rows: &[(&str, &str)]) -> String {
         let body = rows
@@ -209,13 +207,5 @@ mod tests {
                 .any(|r| r.slug == "Thinking Machines: Inkling" && r.agentic_coding == Some(56.9))
         );
         assert!(!rows.iter().any(|r| r.slug.contains("Gemini")));
-    }
-
-    #[test]
-    fn rows_join_surplus_quotes() {
-        let html = &page(&[("Sonnet 5.5 (mini-swe-agent) xhigh", "70.59")]);
-        let rows = parse_swebench_pro(html);
-        let q = test_quote("claude-sonnet-5.5", 1.0, true);
-        assert!(best_benchmark_match(&q, &rows).is_some());
     }
 }

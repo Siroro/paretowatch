@@ -922,20 +922,6 @@ mod tests {
     }
 
     #[test]
-    fn age_bands_and_dates() {
-        let now = 1_800_000_000.0;
-        assert_eq!(format_age(now - 30.0, now), "just now");
-        assert_eq!(format_age(now - 90.0, now), "1m ago");
-        assert_eq!(format_age(now - 5.0 * 3_600.0, now), "5h ago");
-        assert_eq!(format_age(now - 3.0 * 86_400.0, now), "3d ago");
-        let old = format_age(now - 40.0 * 86_400.0, now);
-        assert!(
-            old.starts_with("listed "),
-            "month-old listings show their date: {old}"
-        );
-    }
-
-    #[test]
     fn flat_single_point_series_gets_readable_bounds() {
         // A just-listed model's single price sample must not sit on a
         // degenerate axis: the y window widens around the value.

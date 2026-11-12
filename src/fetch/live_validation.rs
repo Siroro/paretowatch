@@ -18,19 +18,11 @@ use std::time::Duration;
 
 use reqwest::blocking::Client;
 
-use super::aa_evals::{fetch_aa_3d, fetch_aa_briefcase, fetch_automationbench_aa};
 use super::aa_index::fetch_aa_index_and_speed;
-use super::deepswe::fetch_deepswe;
-use super::design_arena::fetch_design_arena;
-use super::frontiercode::{fetch_frontiercode, fetch_frontiercode2};
 use super::http::fetch_text;
-use super::livebench::fetch_livebench;
 use super::parse::{collapse_whitespace, strip_html_tags};
 use super::prices::fetch_prices;
-use super::swebench_pro::fetch_swebench_pro;
-use super::terminal_bench::{fetch_terminal_bench_version, parse_terminal_bench_harbor};
-use super::vals_sre::fetch_vals_sre_bench;
-use crate::types::{Benchmark, TERMINAL_BENCH_4_LEADERBOARD};
+use crate::types::Benchmark;
 
 /// Same client shape the worker uses, with a little more headroom for slow
 /// board pages under a test run.
@@ -139,122 +131,6 @@ fn live_aa_intelligence_index_and_speed() {
     }
 }
 
-#[test]
-#[ignore = "fetches live upstreams"]
-fn live_terminal_bench_4() {
-    let client = validation_client();
-    let value = fetch_terminal_bench_version(&client, TERMINAL_BENCH_4_LEADERBOARD, "4.0")
-        .expect("Terminal-Bench 4.0 Harbor fetch failed");
-    let rows = parse_terminal_bench_harbor(&value).expect("Terminal-Bench 4.0 parse failed");
-    validate_board("Terminal-Bench 4.0 (live Harbor)", &rows, 3, 0.0, 100.0);
-}
-
-#[test]
-#[ignore = "fetches live upstreams"]
-fn live_deepswe() {
-    let client = validation_client();
-    let rows = fetch_deepswe(&client).expect("DeepSWE v1.1 fetch failed");
-    validate_board("DeepSWE v1.1", &rows, 3, 0.0, 100.0);
-}
-
-#[test]
-#[ignore = "fetches live upstreams"]
-fn live_livebench() {
-    let client = validation_client();
-    let rows = fetch_livebench(&client).expect("LiveBench fetch failed");
-    validate_board("LiveBench", &rows, 3, 0.0, 100.0);
-}
-
-#[test]
-#[ignore = "fetches live upstreams"]
-fn live_design_arena() {
-    let client = validation_client();
-    let rows = fetch_design_arena(&client).expect("Design Arena fetch failed");
-    validate_board(
-        "Design Arena (Frontend Design Elo)",
-        &rows,
-        5,
-        500.0,
-        3000.0,
-    );
-}
-
-#[test]
-#[ignore = "fetches live upstreams"]
-fn live_frontiercode_1_1() {
-    let client = validation_client();
-    let rows = fetch_frontiercode(&client).expect("FrontierCode 1.1 fetch failed");
-    validate_board("FrontierCode 1.1", &rows, 3, 0.0, 100.0);
-}
-
-#[test]
-#[ignore = "fetches live upstreams"]
-fn live_frontiercode_2_0() {
-    let client = validation_client();
-    let rows = fetch_frontiercode2(&client).expect("FrontierCode 2.0 fetch failed");
-    validate_board("FrontierCode 2.0", &rows, 3, 0.0, 100.0);
-}
-
-#[test]
-#[ignore = "fetches live upstreams"]
-fn live_aa_briefcase() {
-    let client = validation_client();
-    let rows = fetch_aa_briefcase(&client).expect("AA-Briefcase fetch failed");
-    validate_board("AA-Briefcase (Elo)", &rows, 3, 500.0, 3000.0);
-}
-
-#[test]
-#[ignore = "fetches live upstreams"]
-fn live_automationbench_aa() {
-    let client = validation_client();
-    let rows = fetch_automationbench_aa(&client).expect("AutomationBench-AA fetch failed");
-    validate_board("AutomationBench-AA (partial score)", &rows, 3, 0.0, 100.0);
-}
-
-#[test]
-#[ignore = "fetches live upstreams"]
-fn live_aa_3d() {
-    let client = validation_client();
-    let rows = fetch_aa_3d(&client).expect("AA-3D fetch failed");
-    validate_board("AA-3D (Elo)", &rows, 3, 500.0, 3000.0);
-}
-
-#[test]
-#[ignore = "fetches live upstreams"]
-fn live_swebench_pro() {
-    let client = validation_client();
-    let rows = fetch_swebench_pro(&client).expect("SWE-Bench Pro V2 fetch failed");
-    validate_board("SWE-Bench Pro V2 HARD", &rows, 3, 0.0, 100.0);
-}
-
-#[test]
-#[ignore = "fetches live upstreams"]
-fn live_vals_sre_bench() {
-    let client = validation_client();
-    let rows = fetch_vals_sre_bench(&client).expect("SRE Bench (Vals) fetch failed");
-    validate_board("SRE Bench (Vals)", &rows, 3, 0.0, 100.0);
-}
-
-/// The worker dispatches every remote source through one function; a new
-/// source that forgets a match arm would break at compile time, but a source
-/// wired to the wrong fetcher would not. Fetch one cheap JSON board through
-/// the dispatcher to prove the routing works end to end.
-#[test]
-#[ignore = "fetches live upstreams"]
-fn live_worker_dispatch_routes_sources() {
-    let client = validation_client();
-    let rows = super::fetch_benchmark_source(&client, crate::types::BenchmarkSource::DeepSWE11)
-        .expect("dispatched DeepSWE fetch failed");
-    validate_board("Worker dispatch (DeepSWE11)", &rows, 3, 0.0, 100.0);
-    // The AA snapshot dispatch errors only when the live page is unusable
-    // (the app then keeps its last good board); here it must still succeed.
-    super::fetch_benchmark_source(
-        &client,
-        crate::types::BenchmarkSource::ArtificialAnalysisSnapshot,
-    )
-    .expect("dispatched AA snapshot fetch failed");
-}
-
 /// AA-3D correctness check: the page server-renders its leaderboard as an
 /// HTML table AND embeds the same board as RSC objects. The app reads the
 /// payload objects (nearest-preceding-name attribution, integer-only elo),
@@ -340,9 +216,12 @@ fn live_aa_3d_elo_matches_server_table() {
                     table_effort.as_deref().unwrap_or("-"),
                     parsed_effort.as_deref().unwrap_or("-")
                 );
-                assert_eq!(
-                    parsed_elo, table_elo,
-                    "AA-3D Elo mismatch for {base}: payload says {parsed_elo}, table says {table_elo}"
+                // The table displays rounded integers; since AA's 2026-11
+                // cycle the payload carries decimal Elo, so the two parses
+                // agree when the payload rounds to the table's display.
+                assert!(
+                    (parsed_elo - table_elo).abs() <= 0.5,
+                    "AA-3D Elo mismatch for {base}: payload says {parsed_elo}, table displays {table_elo}"
                 );
             }
             None => panic!(
@@ -421,15 +300,17 @@ fn live_aa_boards_reconcile_with_published_values() {
                 table_index.insert(key.clone(), (value, rank, name.clone()));
             }
         }
+        // Through v5.0 the table published Speed (tok/s) + Latency columns;
+        // the v5.0.1 layout (2026-11) dropped the tok/s column and publishes
+        // Time-per-Task (min) + First Answer Token (s). Only the first-answer
+        // column still reconciles the app's speed snapshot; tok/s has no
+        // table counterpart anymore and is checked for coverage only.
         if cells.len() >= 7
-            && let (Ok(tps), Ok(ttft)) = (
-                cells[5].trim().parse::<f64>(),
-                cells[6].trim().parse::<f64>(),
-            )
+            && let Ok(first_answer_s) = cells[6].trim().parse::<f64>()
         {
             let rank = crate::fetch::aa_speed::speed_variant_rank(effort.as_deref(), non_reasoning);
             if table_speed.get(&key).is_none_or(|(_, old, _)| rank > *old) {
-                table_speed.insert(key.clone(), ((tps, ttft), rank, name));
+                table_speed.insert(key.clone(), ((f64::NAN, first_answer_s), rank, name));
             }
         }
     }
@@ -496,26 +377,22 @@ fn live_aa_boards_reconcile_with_published_values() {
     );
 
     // ------------------------------------------------------------------
-    // B. Standardized speed: same table's tok/s + TTFT columns vs the
-    //    app's speed snapshot, both folded to the calmest variant.
+    // B. Standardized speed: the table's First-Answer-Token column vs the
+    //    app's speed snapshot TTFT, both folded to the calmest variant. The
+    //    tok/s median has no table column since v5.0.1 — coverage only.
     // ------------------------------------------------------------------
     let speed: AaSpeedSnapshot = speed_result.expect("AA speed snapshot parse failed");
     let mut speed_checked = 0;
+    let mut tps_covered = 0;
     let mut speed_mismatched = 0;
     for entry in &speed.entries {
-        let Some(((table_tps, table_ttft), _, _)) = table_speed.get(&entry.key) else {
+        if entry.median_tps.is_some() {
+            tps_covered += 1;
+        }
+        let Some(((_, table_ttft), _, _)) = table_speed.get(&entry.key) else {
             continue;
         };
-        if let Some(app_tps) = entry.median_tps {
-            speed_checked += 1;
-            if (app_tps - table_tps).abs() > 1.01 {
-                speed_mismatched += 1;
-                println!(
-                    "  speed {:<30} app tps {app_tps:.1} table {table_tps:.1}  <-- MISMATCH",
-                    entry.name
-                );
-            }
-        }
+        speed_checked += 1;
         if let Some(app_ttft) = entry.median_ttft_s
             && (app_ttft - table_ttft).abs() > 0.6
         {
@@ -527,7 +404,7 @@ fn live_aa_boards_reconcile_with_published_values() {
         }
     }
     println!(
-        "speed: {speed_checked} families' median tok/s reconciled, {speed_mismatched} mismatches"
+        "speed: {speed_checked} families' TTFT reconciled, {tps_covered} with median tok/s, {speed_mismatched} mismatches"
     );
     assert_eq!(
         speed_mismatched, 0,

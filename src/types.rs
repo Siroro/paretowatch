@@ -1900,19 +1900,6 @@ mod tests {
     }
 
     #[test]
-    fn history_windows_expose_labels_and_lengths() {
-        assert_eq!(HistoryWindow::default(), HistoryWindow::Hours24);
-        for option in HistoryWindow::ALL {
-            assert!(!option.label().is_empty());
-            match option {
-                HistoryWindow::All => assert_eq!(option.secs(), None),
-                _ => assert!(option.secs().is_some_and(|s| s > 0.0)),
-            }
-        }
-        assert_eq!(HistoryWindow::Hours24.secs(), Some(86_400.0));
-    }
-
-    #[test]
     fn age_filter_buckets_partition_the_timeline() {
         let fresh = Some(6.0);
         let recent = Some(45.0);

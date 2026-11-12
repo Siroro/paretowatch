@@ -1,3 +1,59 @@
+# Unreleased — 2026-11-12 benchmark sweep (0.35.0)
+
+The first data sweep since 2026-10-29, plus three upstream-format fixes the
+sweep surfaced. The AA Intelligence Index moved to v5.0.1 (2026-11-03, CritPt
+v2 regrade — same scale), and Claude Fable 5.2 took the lead.
+
+## Fixed (upstream format drift, found by the live validation suite)
+
+- **AA Intelligence Index overlay** — the v5.0.1 leaderboard payload dropped
+  the `intelligenceIndexIsEstimated` field (AA no longer ships estimate
+  rows), which the score regex required, so the live overlay returned no
+  entries and the app kept falling back to the bundled snapshot. The parser
+  now understands both payload layouts.
+- **AA standardized speed** — the leaderboard renamed
+  `medianOutputTokensPerSecond` to `outputSpeed`, replaced the TTFT field
+  with `timeToFirstToken`/`timeToFirstAnswerToken` (the answer-token field
+  is the continuation of the metric the table has always shown), and dropped
+  the percentile/quartile distribution columns entirely. Speed telemetry
+  reads medians only now; the p05/p25/p75/p95 and end-to-end fields parse as
+  absent on the new payload and still work on the old one.
+- **AA-3D** — the board moved to decimal Bradley-Terry Elo
+  (`"elo":1271.4151}`); the integer-only pattern matched a single row. The
+  number-then-`}` object-end shape still excludes the other boards' decimal
+  `elo` fields the page embeds.
+
+## Data (bundled AA snapshot → v5.0.1, 2026-11-12)
+
+- New leader: **Claude Fable 5.2** at AA 65 (evaluated across every effort
+  2026-11-09, listed the same day) — five points over Gemini 4 Carbon, so
+  the composite's top calibration anchor moved with it (58 → 65) and the
+  former leader tier spreads at ~97th instead of piling under the ceiling.
+- New rows: Claude Fable 5.2 (65), **Gemini 4 Hydrogen** (xhigh 54, ahead of
+  its listing — the Argon pattern), Meta's **Muse Ember** (36), Tencent's
+  **Hy4 GA** (35; the August preview is a superseded build and stays
+  unrated), and the four base-naming **OrcaCyber** abliterations as ~proxy
+  rows (GLM 5.3 Flash 28, MiMo V2.6 Flash 27, MiniMax M3.1 Flash 29,
+  Qwen3.8 Flash Next 29).
+- Re-reads under the CritPt v2 regrade: Carbon 59→60, Opus 5.5 58→59,
+  Sonnet 5.5 54→55, Grok 4.7 34→35, Muse Wonder 43→44, DeepSeek V4.1 Flash
+  1017 32→33 (its Uncensored ~proxy follows), Ling 3.1 Flash 1019 29→30,
+  Muse Spark 1.3 36→37 (hidden page firmed up).
+- First v5 reads: **GLM-5.3-Flash 28** (2026-11-09 Endpoint Accuracy v1.1
+  coverage — the FlashX ~proxy row carries it again), Gemma 4 31B,
+  gpt-oss-120b, and Mistral Small 4 at 4; their pre-v5 prior entries are
+  dropped.
+- Newly unrated: Particle-1 (derivative of DeepSeek V4.1 Flash, no AA page),
+  the non-proxy OrcaCyber SKUs (DeepSeek V4.1 Flash abliteration — its base
+  row is itself unrated; Ultra/Zero name no base), Hy4 preview, and GLM 5.3
+  FlashX Legal (legal-domain mid+post-training — different weights, so
+  neither alias nor proxy).
+- Release dates added for Fable 5.2, Muse Ember, Hy4 (2026-11-04/09), and
+  Gemini 4 Hydrogen (2026-11-12, listing still pending). Gemini 4 Carbon's
+  Surplus listing landed 2026-11-10 behind its existing row.
+
+---
+
 # Unreleased — internal refactor (no behavior change)
 
 A full-codebase untangle pass: every fix is structural, with intended behavior

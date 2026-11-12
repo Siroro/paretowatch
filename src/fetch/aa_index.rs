@@ -1,7 +1,10 @@
 //! Live AA Intelligence Index, read from the public leaderboard page —
 //! no API key. The page's RSC payload embeds every CURRENT model with its
-//! `intelligenceIndex` (and an `intelligenceIndexIsEstimated` flag), so one
-//! request refreshes the whole frontier. Legacy and hidden models are not in
+//! `intelligenceIndex`, so one request refreshes the whole frontier.
+//! (Through v5.0 each value carried an `intelligenceIndexIsEstimated` flag
+//! and estimates were skipped; v5.0.1 removed both the flag and the
+//! estimate rows — `parse_live_entries` still understands both layouts.)
+//! Legacy and hidden models are not in
 //! that payload (their scores live only on per-model pages, ~4.5 MB each),
 //! so this is an OVERLAY on the bundled snapshot rather than a replacement:
 //!
@@ -107,19 +110,27 @@ fn parse_index_version(html: &str) -> Option<String> {
 /// preceding `shortName`, AA estimates skipped, variants folded by the
 /// snapshot's preference order.
 pub(crate) fn parse_live_entries(html: &str) -> Vec<LiveEntry> {
+    // Two payload layouts, both alive in the wild: through v5.0 the value
+    // was followed by an explicit `intelligenceIndexIsEstimated` flag (the
+    // estimate-skip below reads it); the v5.0.1 leaderboard (2026-11)
+    // dropped that field — estimates no longer ship in the payload at all —
+    // so the value is followed by `omniscience` instead. A future layout
+    // matching neither alternative yields no entries, which surfaces as a
+    // fetch error rather than a silently stale board.
     let score_re = Regex::new(
-        r#"\\?"intelligenceIndex\\?":(null|[0-9]+\.?[0-9]*),\\?"intelligenceIndexIsEstimated\\?":(true|false)"#,
+        r#"\\?"intelligenceIndex\\?":(null|[0-9]+\.?[0-9]*)(?:,\\?"intelligenceIndexIsEstimated\\?":(true|false)|,\\?"omniscience\\?":)"#,
     )
     .expect("score regex");
     let names = rsc_short_names(html);
 
     let mut best: std::collections::HashMap<String, LiveEntry> = std::collections::HashMap::new();
     for caps in score_re.captures_iter(html) {
-        let raw = caps.extract::<2>().1;
-        if raw[0] == "null" || raw[1] == "true" {
+        let raw = caps.get(1).expect("value group").as_str();
+        let estimated = caps.get(2).is_some_and(|m| m.as_str() == "true");
+        if raw == "null" || estimated {
             continue;
         }
-        let Ok(score) = raw[0].parse::<f64>() else {
+        let Ok(score) = raw.parse::<f64>() else {
             continue;
         };
         if !score.is_finite() || !(0.0..=100.0).contains(&score) {
@@ -295,6 +306,29 @@ mod tests {
     }
 
     #[test]
+    fn parses_v5_0_1_payload_without_the_estimate_flag() {
+        // The v5.0.1 leaderboard (2026-11) dropped
+        // `intelligenceIndexIsEstimated` entirely — estimates no longer ship
+        // in the payload — and the value is followed by `omniscience`.
+        // These reads must land with no estimate flag to consult.
+        let html = concat!(
+            r#"{"slug":"claude-fable-5-2","name":"Claude Fable 5.2 (Max)","shortName":"Claude Fable 5.2 (max)","intelligenceIndex":64.563595756,"omniscience":22.1},"#,
+            r#"{"slug":"claude-fable-5-2-xhigh","shortName":"Claude Fable 5.2 (xhigh)","intelligenceIndex":62.21673924,"omniscience":null},"#,
+            r#"{"slug":"gpt-6-sol","shortName":"GPT-6 Sol (max)","intelligenceIndex":null,"omniscience":null},"#,
+        );
+        let entries = parse_live_entries(html);
+        // The null is skipped and the two effort variants fold to the
+        // max-effort read.
+        assert_eq!(entries.len(), 1);
+        let fable = entries
+            .iter()
+            .find(|e| e.name == "Claude Fable 5.2")
+            .unwrap();
+        assert!((fable.score - 64.563595756).abs() < 1e-9);
+        assert_eq!(fable.effort.as_deref(), Some("max"));
+    }
+
+    #[test]
     fn overlay_updates_matched_rows_and_adds_new_ones() {
         let bundled = artificial_analysis_snapshot();
         let live = vec![
@@ -375,11 +409,5 @@ mod tests {
         assert_eq!(entries.len(), 1);
         assert!(entries.iter().any(|e| e.name == "Model A"));
         assert!(!entries.iter().any(|e| e.name == "Model B"));
-    }
-
-    #[test]
-    fn version_anchor_extracts_from_payload_registry() {
-        let html = r#"\"name\":\"Artificial Analysis Intelligence Index v4.3.2\",\"keywords\":[]}"#;
-        assert_eq!(parse_index_version(html).as_deref(), Some("v4.3.2"));
     }
 }

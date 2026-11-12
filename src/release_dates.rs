@@ -34,6 +34,10 @@ use crate::model_id::benchmark_model_key;
 /// the Surplus catalog listings.
 pub(crate) const RELEASE_DATES: &[(&str, &str)] = &[
     // Documented launches and listings (snapshot notes).
+    ("Gemini 4 Hydrogen", "2026-11-12"), // AA evaluated every effort on launch day; Surplus listing still pending
+    ("Claude Fable 5.2", "2026-11-09"),  // evaluated and listed 2026-11-09; new AA leader at 65
+    ("Muse Ember", "2026-11-09"),        // evaluated and listed 2026-11-09
+    ("Tencent Hy4", "2026-11-04"), // GA evaluated and listed 2026-11-04; the Aug preview is a different build
     ("Mistral Large 4", "2026-10-29"), // GA build; the deprecated Preview read (2026-10-06) is not the release
     ("Gemini 4 Carbon", "2026-10-28"), // launched hours after the 2026-10-28 morning rebaseline
     ("GPT-6.1 Terra", "2026-10-28"),   // entered with the v5.0 rebaseline bump

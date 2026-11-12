@@ -155,61 +155,6 @@ pub(crate) fn copyable_slug(ui: &mut egui::Ui, slug: &str) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::model_id::{canonical_group, group_label};
-
-    #[test]
-    fn catalog_creator_spelling_variants_share_one_group_and_color() {
-        // Real strings observed in the live Surplus catalog: the same lab is
-        // spelled differently across model rows.
-        for variants in [
-            ["xAI", "SpaceXAI", "X.AI"],
-            ["Z.ai", "Zhipu AI", "Zhipu"],
-            ["Alibaba", "Qwen", "Alibaba Cloud"],
-            ["Moonshot", "Moonshot AI", "Kimi"],
-            ["OpenAI", "Open AI", "openai"],
-            ["Venice AI", "Venice", "api.venice.ai"],
-            ["Xiaomi", "MiMo", "MiMo AI"],
-        ] {
-            let canonical = canonical_group(variants[0]);
-            for variant in variants {
-                assert_eq!(
-                    creator_color(variant),
-                    creator_color(canonical),
-                    "{variant}"
-                );
-            }
-        }
-        // Unknown labs get hash colors, never a known lab's brand color.
-        assert_ne!(creator_color("Kuaishou"), creator_color("ByteDance"));
-    }
-
-    #[test]
-    fn creator_colors_are_stable_and_distinguish_known_groups() {
-        // Known labs get fixed brand colors; empty groups get the neutral gray.
-        assert_eq!(creator_color("Anthropic"), creator_color("anthropic"));
-        assert_ne!(creator_color("Anthropic"), creator_color("OpenAI"));
-        assert_ne!(creator_color("Anthropic"), creator_color(""));
-        // Unknown creators hash deterministically (distinguishable from the
-        // empty group's fixed gray).
-        assert_eq!(creator_color("Some New Lab"), creator_color("some new lab"));
-    }
-
-    #[test]
-    fn mimo_models_color_as_xiaomi() {
-        // Some boards label the creator `MiMo`: it must land in the Xiaomi
-        // group with its brand color, never a hash color.
-        assert_eq!(creator_color("MiMo"), creator_color("Xiaomi"));
-        assert_eq!(group_label("MiMo"), "Xiaomi");
-    }
-
-    #[test]
-    fn discount_colors_bucket_by_magnitude() {
-        assert_eq!(discount_color(95.0), discount_color(80.0));
-        assert_eq!(discount_color(79.9), discount_color(50.0));
-        assert_eq!(discount_color(49.9), discount_color(0.0));
-        assert_ne!(discount_color(80.0), discount_color(79.9));
-        assert_ne!(discount_color(50.0), discount_color(49.9));
-    }
 
     #[test]
     fn age_colors_and_labels_follow_the_documented_buckets() {

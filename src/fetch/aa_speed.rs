@@ -44,19 +44,27 @@ fn parse_number(raw: &str) -> Option<f64> {
 }
 
 /// Every record carries the median-throughput key (null or not) before the
-/// rest of the speed block, so its occurrences anchor the block.
+/// rest of the speed block, so its occurrences anchor the block. Two payload
+/// generations: through v5.0 the key was `medianOutputTokensPerSecond`; the
+/// v5.0.1 leaderboard (2026-11) renamed it to `outputSpeed` and dropped the
+/// percentile/quartile distribution fields (medians only now).
 fn speed_anchors(html: &str) -> Vec<(usize, Option<f64>)> {
-    let re = escaped_number("medianOutputTokensPerSecond");
-    re.captures_iter(html)
-        .filter_map(|caps| {
+    let mut anchors = Vec::new();
+    for key in ["medianOutputTokensPerSecond", "outputSpeed"] {
+        let re = escaped_number(key);
+        for caps in re.captures_iter(html) {
             let whole = caps.get(0).expect("whole match");
             let raw = caps.extract::<1>().1[0];
             // Position the anchor on the key itself so it precedes the value
             // and every later field of the same record.
-            let key_start = whole.as_str().find("medianOutputTokensPerSecond")?;
-            Some((whole.start() + key_start, parse_number(raw)))
-        })
-        .collect()
+            let Some(key_start) = whole.as_str().find(key) else {
+                continue;
+            };
+            anchors.push((whole.start() + key_start, parse_number(raw)));
+        }
+    }
+    anchors.sort_by_key(|(pos, _)| *pos);
+    anchors
 }
 
 /// Attribute each occurrence of one field to the nearest preceding anchor.
@@ -76,6 +84,25 @@ fn values_by_anchor(html: &str, key: &str, anchors: &[(usize, Option<f64>)]) -> 
             continue;
         }
         out[anchor_idx] = parse_number(caps.extract::<1>().1[0]);
+    }
+    out
+}
+
+/// Same attribution, over alternative field names for the same semantic slot
+/// (payload generations rename fields): per anchor, the first alternative
+/// that carries a value wins.
+fn values_by_anchor_any(
+    html: &str,
+    keys: &[&str],
+    anchors: &[(usize, Option<f64>)],
+) -> Vec<Option<f64>> {
+    let mut out: Vec<Option<f64>> = vec![None; anchors.len()];
+    for key in keys {
+        for (idx, value) in values_by_anchor(html, key, anchors).into_iter().enumerate() {
+            if value.is_some() {
+                out[idx] = value;
+            }
+        }
     }
     out
 }
@@ -142,7 +169,20 @@ pub(crate) fn parse_aa_speed_snapshot(html: &str) -> Result<AaSpeedSnapshot, Str
     let tps_p25 = values_by_anchor(html, "quartile25OutputTokensPerSecond", &anchors);
     let tps_p75 = values_by_anchor(html, "quartile75OutputTokensPerSecond", &anchors);
     let tps_p95 = values_by_anchor(html, "percentile95OutputTokensPerSecond", &anchors);
-    let ttft_p50 = values_by_anchor(html, "medianTimeToFirstTokenSeconds", &anchors);
+    // TTFT kept its semantic slot across the rename, but the v5.0.1 payload
+    // splits it in two: `timeToFirstToken` (first streamed token, reasoning
+    // included) and `timeToFirstAnswerToken` (the answer's first token). The
+    // old `medianTimeToFirstTokenSeconds` behaved like the latter (Opus 5.5
+    // "9 s at low, 706 s at max" — reasoning time inside), and the published
+    // table's only latency column is "First Answer Token (s)", so the
+    // answer-token field is the continuation of the metric this table has
+    // always shown. The p95/e2e distribution fields exist only in the
+    // pre-v5.0.1 payload and parse as None when absent.
+    let ttft_p50 = values_by_anchor_any(
+        html,
+        &["medianTimeToFirstTokenSeconds", "timeToFirstAnswerToken"],
+        &anchors,
+    );
     let ttft_p95 = values_by_anchor(html, "percentile95TimeToFirstTokenSeconds", &anchors);
     let e2e = values_by_anchor(html, "medianEndToEndResponseTimeSeconds", &anchors);
 

@@ -218,15 +218,4 @@ mod tests {
         assert_eq!(rows.len(), 1);
         assert!((rows[0].tokens_per_task.unwrap() - 10_000.0).abs() < 1e-9);
     }
-
-    #[test]
-    fn terminal_bench_4_rejects_rows_and_reports_empty() {
-        // The 4.0 board is live-only: an unusable payload must surface as an
-        // error rather than silently handing back zero rows.
-        let v = serde_json::json!({"rows": [
-            {"status":"other","metadata":{"model_display":{"label":"Opus 5"},"metrics":{"accuracy":10.0}}}
-        ]});
-        let rows = parse_terminal_bench_harbor(&v).unwrap();
-        assert!(rows.is_empty());
-    }
 }

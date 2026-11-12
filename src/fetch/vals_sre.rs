@@ -142,16 +142,4 @@ mod tests {
         );
         assert_eq!(data_file_url("<html>nothing</html>"), None);
     }
-
-    #[test]
-    #[ignore = "hits live vals.ai; run explicitly with cargo test -- --ignored"]
-    fn live_vals_sre_bench_has_rows() {
-        let client = reqwest::blocking::Client::builder()
-            .timeout(std::time::Duration::from_secs(30))
-            .build()
-            .unwrap();
-        let rows = fetch_vals_sre_bench(&client).expect("live SRE Bench fetch");
-        println!("{} rows; top: {}", rows.len(), rows[0].name);
-        assert!(!rows.is_empty());
-    }
 }

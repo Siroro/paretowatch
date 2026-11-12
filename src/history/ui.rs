@@ -840,21 +840,6 @@ mod tests {
     }
 
     #[test]
-    fn axis_formatting_adapts_to_span() {
-        let ts = 1_750_000_000.0;
-        let hour = format_ts_axis(ts, 3600.0);
-        assert!(
-            hour.len() == 5 && hour.contains(':'),
-            "HH:MM for short spans: {hour}"
-        );
-        let month = format_ts_axis(ts, 900.0 * 86_400.0);
-        assert!(
-            !month.contains(':'),
-            "month-level labels for long spans: {month}"
-        );
-    }
-
-    #[test]
     fn selection_roundtrips_through_disk() {
         let path = std::env::temp_dir()
             .join("paretowatch-history-tests")

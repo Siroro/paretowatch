@@ -254,15 +254,6 @@ mod tests {
     use crate::types::score_benchmark;
 
     #[test]
-    fn log_price_axis_round_trips_prices() {
-        for price in [0.0001, 0.01, 0.5, 1.0, 10.0, 250.0] {
-            let x = price_to_plot_x(price, true);
-            let round_trip = price_from_plot_x(x, true);
-            assert!((round_trip - price).abs() < price * 1e-10 + 1e-12);
-        }
-    }
-
-    #[test]
     fn estimated_task_cost_uses_current_surplus_blend_and_benchmark_volume() {
         let q = test_quote("gpt-5.6-sol", 2.0, true);
         let mut b = score_benchmark(

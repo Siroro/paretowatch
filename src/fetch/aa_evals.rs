@@ -23,11 +23,11 @@
 //! scores are attributed by nearest-preceding-name position — the same
 //! value the site headlines (Gemini 4 Argon's 77.5 partial score matches
 //! the number AA's changelog quotes for it). AA-3D uses that same payload
-//! style: its board objects end with `\"elo\":<integer>` right after the
-//! model's shortName and creator logo. The integer-only, object-end form
-//! matters — the page also embeds decimal `elo` fields for OTHER boards
-//! (AA-Briefcase breakdowns, per-domain win rates), which the pattern
-//! must not capture.
+//! style: its board objects end with `\"elo\":<number>` right after the
+//! model's shortName and creator logo (integer through 2026-10, decimal
+//! since AA's 2026-11 cycle). The object-end form matters — the page also
+//! embeds decimal `elo` fields for OTHER boards (AA-Briefcase breakdowns,
+//! per-domain win rates), which the pattern must not capture.
 
 use anyhow::{Result, anyhow};
 use regex::Regex;
@@ -172,7 +172,13 @@ pub(crate) fn fetch_aa_3d(client: &Client) -> Result<Vec<Benchmark>> {
 }
 
 pub(crate) fn parse_aa_3d(html: &str) -> Vec<Benchmark> {
-    let elo_re = Regex::new(r#"\\?"elo\\?":([0-9]+)\}"#).expect("elo regex");
+    // Integer-only through 2026-10; AA's v5.0.1 cycle (2026-11) moved the
+    // board to decimal Bradley-Terry Elo ("elo":1271.4151), so both forms
+    // parse. The number-then-`}` object-end shape stays the guard against
+    // the OTHER boards' decimal `elo` fields this page also embeds: every
+    // AA-Briefcase breakdown / chart CI `elo` is followed by
+    // `,\"lower95ci\":`, never by the object's closing brace.
+    let elo_re = Regex::new(r#"\\?"elo\\?":([0-9]+(?:\.[0-9]+)?)\}"#).expect("elo regex");
     let names = rsc_short_names(html);
     let mut rows = Vec::new();
     for caps in elo_re.captures_iter(html) {
@@ -286,27 +292,36 @@ mod tests {
 
     #[test]
     fn parses_aa_3d_elo_and_ignores_other_boards_elo_fields() {
-        // Mirrors the AA-3D page payload: board objects end with an integer
-        // `elo` right after the model's shortName, while the page ALSO embeds
-        // decimal `elo` fields for other boards (AA-Briefcase breakdowns, the
-        // AA-3D chart's CI block). Only the integer board form may produce
-        // rows.
+        // Mirrors the AA-3D page payload: board objects end with an `elo`
+        // right after the model's shortName — integer through 2026-10,
+        // decimal since AA's 2026-11 cycle — while the page ALSO embeds
+        // decimal `elo` fields for other boards (AA-Briefcase breakdowns,
+        // the AA-3D chart's CI block). Only the object-end board form may
+        // produce rows.
         let html = concat!(
             r#"{"slug":"claude-sonnet-5-5","name":"Claude Sonnet 5.5 (Max, Default Fallback)","shortName":"Claude Sonnet 5.5 (max with fallback)","#,
             r#""briefcaseElo":1811.82,"briefcaseBreakdown":{"overall":{"elo":1811.82,"lower95ci":1800.1,"upper95ci":1823.5}},"#,
             r#"{"slug":"gpt-6-luna","shortName":"GPT-6 Luna (max)","creatorLogo":"/img/logos/openai.svg","elo":1000},"#,
+            r#"{"slug":"claude-fable-5-2","shortName":"Claude Fable 5.2 (max)","creatorLogo":"/img/logos/anthropic.svg","elo":1271.4151},"#,
             r#"{"slug":"nemotron-3-ultra-550b-a55b","shortName":"Nemotron 3 Ultra","creatorLogo":"/img/logos/nvidia.svg","elo":573},"#,
             r##"{"chartBlock":[{"shortName":"Claude Sonnet 5.5 (max with fallback)","creatorColor":"#cc785c","elo":1198.8306,"lower95ci":1166.3291,"upper95ci":1231.3321}]}"##,
-            r#""creatorLogo":"/img/logos/anthropic.svg","elo":1199}"#,
+            r#""creatorLogo":"/img/logos/anthropic.svg","elo":1199.83}"#,
         );
         let rows = parse_aa_3d(html);
-        assert_eq!(rows.len(), 3, "decimal elo fields must not add rows");
+        assert_eq!(
+            rows.len(),
+            4,
+            "decimal CI-block elo fields must not add rows"
+        );
         let sonnet = rows
             .iter()
             .find(|r| r.slug == "Claude Sonnet 5.5")
             .expect("effort suffix splits out of the name");
-        assert_eq!(sonnet.agentic_coding, Some(1199.0));
+        assert_eq!(sonnet.agentic_coding, Some(1199.83));
         assert_eq!(sonnet.reasoning_effort.as_deref(), Some("max"));
+        // The 2026-11 decimal board form parses alongside the integer form.
+        let fable = rows.iter().find(|r| r.slug == "Claude Fable 5.2").unwrap();
+        assert_eq!(fable.agentic_coding, Some(1271.4151));
         // GPT-6 Luna is the board's fixed 1000 anchor.
         let luna = rows.iter().find(|r| r.slug == "GPT-6 Luna").unwrap();
         assert_eq!(luna.agentic_coding, Some(1000.0));
@@ -320,6 +335,6 @@ mod tests {
         let quote = test_quote("nvidia-nemotron-3-ultra-550b-a55b", 1.0, true);
         assert!(best_benchmark_match(&quote, &rows).is_some());
         // Sorted best-first: the leader tops the board.
-        assert_eq!(rows[0].slug, "Claude Sonnet 5.5");
+        assert_eq!(rows[0].slug, "Claude Fable 5.2");
     }
 }
