@@ -14,7 +14,8 @@ use std::path::PathBuf;
 use windows::Win32::Foundation::{ERROR_SUCCESS, PROPERTYKEY};
 use windows::Win32::System::Com::StructuredStorage::PROPVARIANT;
 use windows::Win32::System::Com::{
-    CLSCTX_INPROC_SERVER, COINIT_APARTMENTTHREADED, CoCreateInstance, CoInitializeEx, IPersistFile,
+    CLSCTX_INPROC_SERVER, COINIT_APARTMENTTHREADED, CoCreateInstance, CoInitializeEx,
+    CoUninitialize, IPersistFile,
 };
 use windows::Win32::UI::Shell::PropertiesSystem::IPropertyStore;
 use windows::Win32::UI::Shell::{IShellLinkW, ShellLink};
@@ -93,23 +94,30 @@ fn create_start_menu_shortcut() -> Result<(), Box<dyn Error>> {
     let lnk = shortcut_path()?;
     unsafe {
         CoInitializeEx(None, COINIT_APARTMENTTHREADED).ok()?;
-        let link: IShellLinkW = CoCreateInstance(&ShellLink, None, CLSCTX_INPROC_SERVER)?;
-        link.SetPath(&windows::core::HSTRING::from(exe.as_os_str()))?;
-        if let Some(dir) = exe.parent() {
-            link.SetWorkingDirectory(&windows::core::HSTRING::from(dir.as_os_str()))?;
-        }
-        let store: IPropertyStore = link.cast()?;
-        store.SetValue(&PKEY_APPUSERMODEL_ID, &PROPVARIANT::from(AUMID))?;
-        store.Commit()?;
-        let persist: IPersistFile = link.cast()?;
-        // fFailIfExists=FALSE: the shortcut is rewritten on every successful
-        // registration, so when an update relocates the exe its target
-        // self-heals to the new path instead of staying pinned to a stale
-        // one. Idempotency comes from writing the same content, not from
-        // skipping the save.
-        persist.Save(&windows::core::HSTRING::from(lnk.as_os_str()), false)?;
+        // Every successful CoInitializeEx (including the S_FALSE
+        // already-initialized return) must be balanced by CoUninitialize —
+        // on the early-error paths too, hence the captured inner result.
+        let result = (|| -> Result<(), Box<dyn Error>> {
+            let link: IShellLinkW = CoCreateInstance(&ShellLink, None, CLSCTX_INPROC_SERVER)?;
+            link.SetPath(&windows::core::HSTRING::from(exe.as_os_str()))?;
+            if let Some(dir) = exe.parent() {
+                link.SetWorkingDirectory(&windows::core::HSTRING::from(dir))?;
+            }
+            let store: IPropertyStore = link.cast()?;
+            store.SetValue(&PKEY_APPUSERMODEL_ID, &PROPVARIANT::from(AUMID))?;
+            store.Commit()?;
+            let persist: IPersistFile = link.cast()?;
+            // fFailIfExists=FALSE: the shortcut is rewritten on every successful
+            // registration, so when an update relocates the exe its target
+            // self-heals to the new path instead of staying pinned to a stale
+            // one. Idempotency comes from writing the same content, not from
+            // skipping the save.
+            persist.Save(&windows::core::HSTRING::from(lnk.as_os_str()), false)?;
+            Ok(())
+        })();
+        CoUninitialize();
+        result
     }
-    Ok(())
 }
 
 fn shortcut_path() -> Result<PathBuf, Box<dyn Error>> {

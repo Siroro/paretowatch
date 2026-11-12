@@ -99,7 +99,9 @@ fn values_by_anchor_any(
     let mut out: Vec<Option<f64>> = vec![None; anchors.len()];
     for key in keys {
         for (idx, value) in values_by_anchor(html, key, anchors).into_iter().enumerate() {
-            if value.is_some() {
+            // First alternative wins, per the contract above: a later key
+            // only fills slots the earlier ones left empty.
+            if value.is_some() && out[idx].is_none() {
                 out[idx] = value;
             }
         }
@@ -353,6 +355,22 @@ mod tests {
         let opus = aa_speed_named(&snapshot.entries, "Claude Opus 5.5").unwrap();
         assert_eq!(opus.effort.as_deref(), Some("xhigh"));
         assert!((opus.median_tps.unwrap() - 72.5).abs() < 1e-9);
+    }
+
+    #[test]
+    fn ttft_alternatives_first_listed_wins_when_both_present() {
+        // A record carrying both TTFT spellings with different values: the
+        // first alternative owns the slot — a later key only fills slots the
+        // earlier ones left empty.
+        let payload = [
+            r#"{"slug":"dual-ttft","name":"Dual TTFT","shortName":"Dual TTFT","#,
+            r#""modelCreatorName":"Example","outputSpeed":50.0,"#,
+            r#""medianTimeToFirstTokenSeconds":2.0,"timeToFirstAnswerToken":9.0},"#,
+        ]
+        .concat();
+        let snapshot = parse_aa_speed_snapshot(&payload).expect("parses");
+        let entry = aa_speed_named(&snapshot.entries, "Dual TTFT").unwrap();
+        assert!((entry.median_ttft_s.unwrap() - 2.0).abs() < 1e-9);
     }
 
     #[test]

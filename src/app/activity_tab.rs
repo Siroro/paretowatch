@@ -400,19 +400,19 @@ impl ParetoWatchApp {
         let mode = self.comparison_mode;
         let scaffold = self.common_scaffold.clone();
         let cache = &mut self.new_listings_cache;
-        if rows
-            .iter()
-            .any(|row| !cache.coverage.contains_key(&row.slug))
-        {
-            let boards = cache
-                .boards
-                .get_or_insert_with(|| consensus_boards(sets, mode, &scaffold));
-            for row in &mut rows {
-                row.benchmark_sources = *cache
-                    .coverage
-                    .entry(row.slug.clone())
-                    .or_insert_with(|| listing_benchmark_coverage(&row.quote, boards));
-            }
+        // Fill unconditionally: rows are re-cloned from the cache every frame
+        // with `benchmark_sources: 0`, so the map hit IS the memoization.
+        // Gating on "some visible row missing from the map" skipped the fill
+        // entirely on every frame after the first, resetting every badge to
+        // "no boards" until the next data refresh.
+        let boards = cache
+            .boards
+            .get_or_insert_with(|| consensus_boards(sets, mode, &scaffold));
+        for row in &mut rows {
+            row.benchmark_sources = *cache
+                .coverage
+                .entry(row.slug.clone())
+                .or_insert_with(|| listing_benchmark_coverage(&row.quote, boards));
         }
         (rows, total_matching)
     }

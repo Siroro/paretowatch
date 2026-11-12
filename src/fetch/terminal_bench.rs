@@ -145,11 +145,13 @@ pub(crate) fn parse_terminal_bench_harbor(root: &Value) -> Result<Vec<Benchmark>
                 (total > 0.0).then_some(total)
             });
         // 4.0 publishes n_trials at the row top level and inside metrics;
-        // some rows only carry the metrics copy.
+        // some rows only carry the metrics copy. A top-level `null` must not
+        // defeat that fallback: `and_then` before `or_else` so a JSON null
+        // reads as absent instead of winning the slot.
         let n_trials = row
             .get("n_trials")
-            .or_else(|| metrics.get("n_trials"))
-            .and_then(number_value);
+            .and_then(number_value)
+            .or_else(|| metrics.get("n_trials").and_then(number_value));
         if let (Some(total_tokens), Some(n_trials)) = (total_tokens, n_trials)
             && total_tokens.is_finite()
             && total_tokens > 0.0
@@ -213,6 +215,19 @@ mod tests {
         // tokens-per-task estimate.
         let v = serde_json::json!({"rows": [
             {"status":"display","metadata":{"model_display":{"label":"GPT-5.6 Sol"},"agent_display":{"label":"[CC]"}},"metrics":{"accuracy":50.0,"total_tokens":1_000_000,"n_trials":100}}
+        ]});
+        let rows = parse_terminal_bench_harbor(&v).unwrap();
+        assert_eq!(rows.len(), 1);
+        assert!((rows[0].tokens_per_task.unwrap() - 10_000.0).abs() < 1e-9);
+    }
+
+    #[test]
+    fn null_top_level_n_trials_still_falls_back_to_metrics() {
+        // A top-level JSON `null` must read as absent, not as a present
+        // value that defeats the fallback: the metrics copy still yields
+        // the tokens-per-task estimate.
+        let v = serde_json::json!({"rows": [
+            {"status":"display","metadata":{"model_display":{"label":"GPT-5.6 Sol"},"agent_display":{"label":"[CC]"}},"n_trials":null,"metrics":{"accuracy":50.0,"total_tokens":1_000_000,"n_trials":100}}
         ]});
         let rows = parse_terminal_bench_harbor(&v).unwrap();
         assert_eq!(rows.len(), 1);

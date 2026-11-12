@@ -129,6 +129,8 @@ struct NewListing {
 struct NewListingsCache {
     data_version: u64,
     comparison_mode: ComparisonMode,
+    /// The cached rows bake in the blended price at these workload weights.
+    weights: crate::types::PricingWeights,
     scaffold: String,
     /// Every tracked model still priced in the snapshot, newest first.
     rows: Vec<NewListing>,
@@ -425,7 +427,11 @@ impl ParetoWatchApp {
             }
         };
 
-        let _ = worker_tx.send(WorkerCommand::Refresh);
+        // No startup `Refresh` send: the worker's loop body fetches prices and
+        // every benchmark source before its first channel read, so a queued
+        // Refresh would only clear `last_benchmark_fetch` and double the
+        // whole startup fetch pass. User-triggered refreshes (Refresh button,
+        // Settings Save, workload Apply) keep their sends.
 
         // Seed the calculator with an "agentic" session: 10M tokens split by
         // the configured workload weights.
@@ -702,7 +708,11 @@ impl ParetoWatchApp {
         loop {
             match self.worker_rx.try_recv() {
                 Ok(WorkerMessage::Prices(Ok(snapshot))) => {
-                    first_price_poll = self.price_snapshot.is_none();
+                    // Latch, don't overwrite: when two polls coalesce into one
+                    // drain (startup work stalling the UI thread, repaint
+                    // coalescing), the second message must not clear the flag
+                    // and re-arm the first-poll listing suppression below.
+                    first_price_poll |= self.price_snapshot.is_none();
                     if let Some(previous) = &self.price_snapshot {
                         let changes = detect_price_changes(previous, &snapshot, &self.settings);
                         if let Ok(mut log) = self.notifications.lock() {
@@ -1039,6 +1049,9 @@ impl ParetoWatchApp {
             cache.data_version != self.data_version
                 || cache.comparison_mode != self.comparison_mode
                 || cache.scaffold != self.common_scaffold
+                // A workload-mix change doesn't bump data_version; the cached
+                // blended prices must not keep quoting the old mix.
+                || cache.weights != self.settings.pricing_weights()
         };
         if !stale {
             return;
@@ -1066,6 +1079,7 @@ impl ParetoWatchApp {
         self.new_listings_cache = NewListingsCache {
             data_version: self.data_version,
             comparison_mode: self.comparison_mode,
+            weights: self.settings.pricing_weights(),
             scaffold: self.common_scaffold.clone(),
             rows,
             coverage: HashMap::new(),
@@ -1713,8 +1727,11 @@ impl ParetoWatchApp {
             .retain(|id, _| valid_ids.contains(id));
         self.semantic_leader_state
             .retain(|id, _| valid_ids.contains(id));
-        self.alert_status_cache
-            .retain(|id, _| valid_ids.contains(id));
+        // An edited rule keeps its id, and none of the cache key's components
+        // (data/frontier version, weights) change with an edit — drop the
+        // cached statuses so the "Current" column can't describe the rule's
+        // previous definition until the next poll (also covers deletions).
+        self.alert_status_cache.clear();
         if let Ok(mut log) = self.notifications.lock() {
             log.update_settings(&self.settings);
         }
@@ -1781,7 +1798,11 @@ impl eframe::App for ParetoWatchApp {
         // ui) so the refresh continues while the window is hidden in tray.
         self.refresh_stale_performance();
         // Runs here (not in ui) so floating price widgets keep updating while
-        // the main window is hidden in the tray.
+        // the main window is hidden in the tray. Prune BEFORE refreshing: a
+        // row removed in the widget viewport this frame lives in `shared.rows`
+        // but its pin still sits in `window.rows`, so a refresh-first pass
+        // would resurrect the removed row for one tick.
+        self.widgets.prune_closed();
         if self.widgets.refresh(
             self.price_snapshot.as_ref(),
             &self.settings,
@@ -1789,7 +1810,6 @@ impl eframe::App for ParetoWatchApp {
         ) {
             self.widgets.request_repaints(ctx);
         }
-        self.widgets.prune_closed();
         self.restore_pending_pins(ctx);
         self.persist_ui_state_if_changed();
     }

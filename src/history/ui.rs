@@ -622,6 +622,16 @@ fn event_log(ui: &mut egui::Ui, prepared: &[PreparedSeries], state: &HistoryUiSt
     let Some(primary) = prepared.first() else {
         return;
     };
+    // Normalized points hold percent-of-anchor values, not prices: the change
+    // log must label them as such instead of running them through the $/1M
+    // price formatter (the hover tooltip already does).
+    let fmt = |v: f64| {
+        if state.normalize {
+            format!("{v:.1}%")
+        } else {
+            state.metric.format_value(v)
+        }
+    };
     let rows: Vec<String> = primary
         .points
         .iter()
@@ -633,23 +643,24 @@ fn event_log(ui: &mut egui::Ui, prepared: &[PreparedSeries], state: &HistoryUiSt
                 .and_then(|j| primary.points.get(j))
                 .map(|(_, pv)| *pv);
             match prev {
-                Some(p) if p.abs() > f64::EPSILON => format!(
-                    "{}  {} → {}  ({:+.1}%)",
-                    format_time_utc(*ts),
-                    state.metric.format_value(p),
-                    state.metric.format_value(*v),
-                    (v - p) / p * 100.0
-                ),
-                Some(_) => format!(
-                    "{}  {}",
-                    format_time_utc(*ts),
-                    state.metric.format_value(*v)
-                ),
-                None => format!(
-                    "{}  first record: {}",
-                    format_time_utc(*ts),
-                    state.metric.format_value(*v)
-                ),
+                Some(p) if p.abs() > f64::EPSILON => {
+                    let delta = if state.normalize {
+                        // Percentage points of the anchor, not a relative
+                        // percent-of-percent.
+                        format!("{:+.1}pt", v - p)
+                    } else {
+                        format!("({:+.1}%)", (v - p) / p * 100.0)
+                    };
+                    format!(
+                        "{}  {} → {}  {}",
+                        format_time_utc(*ts),
+                        fmt(p),
+                        fmt(*v),
+                        delta
+                    )
+                }
+                Some(_) => format!("{}  {}", format_time_utc(*ts), fmt(*v)),
+                None => format!("{}  first record: {}", format_time_utc(*ts), fmt(*v)),
             }
         })
         .take(80)

@@ -31,8 +31,11 @@ pub(crate) struct ModelSeries {
 
 #[derive(Debug, Default)]
 struct CurrentState {
-    input_q: i32,
-    output_q: i32,
+    /// `None` = never recorded, so a first observation that quantizes to 0
+    /// (a genuine free/sub-quantum ask) still writes an event instead of
+    /// colliding with a never-seen sentinel.
+    input_q: Option<i32>,
+    output_q: Option<i32>,
     cache_q: Option<i32>,
     telemetry_day: u32,
 }
@@ -141,9 +144,9 @@ impl HistoryTracker {
         let old_q = match field {
             PriceField::Input => st.input_q,
             PriceField::Output => st.output_q,
-            PriceField::CacheRead => st.cache_q.unwrap_or(0),
+            PriceField::CacheRead => st.cache_q,
         };
-        if new_q == old_q {
+        if old_q == Some(new_q) {
             return;
         }
         let frame = Frame {
@@ -151,7 +154,7 @@ impl HistoryTracker {
             dt: 0,
             kind: EventKind::Price {
                 field,
-                delta: new_q - old_q,
+                delta: new_q - old_q.unwrap_or(0),
             },
         };
         self.apply_event(ts, frame.clone());
@@ -214,12 +217,14 @@ impl HistoryTracker {
                 };
                 let new_q = match field {
                     PriceField::Input => {
-                        st.input_q += delta;
-                        st.input_q
+                        let new_q = st.input_q.unwrap_or(0) + delta;
+                        st.input_q = Some(new_q);
+                        new_q
                     }
                     PriceField::Output => {
-                        st.output_q += delta;
-                        st.output_q
+                        let new_q = st.output_q.unwrap_or(0) + delta;
+                        st.output_q = Some(new_q);
+                        new_q
                     }
                     PriceField::CacheRead => {
                         let new_q = st.cache_q.unwrap_or(0) + delta;
@@ -578,6 +583,44 @@ mod tests {
             now_plus(180),
         );
         assert!(after.is_empty());
+        let _ = fs::remove_file(&path);
+    }
+
+    #[test]
+    fn first_zero_price_records_an_event() {
+        // A genuine free/sub-quantum ask is a real price, not the
+        // never-recorded sentinel: the first $0 observation must seed the
+        // series (floor alerts and the History tab read it) instead of the
+        // series staying empty until the price rises above the quantum.
+        let path = temp_path("zero-first");
+        let _ = fs::remove_file(&path);
+        {
+            let mut t = HistoryTracker::open(&path);
+            let mut free = quote("acme/free", 0.0, 0.0);
+            free.cache_read = Some(0.0);
+            t.record(&snapshot(vec![free]), now_plus(0));
+            let s = t.series("acme/free").expect("model tracked");
+            assert_eq!(s.input.len(), 1, "first $0 input records");
+            assert_eq!(s.input[0].1, 0.0);
+            assert_eq!(s.output.len(), 1, "first $0 output records");
+            assert_eq!(s.output[0].1, 0.0);
+            assert_eq!(s.cache_read.len(), 1, "first $0 cache leg records");
+            assert_eq!(s.cache_read[0].1, 0.0);
+            // An unchanged zero poll adds nothing.
+            let mut same = quote("acme/free", 0.0, 0.0);
+            same.cache_read = Some(0.0);
+            t.record(&snapshot(vec![same]), now_plus(60));
+            let s = t.series("acme/free").unwrap();
+            assert_eq!(s.input.len(), 1);
+            assert_eq!(s.output.len(), 1);
+            assert_eq!(s.cache_read.len(), 1);
+        }
+        // Replay converges on the same state.
+        let t = HistoryTracker::open(&path);
+        let s = t.series("acme/free").expect("survived restart");
+        assert_eq!(s.input.len(), 1);
+        assert_eq!(s.input[0].1, 0.0);
+        assert_eq!(s.cache_read.len(), 1);
         let _ = fs::remove_file(&path);
     }
 

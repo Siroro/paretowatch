@@ -1,3 +1,135 @@
+# Unreleased — 2026-11-12 bug-audit sweep (0.35.1)
+
+A full-codebase bug audit (fetch/parsing, core domain, UI, persistence/infra —
+every file read) that landed 20 fixes. No data or calibration changes apart
+from the insertion-percentile scale note below.
+
+## Fixed (notifications & alerts)
+
+- **Discount / seller-health alerts re-fired on every transient live-feed
+  outage.** A fallback-feed poll publishes no discount or seller-count
+  numbers, and the edge-state update treated that "unknown" as "condition
+  cleared" — re-arming a standing discount so the next live poll
+  re-notified. Unknown polls now leave the edge state untouched; a genuine
+  clear-and-return still re-fires.
+- **A recreated alert could inherit the deleted rule's cooldown.** Alert ids
+  are max-live-id + 1, so the id comes back on the next creation while the
+  notification log still holds the old rule's delivery records — swallowing
+  the new rule's first toast for up to a cooldown window. Cooldown matching
+  now requires the same kind and model as well as the id.
+- **First-run listing burst when two startup polls coalesce.** The first-poll
+  suppression flag was overwritten per drained message instead of latched, so
+  a coalesced second poll re-armed it and replayed "✚ N new models listed"
+  (N = the whole catalog on a fresh install). The flag latches now.
+- **Every startup fetched everything twice.** The worker's loop body fetches
+  prices and all benchmark boards before its first channel read; the app's
+  queued startup `Refresh` then cleared the benchmark timer and ran the whole
+  pass again. User-triggered refreshes keep their sends.
+
+## Fixed (data integrity)
+
+- **The history log kept appending after a failed write.** A failed (possibly
+  partial) `write_all` left the file open, so later appends landed after the
+  garbage — and the next launch's replay stopped at the first undecodable
+  frame, silently discarding every good event appended past it. A write
+  failure now enters degraded mode for real (the file is closed and no
+  further appends are attempted), as the doc comment always claimed.
+- **A genuine $0 first price never recorded.** The quantized current-state
+  sentinel for "never seen" was 0, colliding with real free/sub-quantum
+  asks: such a model's history stayed empty (no floor alerts, no series)
+  until the price rose above the quantum. All three price legs now use an
+  `Option` sentinel. Previously written logs replay unchanged.
+
+## Fixed (UI correctness)
+
+- **New-listings badges showed "◆ no rows on N boards" after the first
+  frame** of each data epoch. The board-coverage memoization gate was
+  backwards — once every visible row was cached the fill loop was skipped,
+  resetting the cloned rows' zero counts; the map hit *is* the memoization,
+  so the fill now runs unconditionally. The "Show on Pareto chart" button
+  that depends on the count stays put too.
+- **The Alerts tab "Current" column kept describing a rule's previous
+  definition after an edit** (same id, no cache-key component changes) until
+  the next poll. The status cache is cleared on every settings save.
+- **New-listings cards quoted the old workload mix** after a workload Apply:
+  the cache staleness key omitted the pricing weights. They're part of the
+  key now, matching the Pareto cache.
+- **A removed pinned-row reappeared for one tick** — `prune_closed` ran
+  after `refresh`, so the still-present pin resurrected the row for a frame.
+  Prune runs first.
+- **The pinned-widget arrow showed ▼ when the blend hadn't moved** (a
+  zero-weight leg changed): the arrow now requires an actual blend change.
+- **The History change log printed normalized percentages through the $/1M
+  formatter** ("$95.2/1M" for 95.2% of the anchor). Normalized series now
+  format as percent with a percentage-point delta, matching the hover
+  tooltip.
+
+## Fixed (scoring & parsing)
+
+- **Insertion percentiles carried a +100/n bias.** `anchored_aa_percentiles`
+  ranked newcomers on a 1-based slot scale while its two sibling rankers
+  (`tie_aware_percentiles`, `anchored_est_standings`) use the 0-based
+  convention — inflating the prior of every not-yet-board-evaluated launch
+  and pre-v5 `~est` family by up to ten percentile points at the cohort
+  floor (the old clamp comment was papering over exactly this overshoot).
+  Newcomers now read 0 at the very bottom and exactly 100 above the whole
+  cohort, on the same scale as cohort members. Real board scores are
+  unaffected.
+- **The scaffold dropdown's preferred order shuffled between launches**: the
+  preferred pass took whichever HashMap entry a `find` returned first, and
+  the bidirectional substring match fits several keys per preferred name
+  ("SWE-agent" also matches "mini-SWE-agent"). Candidates are ranked now —
+  exact key first, then containing (versioned) spellings, then contained —
+  so "mini-SWE-agent" reliably heads the list.
+- **Terminal-Bench rows with a top-level JSON `null` n_trials lost their
+  tokens-per-task estimate**: the null satisfied the "key exists" check and
+  defeated the documented metrics fallback. Null reads as absent now.
+- **AA speed's alternative TTFT field names were last-wins instead of the
+  documented first-wins** — invisible while both spellings publish identical
+  values, a silent wrong number the day they diverge. First alternative wins.
+- **AA-3D and AutomationBench skipped the shared 2,500-byte attribution
+  window** every other AA parser enforces; a score occurrence far past the
+  last model record belonged to no one, not to the last-named model.
+
+## Fixed (hygiene)
+
+- **notifications.json was re-serialized and rewritten on every 30-second
+  poll** even with zero price moves (up to 2 000 records + 2 000 moves of
+  pure disk churn); the write happens only when a batch adds something.
+- **`CoInitializeEx` in the toast-identity thread was never balanced with
+  `CoUninitialize`** (including on early-error paths). Balanced now.
+- FrontierCode 1.1's comment claimed the "0.05 tier" while the weight is
+  (correctly, per the 0.33.0 rebalance) 0.10 — comment fixed.
+
+## Known risks (deferred deliberately)
+
+- `scaffold_matches`'s bidirectional substring still admits a plain
+  SWE-agent row under a CommonScaffold = mini-SWE-agent request (different
+  harness family). Every lexical tightening tried breaks legitimate
+  versioned-spelling joins ("mini-SWE-agent [1.8]"); needs a fix validated
+  against the live boards through the live-validation suite.
+- The Pareto workload popover still stages its edits in live settings, so an
+  unrelated save persists an un-applied mix (and clears the ● marker); a
+  staged-draft redesign would break the live chart preview. UX decision
+  pending.
+- Chart→alert prefill copies metric and cost basis but not benchmark source /
+  comparison mode / scaffold / liquidity — possibly deliberate decoupling.
+- `model_core` mis-keys `year + modifier + digit` shapes ("X 2025 max 5");
+  no live name triggers it, and a fix risks the "Qwen3.8 Max 0902"
+  date-suffix join.
+- Non-AA boards have no plausibility bounds on parsed scores, and
+  `.old-`/`.bad-` archive sidecars are never pruned — hardening items, not
+  bugs.
+
+Formatting, locked check, locked Clippy with warnings denied (`--all-targets`),
+and locked test all pass (240 tests — up from 233, with regression tests for
+the discount/seller-health unknown-poll edge, the cooldown id-reuse scoping,
+the $0-first-price recording, the insertion-percentile endpoints, the
+scaffold-slot determinism, the null `n_trials` fallback, and the TTFT
+first-alternative rule).
+
+---
+
 # Unreleased — 2026-11-12 benchmark sweep (0.35.0)
 
 The first data sweep since 2026-10-29, plus three upstream-format fixes the

@@ -36,8 +36,8 @@ use reqwest::blocking::Client;
 use super::aa_names::{alias_display_name, split_aa_display_name};
 use super::http::fetch_text;
 use super::parse::{
-    collapse_whitespace, rsc_short_names, short_name_before, sort_rows_by_score_desc,
-    strip_html_tags,
+    ATTRIBUTION_WINDOW, collapse_whitespace, rsc_short_names, short_name_before,
+    sort_rows_by_score_desc, strip_html_tags,
 };
 use crate::model_id::benchmark_model_key;
 use crate::types::{AA_3D_URL, Benchmark, BenchmarkKind, score_benchmark};
@@ -147,8 +147,10 @@ pub(crate) fn parse_automationbench_aa(html: &str) -> Vec<Benchmark> {
         let Ok(frac) = caps.extract::<1>().1[0].parse::<f64>() else {
             continue;
         };
-        // Nearest preceding shortName owns this score.
-        let Some(name) = short_name_before(&names, whole.start(), None) else {
+        // Nearest preceding shortName owns this score, within the shared
+        // attribution window: an occurrence far past the last record belongs
+        // to no model (footer/annotation chunks), not to the last-named one.
+        let Some(name) = short_name_before(&names, whole.start(), Some(ATTRIBUTION_WINDOW)) else {
             continue;
         };
         if let Some(row) = build_row(
@@ -189,7 +191,7 @@ pub(crate) fn parse_aa_3d(html: &str) -> Vec<Benchmark> {
         if !(500.0..=3000.0).contains(&elo) {
             continue;
         }
-        let Some(name) = short_name_before(&names, whole.start(), None) else {
+        let Some(name) = short_name_before(&names, whole.start(), Some(ATTRIBUTION_WINDOW)) else {
             continue;
         };
         if let Some(row) = build_row(name, elo, "3D Elo") {

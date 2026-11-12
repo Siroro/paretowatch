@@ -249,12 +249,15 @@ pub(crate) fn evaluate_alerts(
         if alert.mode == AlertMode::Discount {
             // Only the live-market overlay publishes discount numbers; on
             // the fallback feed the condition is unknown rather than false.
-            let condition = quote
-                .discount_pct
-                .is_some_and(|pct| pct >= alert.discount_threshold_pct);
+            // An unknown poll leaves the edge state untouched — resetting it
+            // to `false` would re-arm a standing discount so every transient
+            // live-feed outage re-notifies on recovery.
+            let Some(pct) = quote.discount_pct else {
+                continue;
+            };
+            let condition = pct >= alert.discount_threshold_pct;
             let previous = state.get(&alert.id).copied().unwrap_or(false);
             if should_fire_level(alert, condition, previous, notifications) {
-                let pct = quote.discount_pct.unwrap_or_default();
                 let was = previous_quotes
                     .get(&alert.model)
                     .and_then(|q| q.discount_pct)
@@ -280,13 +283,14 @@ pub(crate) fn evaluate_alerts(
 
         if alert.mode == AlertMode::SellerHealth {
             // Same unknown-on-fallback caveat as discounts: seller counts
-            // only exist on live-market quotes.
-            let condition = quote
-                .healthy_seller_count
-                .is_some_and(|count| count <= alert.healthy_seller_floor);
+            // only exist on live-market quotes, and an unknown poll must
+            // leave the edge state untouched.
+            let Some(count) = quote.healthy_seller_count else {
+                continue;
+            };
+            let condition = count <= alert.healthy_seller_floor;
             let previous = state.get(&alert.id).copied().unwrap_or(false);
             if should_fire_level(alert, condition, previous, notifications) {
-                let count = quote.healthy_seller_count.unwrap_or_default();
                 notify_alert(
                     notifications,
                     alert,
@@ -743,6 +747,71 @@ mod tests {
             &log,
         );
         assert_eq!(log.lock().unwrap().records().count(), 2);
+    }
+
+    #[test]
+    fn discount_alert_unknown_poll_keeps_edge_state() {
+        // Only the live-market overlay publishes discount numbers, so a
+        // fallback-feed poll in the middle of a standing discount reads
+        // "unknown", not "condition cleared": resetting the edge there
+        // re-armed the alert and re-notified on every transient feed outage.
+        let settings = Settings {
+            alerts: vec![AlertRule {
+                mode: AlertMode::Discount,
+                discount_threshold_pct: 20.0,
+                ..move_alert(0.0, MoveDirection::Any)
+            }],
+            ..Settings::default()
+        };
+        let log = notification_log();
+        log.lock().unwrap().mute_for(chrono::Duration::hours(1));
+        let mut state = HashMap::new();
+        let empty = HashMap::new();
+        let live = snapshot(vec![test_quote("model-a", 1.0, true)], "catalog+matrix");
+        let mut fallback = snapshot(vec![test_quote("model-a", 1.0, false)], "catalog+matrix");
+        fallback.quotes[0].discount_pct = None;
+
+        evaluate_alerts(&live, &settings, &mut state, &empty, false, &log);
+        assert_eq!(log.lock().unwrap().records().count(), 1); // 25% ≥ 20% fires
+        evaluate_alerts(&fallback, &settings, &mut state, &empty, false, &log);
+        assert_eq!(log.lock().unwrap().records().count(), 1); // unknown: no record
+        // The overlay returns with the same standing discount: no re-fire.
+        evaluate_alerts(&live, &settings, &mut state, &empty, false, &log);
+        assert_eq!(log.lock().unwrap().records().count(), 1);
+        // Genuinely clearing and returning does re-fire (edge reset first).
+        let mut cleared = snapshot(vec![test_quote("model-a", 1.0, true)], "catalog+matrix");
+        cleared.quotes[0].discount_pct = Some(5.0);
+        evaluate_alerts(&cleared, &settings, &mut state, &empty, false, &log);
+        evaluate_alerts(&live, &settings, &mut state, &empty, false, &log);
+        assert_eq!(log.lock().unwrap().records().count(), 2);
+    }
+
+    #[test]
+    fn seller_health_alert_unknown_poll_keeps_edge_state() {
+        // Same unknown-on-fallback contract for seller counts: test_quote
+        // carries 8 healthy sellers, at or below the floor of 10.
+        let settings = Settings {
+            alerts: vec![AlertRule {
+                mode: AlertMode::SellerHealth,
+                healthy_seller_floor: 10,
+                ..move_alert(0.0, MoveDirection::Any)
+            }],
+            ..Settings::default()
+        };
+        let log = notification_log();
+        log.lock().unwrap().mute_for(chrono::Duration::hours(1));
+        let mut state = HashMap::new();
+        let empty = HashMap::new();
+        let live = snapshot(vec![test_quote("model-a", 1.0, true)], "catalog+matrix");
+        let mut fallback = snapshot(vec![test_quote("model-a", 1.0, false)], "catalog+matrix");
+        fallback.quotes[0].healthy_seller_count = None;
+
+        evaluate_alerts(&live, &settings, &mut state, &empty, false, &log);
+        assert_eq!(log.lock().unwrap().records().count(), 1); // 8 ≤ 10 fires
+        evaluate_alerts(&fallback, &settings, &mut state, &empty, false, &log);
+        assert_eq!(log.lock().unwrap().records().count(), 1); // unknown: no record
+        evaluate_alerts(&live, &settings, &mut state, &empty, false, &log);
+        assert_eq!(log.lock().unwrap().records().count(), 1); // no re-fire
     }
 
     #[test]

@@ -286,7 +286,13 @@ impl EventStore {
                 buf.len()
             }
             Err(err) => {
+                // Degraded mode means what the doc above says: stop writing.
+                // A failed `write_all` may have emitted a partial frame, and a
+                // later append would land after that garbage — on the next
+                // launch the replay stops at the first undecodable frame and
+                // silently discards every good event appended past it.
                 self.degraded_reason = Some(format!("history write failed: {err}"));
+                self.file = None;
                 0
             }
         }

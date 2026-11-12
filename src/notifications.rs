@@ -197,8 +197,16 @@ impl NotificationLog {
     /// written once for the whole batch. Records land newest-first — the last
     /// item ends up at the front of the list.
     pub(crate) fn push_price_moves(&mut self, moves: impl IntoIterator<Item = PriceMoveRecord>) {
+        let before = self.price_moves.len();
         for move_ in moves {
             self.price_moves.push_front(move_);
+        }
+        if self.price_moves.len() == before {
+            // The poll-to-poll call site almost always passes an empty batch;
+            // re-serializing and rewriting the whole log (up to 2 000 records
+            // plus 2 000 moves) every 30 seconds for a quiet market is pure
+            // disk churn.
+            return;
         }
         while self.price_moves.len() > MAX_PRICE_MOVES {
             self.price_moves.pop_back();
@@ -234,13 +242,27 @@ impl NotificationLog {
             .is_none_or(|record| record.at <= cutoff)
     }
 
-    fn delivered_within_cooldown(&self, alert: &AlertRule, now: DateTime<Utc>) -> bool {
+    fn delivered_within_cooldown(
+        &self,
+        alert: &AlertRule,
+        kind: NotificationKind,
+        model: Option<&str>,
+        now: DateTime<Utc>,
+    ) -> bool {
         if alert.cooldown_minutes == 0 {
             return false;
         }
         let cutoff = now - Duration::minutes(alert.cooldown_minutes as i64);
+        // Scope to the rule's kind and model as well as its id: ids are
+        // reused after a deletion (next = max live id + 1), and an old rule's
+        // recent delivery must not swallow the first firing of an unrelated
+        // rule that inherited the id.
         self.records.iter().any(|record| {
-            record.alert_id == Some(alert.id) && record.delivered && record.at > cutoff
+            record.alert_id == Some(alert.id)
+                && record.kind == kind
+                && record.model.as_deref() == model
+                && record.delivered
+                && record.at > cutoff
         })
     }
 
@@ -269,7 +291,7 @@ impl NotificationLog {
             Some("muted".to_owned())
         } else if self.quiet_now() {
             Some("quiet hours".to_owned())
-        } else if alert.is_some_and(|rule| self.delivered_within_cooldown(rule, now)) {
+        } else if alert.is_some_and(|rule| self.delivered_within_cooldown(rule, kind, model, now)) {
             Some("cooldown".to_owned())
         } else {
             None
@@ -510,6 +532,72 @@ mod tests {
         assert!(!record.delivered);
         assert_eq!(record.suppressed_reason.as_deref(), Some("muted"));
         assert_eq!(record.model.as_deref(), Some("model-a"));
+        let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
+    fn cooldown_does_not_leak_across_reused_alert_ids() {
+        // Alert ids are max-live-id + 1, so a deleted rule's id comes back
+        // with the next creation. The old rule's recent delivery must only
+        // gate a rule with the same kind AND model — not an unrelated rule
+        // that inherited the id.
+        let path = temp_log("cooldown-reuse");
+        let _ = std::fs::remove_file(&path);
+        let mut log = NotificationLog::open_at(path.clone(), &Settings::default());
+        let rule = |model: &str| AlertRule {
+            id: 3,
+            model: model.into(),
+            mode: AlertMode::Threshold,
+            metric: PriceMetric::Blended,
+            cost_basis: CostBasis::PerMillion,
+            direction: AlertDirection::BelowOrEqual,
+            threshold: 0.0,
+            enabled: true,
+            benchmark_source: BenchmarkSource::CompositeAgentic,
+            benchmark_metric: BenchmarkMetric::AgenticCoding,
+            comparison_mode: ComparisonMode::BestAvailableAgent,
+            common_scaffold: crate::types::default_common_scaffold(),
+            liquidity_filter: LiquidityFilter::Any,
+            score_threshold: 50.0,
+            min_move_pct: 0.0,
+            move_direction: MoveDirection::Any,
+            discount_threshold_pct: crate::types::default_discount_threshold(),
+            healthy_seller_floor: 0,
+            cooldown_minutes: 60,
+            rearm: AlertRearm::ConditionReset,
+            sound: crate::types::AlertSound::Chime,
+        };
+        let now = Utc::now();
+        // A delivered firing of the old rule (kind Price, model-a).
+        log.record(
+            Some(&rule("model-a")),
+            NotificationKind::Price,
+            Some("model-a"),
+            "price fired",
+            "body",
+            true,
+        );
+        // The same rule recreated (delete + re-add): cooldown still applies.
+        assert!(log.delivered_within_cooldown(
+            &rule("model-a"),
+            NotificationKind::Price,
+            Some("model-a"),
+            now
+        ));
+        // An unrelated inheritor of the id: different kind or model must not
+        // be swallowed by the old rule's delivery.
+        assert!(!log.delivered_within_cooldown(
+            &rule("model-a"),
+            NotificationKind::Discount,
+            Some("model-a"),
+            now
+        ));
+        assert!(!log.delivered_within_cooldown(
+            &rule("model-b"),
+            NotificationKind::Price,
+            Some("model-b"),
+            now
+        ));
         let _ = std::fs::remove_file(path);
     }
 

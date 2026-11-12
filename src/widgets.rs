@@ -737,8 +737,12 @@ fn render_row(ui: &mut egui::Ui, row: &RowFeed, font_size: f32, remove: &mut Opt
             // The change trail never owns visible space; it lives on hover so
             // the discount label below cannot be displaced by tiny jitters.
             // Only the compact direction arrow gets visible space, briefly.
+            // `differs_from` fires on leg changes too, so a leg with a zero
+            // workload weight can move while the blend holds — that's no
+            // direction, not a drop.
             if let Some(change) = row.last_change
                 && (Utc::now() - change.at).num_seconds() < MOVE_ARROW_SECS
+                && prices_differ(change.new_blended, change.old_blended)
             {
                 let (arrow, color) = if change.new_blended > change.old_blended {
                     ("▲", PRICE_UP)

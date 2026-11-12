@@ -65,13 +65,41 @@ pub(crate) fn available_scaffolds(sets: &HashMap<BenchmarkSource, Vec<Benchmark>
     ];
     let mut out = Vec::new();
     let mut used = std::collections::HashSet::new();
+    // Deterministic preferred pass: a HashMap `find` shuffles between
+    // launches, and the bidirectional substring match can hit several keys
+    // per preferred name ("SWE-agent" also matches "mini-SWE-agent"), so
+    // which key took each slot was launch-random. Rank candidates: the exact
+    // key first, then containing keys (versioned spellings of the same
+    // harness) shorter-first, then contained keys, alphabetically.
+    let mut keys: Vec<String> = by_key.keys().cloned().collect();
+    keys.sort();
     for wanted in preferred {
-        if let Some((key, value)) = by_key
+        let wanted_key = normalize(wanted);
+        let pick = keys
             .iter()
-            .find(|(_, value)| scaffold_matches(value, wanted))
-            && used.insert(key.clone())
-        {
-            out.push(value.clone());
+            .filter(|key| {
+                !used.contains(*key)
+                    && (key.as_str() == wanted_key
+                        || key.contains(&wanted_key)
+                        || wanted_key.contains(key.as_str()))
+            })
+            .min_by(|a, b| {
+                (
+                    a.as_str() != wanted_key,
+                    !a.contains(&wanted_key),
+                    a.len(),
+                    a.as_str(),
+                )
+                    .cmp(&(
+                        b.as_str() != wanted_key,
+                        !b.contains(&wanted_key),
+                        b.len(),
+                        b.as_str(),
+                    ))
+            });
+        if let Some(key) = pick {
+            used.insert(key.clone());
+            out.push(by_key[key].clone());
         }
     }
     let mut rest = by_key
@@ -214,6 +242,40 @@ mod tests {
         assert_eq!(rows.len(), 1);
         let q = test_quote("gpt-5.6-sol", 1.0, true);
         assert!(best_benchmark_match(&q, &rows).is_some());
+    }
+
+    #[test]
+    fn available_scaffolds_slots_preferred_names_deterministically() {
+        // "SWE-agent" also matches the wanted "mini-SWE-agent" through the
+        // bidirectional substring rule, so which key took the preferred slot
+        // used to follow HashMap iteration order (reshuffled per launch).
+        // The exact key must win the slot.
+        let mk_agent = |agent: &str| {
+            score_benchmark(
+                "Some Model",
+                50.0,
+                Some(agent.into()),
+                None,
+                BenchmarkKind::ModelAgent,
+            )
+        };
+        let mut sets = HashMap::new();
+        sets.insert(
+            BenchmarkSource::SWEBenchPro,
+            vec![
+                mk_agent("SWE-agent"),
+                mk_agent("mini-SWE-agent"),
+                mk_agent("Claude Code"),
+            ],
+        );
+        let scaffolds = available_scaffolds(&sets);
+        assert_eq!(
+            scaffolds.first().map(String::as_str),
+            Some("mini-SWE-agent"),
+            "exact preferred name heads the list: {scaffolds:?}"
+        );
+        assert!(scaffolds.contains(&"SWE-agent".to_owned()));
+        assert!(scaffolds.contains(&"Claude Code".to_owned()));
     }
 
     #[test]

@@ -443,10 +443,13 @@ pub(crate) fn anchored_aa_percentiles(
             .filter(|s| (**s - score).abs() <= 1e-9)
             .count();
         // Tie-aware midpoint of the newcomer's slot within cohort + itself,
-        // clamped to the percentile scale: inserting above the whole cohort
-        // is the 100th percentile, not (n+1)/n·100 > 100.
-        let first = less + 1;
-        let last = less + equal + 1;
+        // on the same 0-based scale the sibling rankers use
+        // (`tie_aware_percentiles`, `anchored_est_standings`): a newcomer at
+        // or below the whole cohort reads the 0th percentile and one above it
+        // exactly the 100th — the clamp is a guard, not a fixup for an
+        // (n+1)/n overshoot.
+        let first = less;
+        let last = less + equal;
         let pct = (((first + last) as f64 / 2.0) / (total as f64 - 1.0) * 100.0).clamp(0.0, 100.0);
         map.insert(key, pct);
     }
@@ -606,7 +609,7 @@ pub(crate) fn build_agentic_composite(
         // agentic construct, but each model runs in its vendor harness, so it
         // joins the harness-specific family (capability flavor demotes it).
         // 2.0 is the current 132-task suite and carries the family's top
-        // weight; 1.1 stays as corroborating history at the 0.05 tier.
+        // weight; 1.1 stays as corroborating history at the 0.10 tier.
         (BenchmarkSource::FrontierCode, 0.10_f64),
         (BenchmarkSource::FrontierCode2, 0.13_f64),
         // AA's own agentic boards (added 0.20.0). Briefcase is the flagship
@@ -1347,8 +1350,21 @@ mod tests {
         let bottom = with_estimates.0["gemma 4 31b"];
         let mid = with_estimates.0["claude opus 5"];
         let top = with_estimates.0["m11"];
-        assert!(bottom < 10.0, "bottom estimate ranked {bottom}");
+        // Endpoints follow the sibling rankers' 0-based convention
+        // (`tie_aware_percentiles` bottom-of-board 0, `anchored_est_standings`
+        // "below it the 0th"): a below-cohort newcomer reads exactly the 0th
+        // percentile, not 100/n points above it.
+        assert_eq!(bottom, 0.0);
         assert!(mid > bottom && mid < top, "mid estimate ranked {mid}");
+        // An above-cohort insert reads exactly the 100th — no clamp needed —
+        // on the same scale as the cohort's own top member.
+        let above = anchored_aa_percentiles(
+            cohort.iter().cloned(),
+            std::iter::once(("new hotness".to_owned(), 99.0)),
+            &board_union,
+        )
+        .unwrap();
+        assert_eq!(above.0["new hotness"], top);
         // A key carrying a real score is never overwritten by an estimate.
         let dup = anchored_aa_percentiles(
             cohort.iter().cloned(),

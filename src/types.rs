@@ -31,7 +31,9 @@ pub(crate) const WORKLOAD_PRESETS: &[(&str, (f64, f64, f64))] = &[
 /// cache-read, output) workload weights plus the assumed cache-read share of
 /// the input price for models with no published cache rate. One type, so the
 /// four values travel together instead of as positional f64 quartets.
-#[derive(Debug, Clone, Copy, PartialEq)]
+/// `Default` (all zeros) is only a staleness sentinel for cache keys; real
+/// weights always sum above zero (enforced on save).
+#[derive(Debug, Clone, Copy, PartialEq, Default)]
 pub(crate) struct PricingWeights {
     pub(crate) input: f64,
     pub(crate) cache_read: f64,
